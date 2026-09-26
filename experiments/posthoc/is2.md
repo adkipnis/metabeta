@@ -193,6 +193,12 @@ the GPU is presumably bound by the 1000-step chain loop, not by data passes, and
 IS² / refresh passes are nearly free. CPU node (cpusrv14, Bernoulli): imhLaplace 0.35–0.76 s,
 imhPM 0.66–1.42 s, imhPMr 1.19–2.70 s (PMr/Lap 3.2–3.7), ≈ 2.5–3.3× slower than the M3.
 
+Mode reuse (2026-09-26): the refresh now takes the pool pass's Laplace factors, gathered by
+pool index, instead of a second Newton search (which also makes its proposal independent of
+the draw being refreshed, as i-SIR requires). M3 CPU, same settings: imhPMr 0.20–0.27 s
+(small/medium), 0.56–0.70 s (large/huge), PMr/Lap 2.1–2.6 (was 2.9–3.6) → sub-second in every
+regime, so imhPMr qualifies as the CPU default too, pending the cluster ablation rerun.
+
 ## Checkpoint prefix
 
 `--prefix latest` is the default we use (the checkpoint of the paper tables); evidence.py and
