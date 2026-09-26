@@ -222,6 +222,18 @@ Cluster after mode reuse: GPU imhLaplace 0.10–0.12 s, imhPM 0.11–0.12 s, imh
 (PMr/Lap 1.03–1.13, was 1.2–1.3); CPU node (4 cores) imhLaplace 0.34–0.85 s, imhPM
 0.60–1.49 s, imhPMr 0.88–2.14 s (PMr/Lap 2.5–2.9, was 3.2–3.7).
 
+## Paper results refreshed with imhPM as the GLMM default (cluster, 2026-09-26)
+
+Pulled to ~/Downloads/hpc-pull/imhpm, validated, merged into experiments/results (only the
+IMH row differed in every oracle/real table, all other rows identical; runtimes not merged).
+- Real data, σ-ratio → 1 (imhLaplace → imhPM): b small 0.98 → 1.00, medium 0.97 → 1.00,
+  large 0.97 → 1.00, huge 0.97 → 0.99; p small 1.00 → 1.00, medium 0.97 → 0.98, large
+  0.95 → 0.96; rank-MAD 0.01 → 0.00 on all Bernoulli sets.
+- Oracle tables: unchanged at two decimals except ECE/EACE ±0.01 in two Poisson cells
+  (huge ECE −0.02 → −0.03, large EACE 0.02 → 0.03); batched time +0.01–0.04 s.
+- Runtimes (single-dataset GPU latency): MB median 0.13–0.17 s both families; the new run is on
+  a different GPU node (global-pass rows moved too), so old vs new is node-dominated.
+
 ## Checkpoint prefix
 
 `--prefix latest` is the default we use (the checkpoint of the paper tables); evidence.py and
