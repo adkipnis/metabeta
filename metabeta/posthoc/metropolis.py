@@ -43,6 +43,13 @@ Three modes differ in how rfx (local params) are handled:
       (2026-07-29 ablation), and rejection-based correction has no fallback mode.
       Targets the same Laplace pseudo-posterior as isLaplace (shares its O(Laplace) bias).
 
+  'laplace' with n_inner = K > 0  ['imhPM'; the GLMM default since 2026-09-26]
+      log p̂_laplace is replaced by its unbiased IS² estimate (logMarginalLikelihoodIS2), so
+      the chain is pseudo-marginal and targets the exact posterior; each kept state's rfx get
+      one iterated-SIR move (refreshRfxIS2, reusing the pool's Laplace factors), since a
+      rejected step would otherwise repeat the rfx vector. Matches NUTS in all eight GLMM
+      ablation regimes where the Laplace chain lags (experiments/posthoc/is2.md).
+
 Chain mechanics
 ---------------
 A pool of s = n_chains × n_steps proposals is drawn upfront.  All log weights are computed in
@@ -123,6 +130,10 @@ from metabeta.utils.results import Proposal
 
 Mode = Literal['global', 'marginal', 'joint', 'laplace']
 
+# IS² draws per group of the pseudo-marginal chain (mode='laplace', n_inner > 0; 'imhPM'):
+# sd(log p̂(y|θ)) ≈ 0.08 median / ≤ 0.5 q90 at K = 8 (experiments/posthoc/is2_tuning.py)
+IS2_N_INNER = 8
+
 # Effective-draw target from the pool-size sweep (FFX ECE ∝ (ā·s)^−0.6; at ā·s ≈ 700 the
 # huge regime reaches small-regime calibration). Suggested pool sizes aim for it.
 N_EFF_TARGET = 700
@@ -160,12 +171,9 @@ class MetropolisSampler:
         eps: float = 1e-12,
         n_eff_target: int | None = N_EFF_TARGET,  # None disables the pool-size suggestion
         n_inner: int = 0,  # 'laplace' only: IS² draws per group; > 0 makes the chain pseudo-marginal
-        rfx_refresh: bool = False,  # pseudo-marginal only: one iterated-SIR rfx move per kept state
     ) -> None:
         if n_inner > 0 and mode != 'laplace':
             raise ValueError("n_inner (pseudo-marginal IS² weights) requires mode='laplace'")
-        if rfx_refresh and n_inner == 0:
-            raise ValueError('rfx_refresh requires the pseudo-marginal chain (n_inner > 0)')
         if mode == 'marginal' and likelihood_family != 0:
             raise ValueError("mode='marginal' requires likelihood_family=0 (Normal)")
         if mode == 'laplace' and likelihood_family == 0:
@@ -181,7 +189,6 @@ class MetropolisSampler:
         self.has_sigma_eps = hasSigmaEps(likelihood_family)
         self.eps = eps
         self.n_eff_target = n_eff_target
-        self.rfx_refresh = rfx_refresh
 
         # Delegate all weight computation to ImportanceSampler.unnormalizedPosterior —
         # single source of truth shared with SNIS. 'marginal' uses the (correlated)
@@ -430,10 +437,11 @@ class MetropolisSampler:
             'local': {'samples': sl_out, 'log_prob': sl_out.new_zeros(b, m, s_out)},
         }
         out = Proposal(proposed, has_sigma_eps=proposal.has_sigma_eps, d_corr=d_corr)
-        if self.rfx_refresh:
-            # a rejected step repeats the state's rfx; an iterated-SIR move given θ_g, which
-            # leaves p(rfx | θ_g, y) invariant, gives each kept state its own draw. The pool
-            # pass already solved the Laplace factors of every kept state: reuse them.
+        if self._is.n_inner > 0:
+            # pseudo-marginal chain: a rejected step repeats the state's rfx, which left the rfx
+            # under-covered at low acceptance (large/huge ablation); an iterated-SIR move given
+            # θ_g, which leaves p(rfx | θ_g, y) invariant, gives each kept state its own draw.
+            # The pool pass already solved the Laplace factors of every kept state: reuse them.
             is_ = self._is
             laplace = tuple(self._gatherPool(t, idx_out) for t in (is_._modes, is_._chol_H))
             _, ffx, sigma_eps = is_._logPriorGlobals(out)
