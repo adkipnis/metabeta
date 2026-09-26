@@ -76,6 +76,7 @@ GAMMA_EDGES = [0.0, 2.0, 4.0, 8.0, np.inf]
 ECE_ALPHAS = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5]
 COV90_ALPHA = 0.1
 EPS = 1e-6
+SCORE_CHUNK = 64  # datasets per credible-interval pass (see _entriesChunked)
 
 MB_LABEL, IMH_LABEL, NUTS_LABEL = 'MB', 'MB+IMH', 'NUTS'
 
@@ -202,6 +203,21 @@ def globalEntries(proposal, batch, conv: np.ndarray, lf: int) -> dict[str, np.nd
         cols['conv'].append(np.broadcast_to(conv[:, None], mask.shape)[mask.numpy()])
         cols['ptype'].append(np.full(int(mask.sum()), pid))
     return {k: np.concatenate(v, axis=0) for k, v in cols.items()}
+
+
+def _entriesChunked(fn, proposal: Proposal, batch: dict, conv: np.ndarray, *args) -> dict:
+    """``fn`` (localEntries / globalEntries) over chunks of SCORE_CHUNK datasets, concatenated.
+    getCredibleIntervals sorts a copy of every draw tensor (values + int64 indices); over all 512
+    datasets at 4000 draws that alone is ~20 GiB per call at huge."""
+    B = len(conv)
+    parts = []
+    for i in range(0, B, SCORE_CHUNK):
+        j = min(i + SCORE_CHUNK, B)
+        sub = {
+            k: v[i:j] if torch.is_tensor(v) and v.shape[:1] == (B,) else v for k, v in batch.items()
+        }
+        parts.append(fn(proposal.slice_b(i, j), sub, conv[i:j], *args))
+    return {k: np.concatenate([part[k] for part in parts]) for k in parts[0]}
 
 
 def _sliceDraws(p: Proposal, s: int) -> Proposal:
@@ -408,6 +424,17 @@ def distributionTable(per_size: dict[str, np.ndarray], edges: list[float], unit_
 # Per-size collection
 
 
+def _loadFit(fit_path: Path, B: int, max_d: int, max_q: int, data_id: str) -> dict:
+    # only the NUTS draws are scored; the ADVI and Laplace rfx draws are 15 GiB each (float64)
+    # at huge and would otherwise be decompressed with them
+    col_fit = Collection(
+        fit_path, permute=False, max_d=max_d, max_q=max_q, exclude_prefixes=('advi_', 'laplace_')
+    )
+    if len(col_fit) != B:
+        raise ValueError(f'{data_id}: test.npz ({B}) and test.fit.npz ({len(col_fit)}) misaligned')
+    return collateGrouped([col_fit[i] for i in range(B)])
+
+
 def collectSize(cfg, size: str, device: torch.device) -> dict | None:
     family = cfg.family
     data_id = f'{size}-{family}-sampled'
@@ -437,20 +464,56 @@ def collectSize(cfg, size: str, device: torch.device) -> dict | None:
     B = len(col)
     batch = collateGrouped([col[i] for i in range(B)])
 
+    # The NUTS draws of the fit file are held in RAM twice (Collection, then collation): read it
+    # here for the convergence mask only, and again just for the NUTS scoring.
     fit_path = data_path.with_name('test.fit.npz')
-    col_fit = Collection(fit_path, permute=False, max_d=max_d, max_q=max_q)
-    if len(col_fit) != B:
-        raise ValueError(f'{data_id}: test.npz ({B}) and test.fit.npz ({len(col_fit)}) misaligned')
-    fit_batch = collateGrouped([col_fit[i] for i in range(B)])
+    fit_batch = _loadFit(fit_path, B, max_d, max_q, data_id)
     if 'stats' in fit_batch and 'stats' not in batch:
         batch['stats'] = fit_batch['stats']
     conv = nutsConvergeMask(fit_batch, mode=cfg.convergence_mode)
     conv = np.ones(B, dtype=bool) if conv is None else conv.astype(bool)
+    del fit_batch
 
     group_active = batch['mask_n'].any(-1).numpy()  # (B, m)
     grp_rho = perGroupRho(batch)[group_active]  # per active group
     grp_conv = np.broadcast_to(conv[:, None], group_active.shape)[group_active]
     gamma_all = datasetGamma(batch, 'all', lf)  # per dataset
+
+    out = {
+        'size': size,
+        'grp_rho': grp_rho,
+        'grp_conv': grp_conv,
+        'gamma_all': gamma_all,
+        'ds_conv': conv,
+        'methods': {},
+        'loos': {},
+    }
+
+    def score(label: str, prop: Proposal, method_name: str) -> None:
+        out['methods'][label] = {
+            'local': _entriesChunked(localEntries, prop, batch, conv),
+            'global': _entriesChunked(globalEntries, prop, batch, conv, lf),
+        }
+        if not cfg.predictive:
+            return
+        if label == NUTS_LABEL:
+            summary = _nutsSummary(data_path, prop, batch, lf, cfg.summary_chunk_size)
+        else:
+            summary = loadOrComputeSummary(
+                prop,
+                batch,
+                data_path,
+                method_name,
+                None,
+                lf,
+                True,
+                ckpt_dir=ckpt_dir,
+                prefix=cfg.prefix,
+                n_samples=cfg.n_samples,
+                seed=cfg.seed,
+                summary_chunk_size=cfg.summary_chunk_size,
+            )
+        out['loos'][label] = datasetLoo(summary, batch, conv, lf)
 
     proposal_mb, _ = loadOrSampleMB(
         model,
@@ -464,15 +527,10 @@ def collectSize(cfg, size: str, device: torch.device) -> dict | None:
         device,
         None,
     )
-    proposal_nuts = fit2proposal(fit_batch, 'nuts')
-    # NUTS stores ~4000 draws; the rfx tensor (B, m, 4000, q) OOMs at large/huge when held
-    # alongside MB/IMH. Subsample to n_samples draws — ample for coverage/quantiles/means.
-    if proposal_nuts.n_samples > cfg.n_samples:
-        proposal_nuts = _sliceDraws(proposal_nuts, cfg.n_samples)
 
     # Refinement, LOO-NLL and metrics all operate in the original (rescaled) space.
-    proposal_mb.rescale(batch['sd_y'])
-    proposal_nuts.rescale(batch['sd_y'])
+    sd_y = batch['sd_y']
+    proposal_mb.rescale(sd_y)
     batch = rescaleData(batch)
 
     imh_method = posthocDefaults(lf)[0]  # imhMarginal (Normal) / imhPM (Bernoulli/Poisson)
@@ -491,42 +549,18 @@ def collectSize(cfg, size: str, device: torch.device) -> dict | None:
         cfg.batch_size,
         device=device,
     )
+    # one method's draws in memory at a time (each is ~7.5 GiB of rfx at huge, 4000 draws)
+    score(MB_LABEL, proposal_mb, 'mb')
+    del proposal_mb
+    score(IMH_LABEL, proposal_imh, imh_method)
+    del proposal_imh
 
-    proposals = {MB_LABEL: proposal_mb, IMH_LABEL: proposal_imh, NUTS_LABEL: proposal_nuts}
-    method_names = {MB_LABEL: 'mb', IMH_LABEL: imh_method, NUTS_LABEL: 'nuts'}
-    out = {
-        'size': size,
-        'grp_rho': grp_rho,
-        'grp_conv': grp_conv,
-        'gamma_all': gamma_all,
-        'ds_conv': conv,
-        'methods': {},
-        'loos': {},
-    }
-    for label, prop in proposals.items():
-        out['methods'][label] = {
-            'local': localEntries(prop, batch, conv),
-            'global': globalEntries(prop, batch, conv, lf),
-        }
-        if cfg.predictive:
-            if label == NUTS_LABEL:
-                summary = _nutsSummary(data_path, prop, batch, lf, cfg.summary_chunk_size)
-            else:
-                summary = loadOrComputeSummary(
-                    prop,
-                    batch,
-                    data_path,
-                    method_names[label],
-                    None,
-                    lf,
-                    True,
-                    ckpt_dir=ckpt_dir,
-                    prefix=cfg.prefix,
-                    n_samples=cfg.n_samples,
-                    seed=cfg.seed,
-                    summary_chunk_size=cfg.summary_chunk_size,
-                )
-            out['loos'][label] = datasetLoo(summary, batch, conv, lf)
+    proposal_nuts = fit2proposal(_loadFit(fit_path, B, max_d, max_q, data_id), 'nuts')
+    # NUTS stores ~4000 draws; subsample to n_samples draws, ample for coverage/quantiles/means.
+    if proposal_nuts.n_samples > cfg.n_samples:
+        proposal_nuts = _sliceDraws(proposal_nuts, cfg.n_samples)
+    proposal_nuts.rescale(sd_y)
+    score(NUTS_LABEL, proposal_nuts, 'nuts')
     return out
 
 
