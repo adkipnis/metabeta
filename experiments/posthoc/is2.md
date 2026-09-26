@@ -142,6 +142,23 @@ it is dominated by rfx entries.
    clusters), not from the nAGQ = 1 target; imhPM fixes both. Refinement ≈ 0.9 s/dataset
    locally (6.7 min for 449).
 
+## Full ablation (cluster, 512 test datasets per regime, pool 4000; pulled to ~/Downloads/hpc-pull/ablation-is2)
+
+| model | method | σ ECE | RFX ECE | RFX joint ECE | LOO-NLL | accept | s/ds |
+|:--|:--|--:|--:|--:|--:|--:|--:|
+| b-small | imhLaplace / imhPM / NUTS | .024 / .029 / .031 | −.024 / −.015 / −.014 | −.001 / .010 / .013 | .551 / .550 / .550 | .78 / .76 | 2.7 / 3.8 |
+| b-large | imhLaplace / imhPM / NUTS | .002 / .007 / .002 | −.017 / −.014 / −.008 | −.006 / −.012 / .002 | .431 / .427 / .427 | .36 / .35 | 2.5 / 4.9 |
+| b-huge  | imhLaplace / imhPM / NUTS | .007 / .006 / .012 | −.003 / −.008 / .009 | −.021 / −.047 / −.012 | .412 / .408 / .408 | .19 / .19 | 2.3 / 2.7 |
+| p-large | imhLaplace / imhPM / NUTS | −.040 / −.041 / −.037 | −.024 / −.033 / −.023 | −.010 / −.025 / −.008 | 1.404 / 1.394 / 1.395 | .27 / .27 | 2.4 / 5.1 |
+| p-huge  | imhLaplace / imhPM / NUTS | −.014 / −.025 / .007 | −.004 / −.023 / −.002 | −.004 / −.038 / −.001 | 1.402 / 1.393 / 1.397 | .15 / .14 | 2.4 / 2.9 |
+
+imhPM matches NUTS's LOO-NLL in all 8 regimes (imhLaplace is slightly worse in all 8) and its
+calibration is closest to NUTS at small/medium. At low acceptance (large/huge, 0.14–0.35) it
+under-covers the rfx: a pseudo-marginal chain carries each state's rfx, so every rejection
+duplicates the whole rfx vector, whereas imhLaplace redraws fresh rfx at each kept step.
+Candidate fix: a conditional-IS refresh of the rfx per kept step (keep the state's draw, add
+K − 1 fresh ones, select ∝ weight; leaves p(rfx | θ, y) invariant, ≈ one extra IS² pass).
+
 ## Open
 
 - Scale-up (medium–huge, 512 datasets, q up to 5): AGQ cost grows as nodes^q (q=5: 243
