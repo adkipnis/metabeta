@@ -1,8 +1,8 @@
 """Wall-clock latency of the GLMM IMH refinements per dataset: imhLaplace vs imhPM (pseudo-marginal,
-IS² weights) vs imhPMr (imhPM + iterated-SIR rfx refresh), on one device.
+IS² weights, rfx refresh), on one device.
 
 Per (family, size): one flow pool per dataset (local flow skipped, as runIMH does), then the
-three refinements interleaved on the same pool; the first dataset is an untimed warm-up and
+refinements interleaved on the same pool; the first dataset is an untimed warm-up and
 every timed region is synchronised on the device. Run on an otherwise idle machine.
 
 Run from the repo root:
@@ -24,16 +24,12 @@ sys.path.insert(0, str(REPO_ROOT / 'scripts'))
 from build_ckpt import BEST_SEEDS, _ckpt_dir  # noqa: E402
 
 from metabeta.models.approximator import Approximator  # noqa: E402
-from metabeta.posthoc.metropolis import MetropolisSampler  # noqa: E402
+from metabeta.posthoc.metropolis import IS2_N_INNER, MetropolisSampler  # noqa: E402
 from metabeta.utils.config import ApproximatorConfig  # noqa: E402
 from metabeta.utils.dataloader import Collection, collateGrouped, toDevice  # noqa: E402
 
 FAMILIES = {'bernoulli': 1, 'poisson': 2}
-MODES = {
-    'imhLaplace': dict(n_inner=0),
-    'imhPM': dict(n_inner=8),
-    'imhPMr': dict(n_inner=8, rfx_refresh=True),
-}
+MODES = {'imhLaplace': dict(n_inner=0), 'imhPM': dict(n_inner=IS2_N_INNER)}
 N_CHAINS = 4
 
 
@@ -119,8 +115,7 @@ class Timing:
                 print(
                     f'{family:9s} {size:6s} '
                     + '  '.join(f'{m} {med[m]:.3f}s' for m in MODES)
-                    + f'   PM/Lap {med["imhPM"] / med["imhLaplace"]:.2f}'
-                    + f'  PMr/Lap {med["imhPMr"] / med["imhLaplace"]:.2f}',
+                    + f'   PM/Lap {med["imhPM"] / med["imhLaplace"]:.2f}',
                     flush=True,
                 )
         return pd.DataFrame(rows)

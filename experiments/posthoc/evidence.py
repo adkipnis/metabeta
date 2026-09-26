@@ -72,7 +72,7 @@ from metabeta.posthoc.laplace_glmm import (  # noqa: E402
     LaplaceImportanceSampler,
     logMarginalLikelihoodAGQ,
 )
-from metabeta.posthoc.metropolis import MetropolisSampler  # noqa: E402
+from metabeta.posthoc.metropolis import IS2_N_INNER, MetropolisSampler  # noqa: E402
 from metabeta.utils.config import ApproximatorConfig  # noqa: E402
 from metabeta.utils.constants import hasSigmaEps  # noqa: E402
 from metabeta.utils.dataloader import Collection, collateGrouped, toDevice  # noqa: E402
@@ -101,7 +101,7 @@ def setup() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--family', default='normal', choices=list(FAMILIES))
     p.add_argument('--sizes', nargs='+', default=['small'], choices=SIZES)
-    p.add_argument('--n-inner', type=int, default=8, help='IS² draws per group (GLMMs)')
+    p.add_argument('--n-inner', type=int, default=IS2_N_INNER, help='IS² draws per group (GLMMs)')
     p.add_argument('--split', default='test', choices=['test'], help='only test.fit.npz carries NUTS draws')
     p.add_argument('--prefix', default='latest', help='checkpoint prefix (latest = the checkpoint of the paper tables)')
     p.add_argument('--n-datasets', type=int, default=32, help='datasets per size (first n of the split)')
