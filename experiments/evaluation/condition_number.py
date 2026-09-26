@@ -76,10 +76,11 @@ LF_FROM_FAM = {'n': 0, 'b': 1, 'p': 2}
 # κ bin edges; last bin is the effectively-singular (rank-deficient) bucket.
 KAPPA_EDGES = [1.0, 3.0, 6.0, 10.0, 1e6, np.inf]
 
-# Refinement labels. Presets defaults: imhMarginal (Normal), imhLaplace (Bernoulli/Poisson).
+# Refinement labels. Presets defaults: imhMarginal (Normal), imhPM (Bernoulli/Poisson).
 METHOD_LABELS = {
     'mb': 'MB',
     'imhMarginal': 'MB+IMH',
+    'imhPM': 'MB+IMH',
     'imhLaplace': 'MB+IMH',
     'isMarginal': 'MB+SNIS',
     'isLaplace': 'MB+SNIS',
