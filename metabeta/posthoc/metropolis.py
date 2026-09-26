@@ -363,15 +363,17 @@ class MetropolisSampler:
         With IS² weights (n_inner > 0) the kept state's weight-selected inner draw is gathered
         instead: under the pseudo-marginal extended target it is an exact conditional draw.
         """
-        b, m, _, q = self._is.Z.shape
-        s_out = idx_out.shape[1]
-        gi = idx_out[:, None, :, None].expand(b, m, s_out, q)
         if self._is.n_inner > 0:
-            return torch.gather(self._is._rfx, 2, gi)
-        modes, chol_H = self._is._modes, self._is._chol_H  # (b, m, s, q), (b, m, s, q, q)
-        modes_sel = torch.gather(modes, 2, gi)
-        chol_sel = torch.gather(chol_H, 2, gi.unsqueeze(-1).expand(b, m, s_out, q, q))
+            return self._gatherPool(self._is._rfx, idx_out)
+        modes_sel = self._gatherPool(self._is._modes, idx_out)
+        chol_sel = self._gatherPool(self._is._chol_H, idx_out)
         return sampleRfxLaplace(modes_sel, chol_sel, self._is.mask_m)
+
+    @staticmethod
+    def _gatherPool(t: Tensor, idx_out: Tensor) -> Tensor:
+        """Per-group pool tensor (b, m, s, ...) → its kept states (b, m, s_out, ...)."""
+        idx = idx_out[:, None, :].reshape(*idx_out.shape[:1], 1, -1, *([1] * (t.dim() - 3)))
+        return torch.gather(t, 2, idx.expand(*t.shape[:2], idx_out.shape[1], *t.shape[3:]))
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -430,8 +432,10 @@ class MetropolisSampler:
         out = Proposal(proposed, has_sigma_eps=proposal.has_sigma_eps, d_corr=d_corr)
         if self.rfx_refresh:
             # a rejected step repeats the state's rfx; an iterated-SIR move given θ_g, which
-            # leaves p(rfx | θ_g, y) invariant, gives each kept state its own draw
+            # leaves p(rfx | θ_g, y) invariant, gives each kept state its own draw. The pool
+            # pass already solved the Laplace factors of every kept state: reuse them.
             is_ = self._is
+            laplace = tuple(self._gatherPool(t, idx_out) for t in (is_._modes, is_._chol_H))
             _, ffx, sigma_eps = is_._logPriorGlobals(out)
             out.data['local']['samples'] = refreshRfxIS2(
                 ffx,
@@ -446,6 +450,7 @@ class MetropolisSampler:
                 out.rfx,
                 is_.n_inner,
                 L_corr=is_._getLCorr(out),
+                laplace=laplace,
             )
         t1 = time.perf_counter()
         out.tpd = (proposal.tpd or 0.0) + (t1 - t0)
