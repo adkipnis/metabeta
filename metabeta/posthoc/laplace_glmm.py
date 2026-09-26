@@ -649,7 +649,9 @@ def logMarginalLikelihoodAGQ(
     z_1d, w_1d = hermegauss(n_nodes)
     z_1d = torch.as_tensor(z_1d, dtype=ffx.dtype, device=ffx.device)
     log_w_1d = torch.as_tensor(w_1d / w_1d.sum(), dtype=ffx.dtype, device=ffx.device).log()
-    active = (Z != 0).flatten(0, 2).any(0).tolist()  # (q,)
+    # padded rfx dims carry Z columns but σ = 0 (a point mass at 0): one node is exact there, and
+    # a full rule would cost n_nodes^q_max instead of n_nodes^q_active passes
+    active = ((Z != 0).flatten(0, 2).any(0) & (sigma_rfx > 0).flatten(0, 1).any(0)).tolist()  # (q,)
     axes = [(z_1d, log_w_1d) if a else (z_1d.new_zeros(1), log_w_1d.new_zeros(1)) for a in active]
     nodes = torch.cartesian_prod(*[z for z, _ in axes]).view(-1, len(axes))  # (P, q)
     log_nu = torch.cartesian_prod(*[w for _, w in axes]).view(-1, len(axes)).sum(-1)  # (P,)

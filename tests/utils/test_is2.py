@@ -401,6 +401,20 @@ def test_agq_marginal_matches_exact_integral(likelihood_family):
     assert torch.allclose(got, want, atol=atol), (got, want)
 
 
+def test_agq_padded_rfx_dims_with_covariates_cost_one_node():
+    """Real batches fill the Z columns of padded rfx dims (σ = 0); they must neither change the
+    marginal nor multiply the node count (12^8 tensor-product nodes would not fit in memory)."""
+    ffx, sigma_rfx, sigma_eps, y, X, Z, mask_n, mask_m = _slopeProblem(1)
+    n_pad = 6
+    Z_pad = torch.cat([Z[..., :2], Z[..., 1:2].expand(*Z.shape[:-1], n_pad + 1)], -1)
+    sigma_pad = torch.cat([sigma_rfx[..., :2], sigma_rfx.new_zeros(1, 2, n_pad + 1)], -1)
+    got = logMarginalLikelihoodAGQ(
+        ffx, sigma_pad, sigma_eps, y, X, Z_pad, mask_n, mask_m, 1, n_nodes=12
+    )
+    want = _grid2dLogMarginal(ffx, sigma_rfx, y, X, Z, mask_m, 1)
+    assert torch.allclose(got, want, atol=1e-5), (got, want)
+
+
 ACCELERATORS = [
     pytest.param('cuda', marks=pytest.mark.skipif(not torch.cuda.is_available(), reason='no CUDA')),
     pytest.param(
