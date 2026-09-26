@@ -174,6 +174,26 @@ NUTS's value (imhPM's lower 1.401 was an artefact of the duplicated rfx). IS² n
 cause: sd(log p̂) in huge-b is median 0.085 / q90 0.49 at K = 8, as in small. Cost ≈ 2.5×
 imhLaplace on CPU. σ_rfx ECE of Poisson moves by chain noise (acceptance 0.07, 32 datasets).
 
+## imhPMr at full scale (cluster, 512 test datasets per regime, pool 4000, GPU refinement)
+
+Joint RFX ECE (LOO-NLL); ~/Downloads/hpc-pull/ablation-is2/*_imhPMr_s4000.md
+
+| | imhLaplace | imhPM | imhPMr | NUTS |
+|:--|--:|--:|--:|--:|
+| b-small  | −0.001 (.551) | .010 (.550) | .011 (.550) | .013 (.550) |
+| b-medium | −0.020 (.451) | −.017 (.449) | −.013 (.449) | −.014 (.449) |
+| b-large  | −0.006 (.431) | −.012 (.427) | .001 (.427) | .002 (.427) |
+| b-huge   | −0.021 (.412) | −.047 (.408) | −.017 (.409) | −.012 (.408) |
+| p-small  | .008 (1.343) | .004 (1.339) | .006 (1.341) | .006 (1.339) |
+| p-medium | −.008 (1.365) | −.013 (1.357) | −.008 (1.357) | −.009 (1.358) |
+| p-large  | −.010 (1.404) | −.025 (1.394) | −.010 (1.394) | −.008 (1.395) |
+| p-huge   | −.004 (1.402) | −.038 (1.393) | −.003 (1.397) | −.001 (1.397) |
+
+imhPMr matches NUTS in every regime (joint ECE within 0.005, LOO-NLL within 0.002; RFX ECE
+likewise, e.g. p-large −0.024 vs −0.023) and removes imhPM's low-acceptance under-coverage;
+imhLaplace keeps its LOO-NLL gap (+0.004 … +0.008) and small-regime rfx shift. GPU refinement
+0.1 s/dataset (56 s for 512 huge datasets).
+
 ## IMH latency (imh_timing.py, M3 CPU, idle, pool 4000, median of 8 datasets)
 
 | | imhLaplace | imhPM | imhPMr | PM/Lap | PMr/Lap |
