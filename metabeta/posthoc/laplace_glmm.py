@@ -406,7 +406,8 @@ class _GroupIntegrand:
     Owns the whitening: candidates are b = b* + U⁻ᵀ z (H = U Uᵀ) or prior draws L z, and
     `logWeight` returns log p(y_j, b | θ_g) − log r(b) for the proposal r = (1 − α) Laplace +
     α prior. The two Gaussians' (q/2)·log 2π terms cancel, and padded rfx dims cancel between
-    their log-dets as in logMarginalLikelihoodLaplace.
+    their log-dets as in logMarginalLikelihoodLaplace. `laplace` = (modes, chol_H) from an
+    earlier pass at the same θ_g skips the Newton search, the dominant cost.
     """
 
     def __init__(
@@ -424,21 +425,26 @@ class _GroupIntegrand:
         init: Tensor | None,
         n_newton: int,
         defensive: float,
+        laplace: tuple[Tensor, Tensor] | None = None,  # (modes, chol_H) at these θ_g
     ) -> None:
-        self.modes, self.chol_H, _, L_rfx, _ = laplaceRfxModes(
-            ffx,
-            sigma_rfx,
-            sigma_eps,
-            y,
-            X,
-            Z,
-            mask_n,
-            mask_m,
-            likelihood_family,
-            L_corr=L_corr,
-            init=init,
-            n_newton=n_newton,
-        )
+        if laplace is None:
+            self.modes, self.chol_H, _, L_rfx, _ = laplaceRfxModes(
+                ffx,
+                sigma_rfx,
+                sigma_eps,
+                y,
+                X,
+                Z,
+                mask_n,
+                mask_m,
+                likelihood_family,
+                L_corr=L_corr,
+                init=init,
+                n_newton=n_newton,
+            )
+        else:
+            self.modes, self.chol_H = laplace
+            L_rfx = _sigmaChol(sigma_rfx, L_corr)
         self.y, self.sigma_eps, self.mask_n = y, sigma_eps, mask_n
         self.likelihood_family = likelihood_family
         self.defensive = defensive
@@ -493,7 +499,7 @@ def logMarginalLikelihoodIS2(
     init: Tensor | None = None,
     n_newton: int = 3,
     defensive: float = 0.01,  # is2_tuning: 0.01 ≈ 0 in sd(log p̂), 0.1 inflates it ~1.8x
-) -> tuple[Tensor, Tensor]:
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
     """Unbiased estimate Σ_j log p̂(y_j | θ_g) by per-group importance sampling (IS²).
 
     Importance sampling squared (Tran, Scharth, Pitt & Kohn, arXiv:1309.3339): per group,
@@ -507,9 +513,10 @@ def logMarginalLikelihoodIS2(
     weights with infinite variance where the likelihood is flat (all-success Bernoulli
     groups); the prior component bounds them by max_b p(y_j | θ_g, b) / α.
 
-    Returns (ll (b, s), rfx (b, m, s, q)); rfx holds one inner draw per group chosen with
-    probability ∝ its weight (single-item weighted reservoir sampling over k), an exact
-    draw from p(rfx_j | θ_g, y_j) under the pseudo-marginal extended target.
+    Returns (ll (b, s), rfx (b, m, s, q), modes, chol_H); rfx holds one inner draw per group
+    chosen with probability ∝ its weight (single-item weighted reservoir sampling over k), an
+    exact draw from p(rfx_j | θ_g, y_j) under the pseudo-marginal extended target; modes and
+    chol_H are the Laplace factors, reusable by refreshRfxIS2 as in logMarginalLikelihoodLaplace.
     """
     f = _GroupIntegrand(
         ffx,
@@ -539,7 +546,7 @@ def logMarginalLikelihoodIS2(
         log_sum = log_sum_new
 
     ll = ((log_sum - math.log(n_inner)) * mask_m).sum(dim=1)  # (b, s)
-    return ll, rfx * mask_m.unsqueeze(-1)
+    return ll, rfx * mask_m.unsqueeze(-1), f.modes, f.chol_H
 
 
 def refreshRfxIS2(
@@ -557,12 +564,15 @@ def refreshRfxIS2(
     L_corr: Tensor | None = None,
     n_newton: int = 3,
     defensive: float = 0.01,
+    laplace: tuple[Tensor, Tensor] | None = None,  # (modes, chol_H) at these θ_g
 ) -> Tensor:
     """One iterated-SIR move on each group's rfx given θ_g (Andrieu, Lee & Vihola 2018).
 
     The current draw competes with K − 1 fresh draws from the IS² proposal and one of the K is
     kept with probability ∝ its weight, a Markov kernel that leaves p(rfx_j | θ_g, y_j)
-    invariant. Applied to the kept states of the pseudo-marginal chain, it gives repeated
+    invariant as long as the proposal does not depend on the current draw: the Laplace factors
+    come from `laplace` (the IMH passes its pool's, gathered by pool index) or from a cold
+    Newton search. Applied to the kept states of the pseudo-marginal chain, it gives repeated
     (rejected-step) states distinct rfx instead of copies. Returns (b, m, s, q).
     """
     f = _GroupIntegrand(
@@ -576,9 +586,10 @@ def refreshRfxIS2(
         mask_m,
         likelihood_family,
         L_corr,
-        rfx,
+        None,
         n_newton,
         defensive,
+        laplace,
     )
     log_sum = f.logWeight(rfx)  # (b, m, s)
     out = rfx
@@ -689,7 +700,7 @@ class LaplaceImportanceSampler(ImportanceSampler):
     def unnormalizedPosterior(self, proposal: Proposal) -> tuple[Tensor, Tensor]:
         lp, ffx, sigma_eps = self._logPriorGlobals(proposal)
         if self.n_inner > 0:
-            ll, self._rfx = logMarginalLikelihoodIS2(
+            ll, self._rfx, self._modes, self._chol_H = logMarginalLikelihoodIS2(
                 ffx,
                 proposal.sigma_rfx,
                 sigma_eps,
