@@ -415,6 +415,34 @@ def test_agq_padded_rfx_dims_with_covariates_cost_one_node():
     assert torch.allclose(got, want, atol=1e-5), (got, want)
 
 
+def test_agq_finds_the_mode_of_an_extreme_count_group():
+    """A Poisson group with counts up to ~6000 and a steep slope (shaped after Poisson small
+    oracle dataset 42): a cold-start mode search with 3 step halvings got stuck at the ±20 clamp
+    and put the reference 10^4 nats off."""
+    x = torch.linspace(-2.62, 1.78, 20, dtype=torch.float64)
+    X = torch.stack([torch.ones_like(x), x], -1)[None, None]  # (1, 1, n, 2)
+    ffx = torch.tensor([[[0.1, 0.1]]], dtype=torch.float64)
+    sigma_rfx = torch.tensor([[[0.289, 1.225]]], dtype=torch.float64)
+    y = torch.exp(0.36 - 3.28 * x).round()[None, None, :, None]
+    mask_n = torch.ones_like(y)
+    mask_m = torch.ones(1, 1, 1, dtype=torch.float64)
+    got = logMarginalLikelihoodAGQ(
+        ffx, sigma_rfx, sigma_rfx[..., 0], y, X, X, mask_n, mask_m, 2, n_nodes=12
+    )
+    # dense grid over the region holding the conditional posterior of b (sd ~0.01)
+    b0, b1 = torch.meshgrid(
+        torch.linspace(-1.0, 1.5, 801, dtype=torch.float64),
+        torch.linspace(-5.0, -2.0, 801, dtype=torch.float64),
+        indexing='ij',
+    )
+    eta = 0.1 + b0[..., None] + (0.1 + b1[..., None]) * x
+    ll = (y[0, 0, :, 0] * eta - eta.exp() - torch.lgamma(y[0, 0, :, 0] + 1)).sum(-1)
+    log_prior = D.Normal(0.0, 0.289).log_prob(b0) + D.Normal(0.0, 1.225).log_prob(b1)
+    log_cell = math.log((2.5 / 800) * (3.0 / 800))
+    want = torch.logsumexp((ll + log_prior).flatten(), 0) + log_cell
+    assert torch.allclose(got[0, 0], want, atol=1e-2), (got, want)
+
+
 ACCELERATORS = [
     pytest.param('cuda', marks=pytest.mark.skipif(not torch.cuda.is_available(), reason='no CUDA')),
     pytest.param(

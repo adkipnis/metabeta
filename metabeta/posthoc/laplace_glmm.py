@@ -62,6 +62,8 @@ from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.utils.families import POISSON_ETA_CLIP_MAX
 from metabeta.utils.results import Proposal
 
+AGQ_N_BACKTRACK = 30  # step halvings of the AGQ reference's mode search (see logMarginalLikelihoodAGQ)
+
 
 def _sigmaChol(sigma_rfx: Tensor, L_corr: Tensor | None) -> Tensor:
     """Cholesky factor of Σ_rfx = D L_corr L_corrᵀ D (or diag(σ²)). (b, s, q, q)."""
@@ -426,6 +428,7 @@ class _GroupIntegrand:
         n_newton: int,
         defensive: float,
         laplace: tuple[Tensor, Tensor] | None = None,  # (modes, chol_H) at these θ_g
+        n_backtrack: int = 3,
     ) -> None:
         if laplace is None:
             self.modes, self.chol_H, _, L_rfx, _ = laplaceRfxModes(
@@ -441,6 +444,7 @@ class _GroupIntegrand:
                 L_corr=L_corr,
                 init=init,
                 n_newton=n_newton,
+                n_backtrack=n_backtrack,
             )
         else:
             self.modes, self.chol_H = laplace
@@ -645,6 +649,9 @@ def logMarginalLikelihoodAGQ(
         init,
         n_newton,
         defensive=0.0,
+        # the reference must find every mode: from a cold start, 3 halvings leave extreme-count
+        # Poisson groups stuck at the ±20 clamp (10^5-nat errors on 0.5-2% of oracle datasets)
+        n_backtrack=AGQ_N_BACKTRACK,
     )
     z_1d, w_1d = hermegauss(n_nodes)
     z_1d = torch.as_tensor(z_1d, dtype=ffx.dtype, device=ffx.device)
