@@ -9,7 +9,7 @@
 #SBATCH --job-name=evidence
 #SBATCH --output=logs/evidence/%A_%a.out
 #SBATCH --error=logs/evidence/%A_%a.err
-#SBATCH --array=0-255
+#SBATCH --array=0-511
 
 #SBATCH --partition=cpu_p
 #SBATCH --qos=cpu_normal
@@ -22,7 +22,7 @@ set -euo pipefail
 
 FAMILIES=(bernoulli poisson)
 SIZES=(small medium large huge)
-N_SHARDS=32
+N_SHARDS=64
 
 MERGE=0
 if [[ "${1:-}" == "--merge" ]]; then
