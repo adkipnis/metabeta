@@ -242,6 +242,15 @@ The raw-flow rows moved too (4000 vs 1000 draws): raw Poisson ΔLOO-NLL grows wi
 (PSIS-LOO over a mis-scaled proposal), e.g. κ₂ ∈ [6, 10) 0.92 → 3.01, NB θ=1 0.28 → 0.39.
 Old local files backed up in ~/Downloads/hpc-pull/robust-old.
 
+OOD design (b/p, 4000 draws): MB+IMH σ-ratio 0.99–1.00, rank-MAD 0.002–0.003 (was 0.97–1.00,
+≈0.007); raw Cauchy-X ΔLOO-NLL 0.15 → 0.19 (b), 0.12 → 0.26 (p), again pool-size driven.
+oracle_corr: IMH rows closer to NUTS (huge-b r 0.20 → 0.24 vs NUTS 0.31, medium-b 0.37 → 0.41 =
+NUTS; Poisson within 0.01 of NUTS); the raw-flow rows moved by ≤ 0.03. E2 (cbpp/salamanders): MB
+σ-ratio 0.98 → 0.99, flags 16 → 14 of 219 (cbpp 2 → 0, salamanders the same five priors), 10/14
+announced by the diagnostics; salamanders priors 7 and 69 now at z = 3.0–3.2 MCSEs; GPU grid
+1.6–2.0 → 1.6–2.8 s. Comparison panels and E2 figures copied into the paper; CPU seed reruns flag 12 and 7 (was
+13 and 8), five priors in all three runs, four fire a diagnostic (salamanders prior 69 silent).
+
 ## Checkpoint prefix
 
 `--prefix latest` is the default we use (the checkpoint of the paper tables); evidence.py and
