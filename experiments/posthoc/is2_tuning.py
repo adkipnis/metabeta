@@ -40,7 +40,7 @@ def setup() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('--family', default='bernoulli', choices=list(FAMILIES))
     p.add_argument('--size', default='small', choices=['small', 'medium', 'large', 'huge'])
-    p.add_argument('--prefix', default='best', help='checkpoint prefix')
+    p.add_argument('--prefix', default='latest', help='checkpoint prefix (latest = the checkpoint of the paper tables)')
     p.add_argument('--n-datasets', type=int, default=16)
     p.add_argument('--n-samples', type=int, default=1000, help='flow pool size S')
     p.add_argument('--inner', nargs='+', type=int, default=[2, 4, 8, 16, 32])

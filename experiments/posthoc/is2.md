@@ -159,6 +159,13 @@ duplicates the whole rfx vector, whereas imhLaplace redraws fresh rfx at each ke
 Candidate fix: a conditional-IS refresh of the rfx per kept step (keep the state's draw, add
 K − 1 fresh ones, select ∝ weight; leaves p(rfx | θ, y) invariant, ≈ one extra IS² pass).
 
+## Checkpoint prefix
+
+`--prefix latest` is the default we use (the checkpoint of the paper tables); evidence.py and
+is2_tuning.py defaulted to `best` until 2026-09-26, so the small-regime PoC evidence and
+tuning numbers above, and the published Normal evidence CSVs, come from best.pt. The cluster
+evidence array runs on latest.pt.
+
 ## Open
 
 - Scale-up (medium–huge, 512 datasets, q up to 5): AGQ cost grows as nodes^q (q=5: 243

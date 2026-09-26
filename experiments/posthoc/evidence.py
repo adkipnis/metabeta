@@ -103,7 +103,7 @@ def setup() -> argparse.Namespace:
     p.add_argument('--sizes', nargs='+', default=['small'], choices=SIZES)
     p.add_argument('--n-inner', type=int, default=8, help='IS² draws per group (GLMMs)')
     p.add_argument('--split', default='test', choices=['test'], help='only test.fit.npz carries NUTS draws')
-    p.add_argument('--prefix', default='best', help='checkpoint prefix')
+    p.add_argument('--prefix', default='latest', help='checkpoint prefix (latest = the checkpoint of the paper tables)')
     p.add_argument('--n-datasets', type=int, default=32, help='datasets per size (first n of the split)')
     p.add_argument('--pool-sizes', nargs='+', type=int, default=[1000, 2000, 4000], help='IS pool prefixes; the largest is drawn')
     p.add_argument('--n-bridge', type=int, default=2000, help='proposal draws per bridge run (posterior draws: half of the available)')
