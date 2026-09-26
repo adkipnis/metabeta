@@ -49,9 +49,7 @@ def test_resolve_models_rejects_unknown():
         evaluator._resolveModels()
 
 
-@pytest.mark.parametrize(
-    ('lf', 'expected'), [(0, 'imhMarginal'), (1, 'imhLaplace'), (2, 'imhLaplace')]
-)
+@pytest.mark.parametrize(('lf', 'expected'), [(0, 'imhMarginal'), (1, 'imhPM'), (2, 'imhPM')])
 def test_imh_method_defaults_come_from_presets(lf, expected):
     evaluator = _evaluator(likelihood_family=lf)
 
