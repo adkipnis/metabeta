@@ -159,6 +159,21 @@ duplicates the whole rfx vector, whereas imhLaplace redraws fresh rfx at each ke
 Candidate fix: a conditional-IS refresh of the rfx per kept step (keep the state's draw, add
 K − 1 fresh ones, select ∝ weight; leaves p(rfx | θ, y) invariant, ≈ one extra IS² pass).
 
+## rfx refresh (imhPMr), local PoC: huge, 32 test datasets, pool 4000
+
+| | Bern. RFX ECE | Bern. joint ECE | Pois. RFX ECE | Pois. joint ECE | Pois. LOO-NLL | s/ds (B / P, M3) |
+|:--|--:|--:|--:|--:|--:|--:|
+| imhLaplace | −0.028 | −0.011 | −0.021 | −0.036 | 1.421 | 1.1 / 0.9 |
+| imhPM      | −0.045 | −0.040 | −0.050 | −0.107 | 1.401 | 1.5 / 1.2 |
+| imhPMr     | −0.021 | −0.004 | −0.031 | −0.040 | 1.420 | 2.7 / 2.3 |
+| NUTS       | −0.018 | −0.013 | −0.020 | −0.027 | 1.419 | — |
+
+The refresh removes the rfx under-coverage of the pseudo-marginal chain at low acceptance
+(0.07–0.17 here); Bernoulli LOO-NLL unchanged (0.383 vs NUTS 0.384), Poisson LOO-NLL moves to
+NUTS's value (imhPM's lower 1.401 was an artefact of the duplicated rfx). IS² noise is not the
+cause: sd(log p̂) in huge-b is median 0.085 / q90 0.49 at K = 8, as in small. Cost ≈ 2.5×
+imhLaplace on CPU. σ_rfx ECE of Poisson moves by chain noise (acceptance 0.07, 32 datasets).
+
 ## Checkpoint prefix
 
 `--prefix latest` is the default we use (the checkpoint of the paper tables); evidence.py and
