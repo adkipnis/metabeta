@@ -13,6 +13,7 @@ from metabeta.posthoc.laplace_glmm import (
     LaplaceImportanceSampler,
     logMarginalLikelihoodAGQ,
     logMarginalLikelihoodIS2,
+    refreshRfxIS2,
 )
 from metabeta.posthoc.metropolis import MetropolisSampler
 from metabeta.utils.families import logMarginalLikelihoodNormal
@@ -148,6 +149,44 @@ def test_is2_rfx_weighted_by_estimate_recover_conditional_mean(likelihood_family
     assert (rfx[..., 1] == 0).all() or rfx[..., 1].abs().max() < 1e-4  # padded rfx dim
 
 
+def test_rfx_refresh_leaves_exact_conditional_invariant():
+    """Conditional-IS refresh (keep the current draw, add K − 1 fresh ones, select ∝ weight):
+    exact conditional draws of an all-success group stay exact in mean and sd, although the
+    Laplace Gaussian the fresh draws come from is visibly off there."""
+    torch.manual_seed(7)
+    problem = _problem(1)
+    X, Z, y, mask_n, mask_m, ffx, sigma_rfx, sigma_eps = problem
+    n_rep = 20_000
+    keep = mask_n[0, :, 0].bool()
+    grid = torch.linspace(-12.0, 12.0, 8001, dtype=torch.float64)
+    eta = (X[0, keep] @ ffx)[None, :] + grid[:, None]
+    logp = (y[0, keep][None, :] * eta - F.softplus(eta)).sum(-1) - 0.5 * (grid / sigma_rfx) ** 2
+    p = torch.softmax(logp, 0)
+    mean, sd = float((p * grid).sum()), float((p * grid**2).sum() - (p * grid).sum() ** 2) ** 0.5
+    start = grid[torch.multinomial(p, n_rep, replacement=True)]  # exact draws of b_0
+
+    rfx = torch.zeros(1, 3, n_rep, 2, dtype=torch.float64)
+    rfx[0, 0, :, 0] = start
+    out = refreshRfxIS2(
+        ffx.expand(1, n_rep, -1),
+        torch.tensor([sigma_rfx, 0.0], dtype=torch.float64).expand(1, n_rep, -1),
+        torch.full((1, n_rep), sigma_eps, dtype=torch.float64),
+        y[None, ..., None],
+        X[None],
+        Z[None],
+        mask_n[None],
+        mask_m[None, :, None],
+        1,
+        rfx,
+        n_inner=4,
+    )
+    b = out[0, 0, :, 0]
+    assert (b != start).float().mean() > 0.3  # the kernel moves
+    assert abs(b.mean().item() - mean) < 4 * sd / math.sqrt(n_rep) + 0.01, (b.mean(), mean)
+    assert abs(b.std().item() - sd) < 0.03 * sd, (b.std(), sd)
+    assert (out[0, 2] == 0).all()  # padded group
+
+
 # ---------------------------------------------------------------------------
 # Evidence and posterior of a tiny random-intercept Bernoulli model (d = q = 1)
 # ---------------------------------------------------------------------------
@@ -246,7 +285,8 @@ def test_is2_log_evidence_matches_quadrature_under_two_proposals():
         assert abs(got - want) < 0.02, (params, got, want)
 
 
-def test_pseudo_marginal_imh_targets_exact_posterior():
+@pytest.mark.parametrize('rfx_refresh', [False, True])
+def test_pseudo_marginal_imh_targets_exact_posterior(rfx_refresh):
     """With IS² weights the IMH is pseudo-marginal: posterior means of the globals and of an
     all-success group's intercept match quadrature (the Laplace redraw gives E[b_0] ≈ 0.83)."""
     torch.manual_seed(5)
@@ -262,6 +302,7 @@ def test_pseudo_marginal_imh_targets_exact_posterior():
         likelihood_family=1,
         n_eff_target=None,
         n_inner=4,
+        rfx_refresh=rfx_refresh,
     )
     out, _ = sampler(_gaussianProposal(n_chains * n_steps, data['X'].shape[1], 0.6, 1.2, 1.5))
     assert abs(out.ffx.mean().item() - want_beta) < 0.04
