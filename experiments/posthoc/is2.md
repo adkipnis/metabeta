@@ -185,8 +185,13 @@ imhLaplace on CPU. σ_rfx ECE of Poisson moves by chain noise (acceptance 0.07, 
 
 The refresh re-runs the Newton mode search for the kept states, which the pool pass already
 solved; gathering the pool's modes/Hessians by pool index (as imhLaplace's redraw does) would
-cut imhPMr to ≈ 2.4× imhLaplace with identical output. GPU numbers: pending (imh_timing.py
---device cuda on a GPU node).
+cut imhPMr to ≈ 2.4× imhLaplace with identical output (CPU only; see GPU below).
+
+Cluster, same script: GPU (supergpu28) imhLaplace 0.076–0.087 s, imhPM 0.078–0.091 s, imhPMr
+0.092–0.113 s per dataset in every regime (PM/Lap 1.0, PMr/Lap 1.2–1.3). Flat across sizes, so
+the GPU is presumably bound by the 1000-step chain loop, not by data passes, and the extra
+IS² / refresh passes are nearly free. CPU node (cpusrv14, Bernoulli): imhLaplace 0.35–0.76 s,
+imhPM 0.66–1.42 s, imhPMr 1.19–2.70 s (PMr/Lap 3.2–3.7), ≈ 2.5–3.3× slower than the M3.
 
 ## Checkpoint prefix
 
