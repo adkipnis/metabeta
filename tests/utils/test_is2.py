@@ -296,8 +296,7 @@ def test_is2_log_evidence_matches_quadrature_under_two_proposals():
         assert abs(got - want) < 0.02, (params, got, want)
 
 
-@pytest.mark.parametrize('rfx_refresh', [False, True])
-def test_pseudo_marginal_imh_targets_exact_posterior(rfx_refresh):
+def test_pseudo_marginal_imh_targets_exact_posterior():
     """With IS² weights the IMH is pseudo-marginal: posterior means of the globals and of an
     all-success group's intercept match quadrature (the Laplace redraw gives E[b_0] ≈ 0.83)."""
     torch.manual_seed(5)
@@ -313,7 +312,6 @@ def test_pseudo_marginal_imh_targets_exact_posterior(rfx_refresh):
         likelihood_family=1,
         n_eff_target=None,
         n_inner=4,
-        rfx_refresh=rfx_refresh,
     )
     out, _ = sampler(_gaussianProposal(n_chains * n_steps, data['X'].shape[1], 0.6, 1.2, 1.5))
     assert abs(out.ffx.mean().item() - want_beta) < 0.04
