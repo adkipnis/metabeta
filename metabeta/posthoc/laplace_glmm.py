@@ -542,6 +542,58 @@ def logMarginalLikelihoodIS2(
     return ll, rfx * mask_m.unsqueeze(-1)
 
 
+def refreshRfxIS2(
+    ffx: Tensor,  # (b, s, d)
+    sigma_rfx: Tensor,  # (b, s, q)
+    sigma_eps: Tensor,  # (b, s)
+    y: Tensor,  # (b, m, n, 1)
+    X: Tensor,  # (b, m, n, d)
+    Z: Tensor,  # (b, m, n, q)
+    mask_n: Tensor,  # (b, m, n, 1)
+    mask_m: Tensor,  # (b, m, 1)
+    likelihood_family: int,
+    rfx: Tensor,  # (b, m, s, q) current draws, one per θ_g
+    n_inner: int,
+    L_corr: Tensor | None = None,
+    n_newton: int = 3,
+    defensive: float = 0.01,
+) -> Tensor:
+    """One iterated-SIR move on each group's rfx given θ_g (Andrieu, Lee & Vihola 2018).
+
+    The current draw competes with K − 1 fresh draws from the IS² proposal and one of the K is
+    kept with probability ∝ its weight, a Markov kernel that leaves p(rfx_j | θ_g, y_j)
+    invariant. Applied to the kept states of the pseudo-marginal chain, it gives repeated
+    (rejected-step) states distinct rfx instead of copies. Returns (b, m, s, q).
+    """
+    f = _GroupIntegrand(
+        ffx,
+        sigma_rfx,
+        sigma_eps,
+        y,
+        X,
+        Z,
+        mask_n,
+        mask_m,
+        likelihood_family,
+        L_corr,
+        rfx,
+        n_newton,
+        defensive,
+    )
+    log_sum = f.logWeight(rfx)  # (b, m, s)
+    out = rfx
+    for _ in range(n_inner - 1):
+        z = torch.randn_like(f.modes)
+        from_prior = torch.rand_like(f.log_det_U) < defensive
+        cand = torch.where(from_prior.unsqueeze(-1), f.priorDraw(z), f.laplaceDraw(z))
+        log_w = f.logWeight(cand)
+        log_sum_new = torch.logaddexp(log_sum, log_w)
+        take = torch.rand_like(log_w) < torch.exp(log_w - log_sum_new)
+        out = torch.where(take.unsqueeze(-1), cand, out)
+        log_sum = log_sum_new
+    return out * mask_m.unsqueeze(-1)
+
+
 def logMarginalLikelihoodAGQ(
     ffx: Tensor,  # (b, s, d)
     sigma_rfx: Tensor,  # (b, s, q)
