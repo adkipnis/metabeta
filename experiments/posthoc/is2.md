@@ -234,6 +234,14 @@ IMH row differed in every oracle/real table, all other rows identical; runtimes 
 - Runtimes (single-dataset GPU latency): MB median 0.13–0.17 s both families; the new run is on
   a different GPU node (global-pass rows moved too), so old vs new is node-dominated.
 
+Robustness (cluster, `--n_samples 4000`, pulled 2026-09-26): likelihood / prior misspecification
+and condition number for b/p; same datasets and NUTS-converged counts as before, NUTS rows
+identical. MB+IMH σ-ratio 0.99–1.00 everywhere except collinear Poisson (0.95–0.98, was
+0.93–0.95); rank-MAD 0.002–0.004 (0.006–0.015 on collinear Poisson), was ≈0.007–0.023.
+The raw-flow rows moved too (4000 vs 1000 draws): raw Poisson ΔLOO-NLL grows with the pool
+(PSIS-LOO over a mis-scaled proposal), e.g. κ₂ ∈ [6, 10) 0.92 → 3.01, NB θ=1 0.28 → 0.39.
+Old local files backed up in ~/Downloads/hpc-pull/robust-old.
+
 ## Checkpoint prefix
 
 `--prefix latest` is the default we use (the checkpoint of the paper tables); evidence.py and
