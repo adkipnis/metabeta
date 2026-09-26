@@ -319,6 +319,19 @@ def test_pseudo_marginal_imh_targets_exact_posterior():
     assert abs(out.rfx[0, 0].mean().item() - want_b0) < 0.04
 
 
+def test_imh_without_laplace_weights_runs():
+    """The pseudo-marginal rfx refresh must not touch the non-Laplace modes ('joint' here;
+    'marginal', the Gaussian default, shares the path), whose sampler has no IS² inner draws."""
+    torch.manual_seed(5)
+    data = _tinyBernoulli()
+    m = data['X'].shape[1]
+    sampler = MetropolisSampler(
+        data, n_chains=4, n_steps=50, mode='joint', likelihood_family=1, n_eff_target=None
+    )
+    out, _ = sampler(_gaussianProposal(200, m, 0.6, 1.2, 1.5))
+    assert out.rfx.shape[:2] == (1, m) and torch.isfinite(out.rfx).all()
+
+
 # ---------------------------------------------------------------------------
 # Adaptive Gauss-Hermite quadrature (AGQ): the deterministic evidence reference
 # ---------------------------------------------------------------------------

@@ -189,6 +189,7 @@ class MetropolisSampler:
         self.has_sigma_eps = hasSigmaEps(likelihood_family)
         self.eps = eps
         self.n_eff_target = n_eff_target
+        self.n_inner = n_inner
 
         # Delegate all weight computation to ImportanceSampler.unnormalizedPosterior —
         # single source of truth shared with SNIS. 'marginal' uses the (correlated)
@@ -370,7 +371,7 @@ class MetropolisSampler:
         With IS² weights (n_inner > 0) the kept state's weight-selected inner draw is gathered
         instead: under the pseudo-marginal extended target it is an exact conditional draw.
         """
-        if self._is.n_inner > 0:
+        if self.n_inner > 0:
             return self._gatherPool(self._is._rfx, idx_out)
         modes_sel = self._gatherPool(self._is._modes, idx_out)
         chol_sel = self._gatherPool(self._is._chol_H, idx_out)
@@ -437,7 +438,7 @@ class MetropolisSampler:
             'local': {'samples': sl_out, 'log_prob': sl_out.new_zeros(b, m, s_out)},
         }
         out = Proposal(proposed, has_sigma_eps=proposal.has_sigma_eps, d_corr=d_corr)
-        if self._is.n_inner > 0:
+        if self.n_inner > 0:
             # pseudo-marginal chain: a rejected step repeats the state's rfx, which left the rfx
             # under-covered at low acceptance (large/huge ablation); an iterated-SIR move given
             # θ_g, which leaves p(rfx | θ_g, y) invariant, gives each kept state its own draw.
