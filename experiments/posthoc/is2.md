@@ -174,6 +174,20 @@ NUTS's value (imhPM's lower 1.401 was an artefact of the duplicated rfx). IS² n
 cause: sd(log p̂) in huge-b is median 0.085 / q90 0.49 at K = 8, as in small. Cost ≈ 2.5×
 imhLaplace on CPU. σ_rfx ECE of Poisson moves by chain noise (acceptance 0.07, 32 datasets).
 
+## IMH latency (imh_timing.py, M3 CPU, idle, pool 4000, median of 8 datasets)
+
+| | imhLaplace | imhPM | imhPMr | PM/Lap | PMr/Lap |
+|:--|--:|--:|--:|--:|--:|
+| b small / medium | 0.11 s | 0.18–0.19 s | 0.35 s | 1.7 | 3.2 |
+| b large / huge | 0.28–0.29 s | 0.47–0.51 s | 0.92–1.06 s | 1.7 | 3.3–3.6 |
+| p small / medium | 0.08–0.11 s | 0.15–0.19 s | 0.27–0.34 s | 1.8–1.9 | 3.2–3.4 |
+| p large / huge | 0.29–0.38 s | 0.47–0.57 s | 0.87–1.08 s | 1.5–1.6 | 2.9–3.0 |
+
+The refresh re-runs the Newton mode search for the kept states, which the pool pass already
+solved; gathering the pool's modes/Hessians by pool index (as imhLaplace's redraw does) would
+cut imhPMr to ≈ 2.4× imhLaplace with identical output. GPU numbers: pending (imh_timing.py
+--device cuda on a GPU node).
+
 ## Checkpoint prefix
 
 `--prefix latest` is the default we use (the checkpoint of the paper tables); evidence.py and
