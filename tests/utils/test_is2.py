@@ -11,6 +11,7 @@ from torch.nn import functional as F
 
 from metabeta.posthoc.laplace_glmm import (
     LaplaceImportanceSampler,
+    laplaceRfxModes,
     logMarginalLikelihoodAGQ,
     logMarginalLikelihoodIS2,
     refreshRfxIS2,
@@ -86,7 +87,7 @@ def _problem(likelihood_family, seed=0):
 def _estimate(problem, likelihood_family, n_rep, n_inner, **kwargs):
     """n_rep independent IS² estimates of log p(y | θ) at one θ (replicates on the s axis)."""
     X, Z, y, mask_n, mask_m, ffx, sigma_rfx, sigma_eps = problem
-    ll, rfx = logMarginalLikelihoodIS2(
+    ll, rfx, _, _ = logMarginalLikelihoodIS2(
         ffx.expand(1, n_rep, -1),
         torch.tensor([sigma_rfx, 0.0], dtype=torch.float64).expand(1, n_rep, -1),
         torch.full((1, n_rep), sigma_eps, dtype=torch.float64),
@@ -149,10 +150,12 @@ def test_is2_rfx_weighted_by_estimate_recover_conditional_mean(likelihood_family
     assert (rfx[..., 1] == 0).all() or rfx[..., 1].abs().max() < 1e-4  # padded rfx dim
 
 
-def test_rfx_refresh_leaves_exact_conditional_invariant():
+@pytest.mark.parametrize('supply_laplace', [False, True])
+def test_rfx_refresh_leaves_exact_conditional_invariant(supply_laplace):
     """Conditional-IS refresh (keep the current draw, add K − 1 fresh ones, select ∝ weight):
     exact conditional draws of an all-success group stay exact in mean and sd, although the
-    Laplace Gaussian the fresh draws come from is visibly off there."""
+    Laplace Gaussian the fresh draws come from is visibly off there — whether the Laplace
+    factors are recomputed or supplied (as the IMH does, from its pool pass)."""
     torch.manual_seed(7)
     problem = _problem(1)
     X, Z, y, mask_n, mask_m, ffx, sigma_rfx, sigma_eps = problem
@@ -167,7 +170,7 @@ def test_rfx_refresh_leaves_exact_conditional_invariant():
 
     rfx = torch.zeros(1, 3, n_rep, 2, dtype=torch.float64)
     rfx[0, 0, :, 0] = start
-    out = refreshRfxIS2(
+    args = (
         ffx.expand(1, n_rep, -1),
         torch.tensor([sigma_rfx, 0.0], dtype=torch.float64).expand(1, n_rep, -1),
         torch.full((1, n_rep), sigma_eps, dtype=torch.float64),
@@ -177,8 +180,16 @@ def test_rfx_refresh_leaves_exact_conditional_invariant():
         mask_n[None],
         mask_m[None, :, None],
         1,
+    )
+    laplace = None
+    if supply_laplace:
+        modes, chol_H, *_ = laplaceRfxModes(*args[:9])
+        laplace = (modes, chol_H)
+    out = refreshRfxIS2(
+        *args,
         rfx,
         n_inner=4,
+        laplace=laplace,
     )
     b = out[0, 0, :, 0]
     assert (b != start).float().mean() > 0.3  # the kernel moves
