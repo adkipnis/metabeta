@@ -39,8 +39,8 @@ SIZE=${SIZES[$((COMBO % ${#SIZES[@]}))]}
 
 SIF="$HOME/containers/python312.sif"
 VENV="$HOME/metabeta/.venv-apptainer"
-# outputs/data is symlinked to workspace storage; bind it so the link resolves in-container
-DATA_ROOT="/lustre/groups/hcai/workspace/alexander.kipnis/datasets"
+# outputs/{data,checkpoints} are symlinked to workspace storage; bind it so the links resolve
+WORKSPACE="/lustre/groups/hcai/workspace/alexander.kipnis"
 BASE="--n-datasets 512 --nested 128"
 
 mkdir -p logs/evidence
@@ -58,7 +58,7 @@ fi
 
 apptainer exec \
   --bind "$HOME:$HOME" \
-  --bind "$DATA_ROOT:$DATA_ROOT" \
+  --bind "$WORKSPACE:$WORKSPACE" \
   "$SIF" \
   bash -lc "
     set -euo pipefail
