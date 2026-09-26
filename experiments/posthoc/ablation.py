@@ -131,7 +131,7 @@ def setup() -> argparse.Namespace:
     p.add_argument('--families', nargs='+', default=['normal', 'bernoulli', 'poisson'], choices=['normal', 'bernoulli', 'poisson'], help='likelihood families to evaluate')
     p.add_argument('--split', choices=['valid', 'test'], default='valid', help='npz split to evaluate on; only "test" has coldNuts fits')
     p.add_argument('--prefix', type=str, default='latest', help='checkpoint prefix to load and to match evaluate.py MB caches against (latest = the checkpoint of the oracle tables and figures)')
-    p.add_argument('--device', type=str, default='cpu', help='device for flow sampling (posthoc methods and summaries stay on cpu)')
+    p.add_argument('--device', type=str, default='cpu', help='device for flow sampling and the IMH refinements (summaries stay on cpu)')
     p.add_argument('--batch-size', type=int, default=4, help='sub-batch size for torch-based methods')
     p.add_argument('--n-datasets', type=int, default=None, help='cap on datasets per model (default: use the entire split)')
     p.add_argument('--n-samples', type=int, default=4000, help='flow samples for torch-based methods (raw/is/svgd) and the IMH proposal pool (4 chains x n/4 steps); 4000 matches the paper benchmarks and the NUTS draw count')
@@ -471,12 +471,24 @@ def imhSampleCount(n_samples: int) -> tuple[int, int]:
     return n_steps, IMH_N_CHAINS * n_steps
 
 
-def refineIMH(mode, proposals, batches, lf, n_steps=IMH_N_STEPS, n_inner=0, rfx_refresh=False):
-    """Run IMH on each sub-batch; return (merged batch Proposal, accept rates)."""
+def refineIMH(
+    mode,
+    proposals,
+    batches,
+    lf,
+    n_steps=IMH_N_STEPS,
+    n_inner=0,
+    rfx_refresh=False,
+    device='cpu',
+):
+    """Run IMH on each sub-batch on `device`; return (merged CPU Proposal, accept rates)."""
     imh_proposals, accept_rates = [], []
     for p, batch in zip(proposals, batches):
+        # slice-copy before moving, so the shared pool proposals stay on the CPU
+        p = p.slice_b(0, p.samples_g.shape[0])
+        p.to(device)
         sampler = MetropolisSampler(
-            batch,
+            toDevice(batch, device),
             n_chains=IMH_N_CHAINS,
             n_steps=n_steps,
             burnin=IMH_BURNIN,
@@ -486,17 +498,33 @@ def refineIMH(mode, proposals, batches, lf, n_steps=IMH_N_STEPS, n_inner=0, rfx_
             rfx_refresh=rfx_refresh,
         )
         p_out, diag = sampler(p)
+        p_out.to('cpu')
         imh_proposals.append(p_out)
-        accept_rates.append(diag['accept_rate'])
+        accept_rates.append(diag['accept_rate'].cpu())
     return concatProposalsBatch(imh_proposals), torch.cat(accept_rates, dim=0)
 
 
 def runIMH(
-    mode, proposals, batches, full_batch, lf, n_steps=IMH_N_STEPS, n_inner=0, rfx_refresh=False
+    mode,
+    proposals,
+    batches,
+    full_batch,
+    lf,
+    n_steps=IMH_N_STEPS,
+    n_inner=0,
+    rfx_refresh=False,
+    device='cpu',
 ):
     t0 = time.perf_counter()
     proposal, accept = refineIMH(
-        mode, proposals, batches, lf, n_steps=n_steps, n_inner=n_inner, rfx_refresh=rfx_refresh
+        mode,
+        proposals,
+        batches,
+        lf,
+        n_steps=n_steps,
+        n_inner=n_inner,
+        rfx_refresh=rfx_refresh,
+        device=device,
     )
     t1 = time.perf_counter()
 
@@ -1005,17 +1033,35 @@ def main() -> None:
                 elif cond == 'imhMarginal':
                     imh_mode = 'marginal' if lf == 0 else 'global'
                     summary, diag, refined = runIMH(
-                        imh_mode, imh_proposals, imh_batches, full_batch, lf, n_steps=imh_n_steps
+                        imh_mode,
+                        imh_proposals,
+                        imh_batches,
+                        full_batch,
+                        lf,
+                        n_steps=imh_n_steps,
+                        device=args.device,
                     )
                     imh_refined[imh_mode] = refined
                 elif cond == 'imhGlobal':
                     summary, diag, refined = runIMH(
-                        'global', imh_proposals, imh_batches, full_batch, lf, n_steps=imh_n_steps
+                        'global',
+                        imh_proposals,
+                        imh_batches,
+                        full_batch,
+                        lf,
+                        n_steps=imh_n_steps,
+                        device=args.device,
                     )
                     imh_refined['global'] = refined
                 elif cond == 'imhLaplace':
                     summary, diag, refined = runIMH(
-                        'laplace', imh_proposals, imh_batches, full_batch, lf, n_steps=imh_n_steps
+                        'laplace',
+                        imh_proposals,
+                        imh_batches,
+                        full_batch,
+                        lf,
+                        n_steps=imh_n_steps,
+                        device=args.device,
                     )
                     imh_refined['laplace'] = refined
                 elif cond in ('imhPM', 'imhPMr'):
@@ -1028,6 +1074,7 @@ def main() -> None:
                         n_steps=imh_n_steps,
                         n_inner=IMH_N_INNER,
                         rfx_refresh=cond == 'imhPMr',
+                        device=args.device,
                     )
                 elif cond == 'warmNuts':
                     # seed from the marginal-target MB-IMH posterior (the quality
@@ -1041,7 +1088,12 @@ def main() -> None:
                         if refined is None:
                             print(f'  refining flow proposal with IMH (mode={mode})')
                             refined, _ = refineIMH(
-                                mode, imh_proposals, imh_batches, lf, n_steps=imh_n_steps
+                                mode,
+                                imh_proposals,
+                                imh_batches,
+                                lf,
+                                n_steps=imh_n_steps,
+                                device=args.device,
                             )
                             imh_refined[mode] = refined
                         return refined
