@@ -265,8 +265,8 @@ class Target:
         if self.lf == 0:
             ll, lp = self.is_.unnormalizedPosterior(p)
             return (ll + lp)[0]
-        lp, ffx, sigma_eps = self.is_._logPriorGlobals(p)
         is_ = self.is_
+        lp, ffx, sigma_eps = is_._logPriorGlobals(p)
         ll = logMarginalLikelihoodAGQ(
             ffx,
             p.sigma_rfx,
@@ -762,8 +762,7 @@ def runSize(size: str, args: argparse.Namespace) -> None:
     pool_sizes = sorted(args.pool_sizes)
     s_max = pool_sizes[-1]
     # nested datasets: the first args.nested with q >= 2, fixed before sharding
-    nested = {i for i in range(n_ds) if int(col[i]['q']) >= 2}
-    nested = set(sorted(nested)[: args.nested])
+    nested = set([i for i in range(n_ds) if int(col[i]['q']) >= 2][: args.nested])
     rows = []
     t0 = time.perf_counter()
     for i in range(args.shard, n_ds, args.n_shards):
