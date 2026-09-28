@@ -104,8 +104,9 @@ Findings (2026-09, 512 test datasets)
 The robustified Laplace mode search removed init-dependent absorbing states from
 mode='laplace' (Poisson-large σ_rfx ECE −0.070 → −0.051, LOO-NLL unchanged at NUTS level).
 The large/huge-regime FFX under-dispersion is the finite proposal pool — identical with the
-exact marginal target on Normal-huge, and shrinking as (ā·s)^−0.6 in a pool-size sweep —
-hence the acceptance-based pool-size suggestion below.
+exact marginal target on Normal-huge, and shrinking with pool size (calibration error
+≈ (ā·s)^−0.4 for the pseudo-marginal chain in a pool-size sweep) — hence the
+acceptance-based pool-size suggestion below.
 """
 
 import argparse
@@ -134,8 +135,9 @@ Mode = Literal['global', 'marginal', 'joint', 'laplace']
 # sd(log p̂(y|θ)) ≈ 0.08 median / ≤ 0.5 q90 at K = 8 (experiments/posthoc/is2_tuning.py)
 IS2_N_INNER = 8
 
-# Effective-draw target from the pool-size sweep (FFX ECE ∝ (ā·s)^−0.6; at ā·s ≈ 700 the
-# huge regime reaches small-regime calibration). Suggested pool sizes aim for it.
+# Effective-draw target from the pool-size sweep: the pseudo-marginal chain's FFX
+# calibration error decays ≈ (ā·s)^−0.4, so 700 accepted draws is a practical floor (the
+# hardest regimes keep improving beyond it). Suggested pool sizes aim for it.
 N_EFF_TARGET = 700
 SUGGEST_MIN = 1_000
 SUGGEST_MAX = 16_000
