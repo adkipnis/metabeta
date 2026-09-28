@@ -1,0 +1,103 @@
+# Reference methods rework (`ref-methods`)
+
+Working document for the branch; folded into the PR at retirement and deleted.
+
+## Design
+
+1. **Stack**: PyMC ≥ 6.3, PyTensor 3, ArviZ ≥ 1.3, pymc-extras ≥ 0.15 (Pathfinder).
+2. **Storage**: `{partition}.{tag}.npz` per method, arrays only, key prefix equals tag,
+   plus `source_sha` of `{partition}.npz`. Tags: `nuts0 nuts1 nuts2 nuts advi0 advi1
+   pathfinder0 pathfinder1 laplace`. `Collection(path, fits=(...))` merges sibling files
+   and raises on checksum mismatch; `exclude_prefixes` retired. `test.fit.npz` stays
+   untouched until merge (no de-partitioning); Laplace's merge step goes. `e2-*`
+   directories are out of scope.
+3. **NUTS ladder**, every test dataset: L0 = PyMC defaults (tune 1000, draws 1000,
+   4 chains, target accept 0.8, tree depth 10); L1 = tune 2000, target accept 0.9;
+   L2 = tune 4000, draws 2000, target accept 0.99, tree depth 12. Valid partition: L2
+   only. Wall time around `pm.sample` including compilation and spawn; compile time also
+   recorded separately.
+4. **Filter**: one criterion. R-hat ≤ 1.01, bulk and tail ESS ≥ 400 over all sampled
+   variables (Vehtari et al. 2021), divergences zero at L0/L1 and ≤ 0.1 % at L2.
+   Tree-depth saturation reported, not filtered. `liberal`/`strict` removed; results on
+   converged datasets only, plus one convergence-validation check (converged vs all).
+5. **Composite `nuts`**: written by reintegration from the level files; per dataset the
+   arrays of the first level that passes the filter (L2 if none), with `nuts_level`,
+   `nuts_converged`, cumulative `nuts_duration`. Role split: `nuts2` is the *reference*
+   for agreement metrics (8000 draws, no runtime attached); `nuts` is the *competitor* in
+   runtime and accuracy-vs-truth tables.
+6. **ADVI**: one run, adagrad_window lr 1e-3 (PyMC default optimiser, Kucukelbir et al.
+   2017), 100k iterations, no early stopping, ELBO recorded; snapshot schedule
+   1k/2k/5k/10k/20k/50k/100k stored; draws written at 10k (`advi0`, PyMC default budget)
+   and 100k (`advi1`), each with its own wall time.
+7. **Pathfinder**: level 0 = 4 paths, level 1 = 20 paths, 4000 draws both, pymc-extras
+   defaults otherwise.
+8. **Diagnostics**: NUTS: ESS bulk/tail, R-hat, divergences, tree-depth saturation,
+   leapfrog steps, step size, acceptance, E-BFMI, chains, tune, target accept,
+   durations, PyMC version. ADVI: ELBO curve, iterations, final ELBO (100 MC samples),
+   durations. Pathfinder: paths, LBFGS iterations, Pareto k, compile/compute time.
+   Laplace unchanged.
+9. **Budget rule**: every evaluated posterior uses 4000 draws (L2 thinned when it is
+   evaluated against truth); the `nuts2` reference keeps 8000.
+10. **Curve**: all ids; points MB⁰, MB, NUTS L0, NUTS composite, ADVI0/1, Pathfinder0/1,
+    Laplace vs true parameters with the existing metrics; x = wall time (NUTS 4 cores;
+    MB one GPU and 4 CPU cores as separate panels). Plus every NUTS/ADVI/Pathfinder
+    level scored against `nuts2` with the paper's agreement metric (false-convergence
+    check).
+11. **Main tables**: reference `nuts2` with the L2 converged mask; competitors `nuts`,
+    `advi1`, `pathfinder1`, `laplace`; `--models all` = MB + these. Runtime tables show
+    NUTS L0 and composite.
+12. **Cluster**: one `scripts/fit-ref.sh --method --level --data_id --partition`;
+    NUTS 4 CPUs, 16 GB, 6 h (L0/L1) / 12 h (L2); ADVI and Pathfinder 1 CPU. `check.py`
+    verifies per-level files and reintegrates.
+
+Order of work: stack upgrade → storage and loader with tests → fitter rework → filter
+cleanup → SLURM script → curve experiment.
+
+## Step 1: stack upgrade (done locally)
+
+- `pymc>=6.3.2`, `pymc-extras>=0.15.1`, `arviz>=1.3.0`; bambi moved to 0.21 with it.
+- Smoke on `small-n-sampled` dataset 0: NUTS (2 chains, forkserver), ADVI (`pm.fit`)
+  and `pymc_extras.fit_pathfinder` all run; `buildPymc`/`extractAll` unchanged. Traces
+  are `xarray.DataTree` now; `.posterior[name]`, `az.summary(kind='diagnostics')` and
+  `az.bfmi` work as before. `posterior.attrs['sampling_time']` gives pure sampling time.
+  Pathfinder returns groups `pathfinder` (compile/compute/total time, pareto_k, path
+  status) and `lbfgs` (niter).
+- ArviZ 1 dropped `az.psislw`. Replacement `arviz_stats.base.array_stats.psislw` takes
+  the *log-likelihood* convention (negates internally). `metabeta/utils/psis.py` wraps
+  it with the old conventions (log ratios in, raw normalised weights + k = inf for
+  < 25 draws). Verified against ArviZ 0.23.4 in a scratch venv: identical to 1e-15 at
+  256 draws; ≤ 1e-2 log-weight differences in the extreme tail at ≥ 512 draws because the
+  tail-length rule now follows Vehtari et al. 2024 (`n·r_eff > 225 → 3√(n/r_eff)` else
+  `n/5`). LOO-NLL and Pareto k therefore shift by numeric noise relative to the paper's
+  current numbers.
+- 631 tests pass; the opt-in PyMC Laplace parity check passes
+  (`METABETA_RUN_PYMC_LAPLACE=1`).
+- macOS only: Xcode 27 rejects the `-ld64` linker flag PyTensor adds
+  (pymc-devs/pytensor#2268; predates this upgrade). Local workaround outside the repo:
+  an empty `~/.pytensor/shim/libd64.dylib` and `~/.pytensorrc` with
+  `[gcc] cxxflags = -L~/.pytensor/shim`.
+
+### Cluster: upgrade the container venv
+
+Checked over SSH (2026-09-28): the image `python312.sif` is Debian 12 with g++ 12.2
+(PyTensor 3 needs C++17, so no rebuild), `uv` 0.10.11 lives in `~/.local/bin` and is
+visible inside the container through the `$HOME` bind, and `.venv-apptainer` was created
+by that uv. The repo on the cluster is on `is2-evidence`. Run on the submit node:
+
+```bash
+cd ~/metabeta && git fetch && git checkout ref-methods && git pull
+apptainer exec --bind "$HOME:$HOME" ~/containers/python312.sif bash -lc '
+  cd ~/metabeta
+  UV_PROJECT_ENVIRONMENT=.venv-apptainer uv sync
+  source .venv-apptainer/bin/activate
+  python -c "import pymc, pytensor, arviz, pymc_extras; print(pymc.__version__, pytensor.__version__, arviz.__version__, pymc_extras.__version__)"
+  METABETA_RUN_PYMC_LAPLACE=1 python -m pytest -q tests/simulation/test_laplace_pymc_parity.py
+'
+```
+
+Expected: `6.3.2 3.3.2 1.3.x 0.15.1`, then `2 passed`. `uv sync` resolves from the
+committed lock; never `uv lock` on the cluster. Then one smoke fit:
+
+```bash
+sbatch scripts/fit-nuts.sh --data_id small-n-sampled   # after step 3 replaces this with fit-ref.sh
+```
