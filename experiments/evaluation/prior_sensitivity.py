@@ -1205,6 +1205,7 @@ class PriorSensitivity:
     def _save(self, fig, suffix: str) -> None:
         path = self.resultPath(f'{suffix}.pdf')
         for out in (Path(self.cfg.fig_dir) / path.name, path):
+            out.parent.mkdir(parents=True, exist_ok=True)
             fig.savefig(out, bbox_inches='tight', pad_inches=0.15, dpi=VECTOR_RASTER_DPI)
             logger.info('saved %s', out)
         plt.close(fig)

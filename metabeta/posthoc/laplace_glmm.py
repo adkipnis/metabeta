@@ -62,6 +62,10 @@ from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.utils.families import POISSON_ETA_CLIP_MAX
 from metabeta.utils.results import Proposal
 
+AGQ_N_BACKTRACK = (
+    30  # step halvings of the AGQ reference's mode search (see logMarginalLikelihoodAGQ)
+)
+
 
 def _sigmaChol(sigma_rfx: Tensor, L_corr: Tensor | None) -> Tensor:
     """Cholesky factor of Σ_rfx = D L_corr L_corrᵀ D (or diag(σ²)). (b, s, q, q)."""
@@ -399,6 +403,312 @@ def logMarginalLikelihoodLaplace(
     return ll, modes, chol_H
 
 
+class _GroupIntegrand:
+    """Per-group integrand of p(y_j | θ_g) = ∫ p(y_j | θ_g, b) N(b; 0, Σ) db around its Laplace
+    Gaussian N(b*_j, H_j⁻¹), shared by the IS² estimate and AGQ.
+
+    Owns the whitening: candidates are b = b* + U⁻ᵀ z (H = U Uᵀ) or prior draws L z, and
+    `logWeight` returns log p(y_j, b | θ_g) − log r(b) for the proposal r = (1 − α) Laplace +
+    α prior. The two Gaussians' (q/2)·log 2π terms cancel, and padded rfx dims cancel between
+    their log-dets as in logMarginalLikelihoodLaplace. `laplace` = (modes, chol_H) from an
+    earlier pass at the same θ_g skips the Newton search, the dominant cost.
+    """
+
+    def __init__(
+        self,
+        ffx: Tensor,  # (b, s, d)
+        sigma_rfx: Tensor,  # (b, s, q)
+        sigma_eps: Tensor,  # (b, s)
+        y: Tensor,  # (b, m, n, 1)
+        X: Tensor,  # (b, m, n, d)
+        Z: Tensor,  # (b, m, n, q)
+        mask_n: Tensor,  # (b, m, n, 1)
+        mask_m: Tensor,  # (b, m, 1)
+        likelihood_family: int,
+        L_corr: Tensor | None,
+        init: Tensor | None,
+        n_newton: int,
+        defensive: float,
+        laplace: tuple[Tensor, Tensor] | None = None,  # (modes, chol_H) at these θ_g
+        n_backtrack: int = 3,
+    ) -> None:
+        if laplace is None:
+            self.modes, self.chol_H, _, L_rfx, _ = laplaceRfxModes(
+                ffx,
+                sigma_rfx,
+                sigma_eps,
+                y,
+                X,
+                Z,
+                mask_n,
+                mask_m,
+                likelihood_family,
+                L_corr=L_corr,
+                init=init,
+                n_newton=n_newton,
+                n_backtrack=n_backtrack,
+            )
+        else:
+            self.modes, self.chol_H = laplace
+            L_rfx = _sigmaChol(sigma_rfx, L_corr)
+        self.y, self.sigma_eps, self.mask_n = y, sigma_eps, mask_n
+        self.likelihood_family = likelihood_family
+        self.defensive = defensive
+        self.Z_m = Z * mask_n
+        self.mu_ffx = torch.einsum('bmnd,bsd->bmns', X, ffx)  # (b, m, n, s)
+        self.log_det_U = self.chol_H.diagonal(dim1=-2, dim2=-1).log().sum(-1)  # (b, m, s)
+        log_det_L = L_rfx.diagonal(dim1=-2, dim2=-1).clamp(min=1e-8).log().sum(-1)
+        self.log_det_L = log_det_L[:, None]  # (b, 1, s)
+        self.L_rfx = L_rfx.unsqueeze(1)  # (b, 1, s, q, q)
+        # L⁻¹ once per θ_g: whitening each draw is then a broadcast matmul over groups (a
+        # broadcast solve_triangular returns wrong values on MPS, and is slower anyway)
+        eye = torch.eye(L_rfx.shape[-1], dtype=L_rfx.dtype, device=L_rfx.device)
+        self.L_inv = torch.linalg.solve_triangular(L_rfx, eye.expand_as(L_rfx), upper=False)
+        self.L_inv = self.L_inv.unsqueeze(1)  # (b, 1, s, q, q)
+
+    def laplaceDraw(self, z: Tensor) -> Tensor:
+        """b* + U⁻ᵀ z for standard-normal (or quadrature-node) z (b, m, s, q)."""
+        shift = torch.linalg.solve_triangular(self.chol_H.mT, z.unsqueeze(-1), upper=True)
+        return self.modes + shift.squeeze(-1)
+
+    def priorDraw(self, z: Tensor) -> Tensor:
+        return (self.L_rfx @ z.unsqueeze(-1)).squeeze(-1)
+
+    def logWeight(self, cand: Tensor) -> Tensor:
+        """log p(y_j, cand | θ_g) − log r(cand), (b, m, s)."""
+        white_lap = (self.chol_H.mT @ (cand - self.modes).unsqueeze(-1)).squeeze(-1)
+        white_pri = self.L_inv @ cand.unsqueeze(-1)
+        log_lap = -0.5 * white_lap.square().sum(-1) + self.log_det_U
+        log_pri = -0.5 * white_pri.squeeze(-1).square().sum(-1) - self.log_det_L
+        log_r = log_lap
+        if self.defensive > 0:
+            log_r = torch.logaddexp(
+                math.log1p(-self.defensive) + log_lap, math.log(self.defensive) + log_pri
+            )
+        eta = self.mu_ffx + torch.einsum('bmnq,bmsq->bmns', self.Z_m, cand)
+        ll = _llPerGroup(eta, self.y, self.sigma_eps, self.mask_n, self.likelihood_family)
+        return ll + log_pri - log_r
+
+
+def logMarginalLikelihoodIS2(
+    ffx: Tensor,  # (b, s, d)
+    sigma_rfx: Tensor,  # (b, s, q)
+    sigma_eps: Tensor,  # (b, s)
+    y: Tensor,  # (b, m, n, 1)
+    X: Tensor,  # (b, m, n, d)
+    Z: Tensor,  # (b, m, n, q)
+    mask_n: Tensor,  # (b, m, n, 1)
+    mask_m: Tensor,  # (b, m, 1)
+    likelihood_family: int,
+    n_inner: int,
+    L_corr: Tensor | None = None,
+    init: Tensor | None = None,
+    n_newton: int = 3,
+    defensive: float = 0.01,  # is2_tuning: 0.01 ≈ 0 in sd(log p̂), 0.1 inflates it ~1.8x
+) -> tuple[Tensor, Tensor, Tensor, Tensor]:
+    """Unbiased estimate Σ_j log p̂(y_j | θ_g) by per-group importance sampling (IS²).
+
+    Importance sampling squared (Tran, Scharth, Pitt & Kohn, arXiv:1309.3339): per group,
+    p̂_j = (1/K) Σ_k p(y_j | θ_g, b_k) N(b_k; 0, Σ) / r_j(b_k) with b_k ~ r_j, so E[p̂_j] =
+    p(y_j | θ_g) and, the groups being independent given θ_g, E[∏_j p̂_j] = p(y | θ_g).
+    Plugging exp(ll) into the IS weights therefore keeps the evidence unbiased, and the IMH
+    becomes pseudo-marginal (Andrieu & Roberts 2009), i.e. it targets the exact posterior.
+
+    r_j is the defensive mixture (1 − α) N(b*_j, H_j⁻¹) + α N(0, Σ) (Hesterberg 1995): the
+    Laplace Gaussian is lighter-tailed than the prior (H ⪰ Σ⁻¹), which leaves the inner
+    weights with infinite variance where the likelihood is flat (all-success Bernoulli
+    groups); the prior component bounds them by max_b p(y_j | θ_g, b) / α.
+
+    Returns (ll (b, s), rfx (b, m, s, q), modes, chol_H); rfx holds one inner draw per group
+    chosen with probability ∝ its weight (single-item weighted reservoir sampling over k), an
+    exact draw from p(rfx_j | θ_g, y_j) under the pseudo-marginal extended target; modes and
+    chol_H are the Laplace factors, reusable by refreshRfxIS2 as in logMarginalLikelihoodLaplace.
+    """
+    f = _GroupIntegrand(
+        ffx,
+        sigma_rfx,
+        sigma_eps,
+        y,
+        X,
+        Z,
+        mask_n,
+        mask_m,
+        likelihood_family,
+        L_corr,
+        init,
+        n_newton,
+        defensive,
+    )
+    log_sum = torch.full_like(f.log_det_U, -torch.inf)  # (b, m, s) running logsumexp
+    rfx = torch.zeros_like(f.modes)  # (b, m, s, q)
+    for _ in range(n_inner):
+        z = torch.randn_like(f.modes)
+        from_prior = torch.rand_like(f.log_det_U) < defensive  # (b, m, s)
+        cand = torch.where(from_prior.unsqueeze(-1), f.priorDraw(z), f.laplaceDraw(z))
+        log_w = f.logWeight(cand)
+        log_sum_new = torch.logaddexp(log_sum, log_w)
+        take = torch.rand_like(log_w) < torch.exp(log_w - log_sum_new)  # NaN (both −inf) → keep
+        rfx = torch.where(take.unsqueeze(-1), cand, rfx)
+        log_sum = log_sum_new
+
+    ll = ((log_sum - math.log(n_inner)) * mask_m).sum(dim=1)  # (b, s)
+    return ll, rfx * mask_m.unsqueeze(-1), f.modes, f.chol_H
+
+
+def refreshRfxIS2(
+    ffx: Tensor,  # (b, s, d)
+    sigma_rfx: Tensor,  # (b, s, q)
+    sigma_eps: Tensor,  # (b, s)
+    y: Tensor,  # (b, m, n, 1)
+    X: Tensor,  # (b, m, n, d)
+    Z: Tensor,  # (b, m, n, q)
+    mask_n: Tensor,  # (b, m, n, 1)
+    mask_m: Tensor,  # (b, m, 1)
+    likelihood_family: int,
+    rfx: Tensor,  # (b, m, s, q) current draws, one per θ_g
+    n_inner: int,
+    L_corr: Tensor | None = None,
+    n_newton: int = 3,
+    defensive: float = 0.01,
+    laplace: tuple[Tensor, Tensor] | None = None,  # (modes, chol_H) at these θ_g
+) -> Tensor:
+    """One iterated-SIR move on each group's rfx given θ_g (Andrieu, Lee & Vihola 2018).
+
+    The current draw competes with K − 1 fresh draws from the IS² proposal and one of the K is
+    kept with probability ∝ its weight, a Markov kernel that leaves p(rfx_j | θ_g, y_j)
+    invariant as long as the proposal does not depend on the current draw: the Laplace factors
+    come from `laplace` (the IMH passes its pool's, gathered by pool index) or from a cold
+    Newton search. Applied to the kept states of the pseudo-marginal chain, it gives repeated
+    (rejected-step) states distinct rfx instead of copies. Returns (b, m, s, q).
+    """
+    f = _GroupIntegrand(
+        ffx,
+        sigma_rfx,
+        sigma_eps,
+        y,
+        X,
+        Z,
+        mask_n,
+        mask_m,
+        likelihood_family,
+        L_corr,
+        None,
+        n_newton,
+        defensive,
+        laplace,
+    )
+    log_sum = f.logWeight(rfx)  # (b, m, s)
+    out = rfx
+    for _ in range(n_inner - 1):
+        z = torch.randn_like(f.modes)
+        from_prior = torch.rand_like(f.log_det_U) < defensive
+        cand = torch.where(from_prior.unsqueeze(-1), f.priorDraw(z), f.laplaceDraw(z))
+        log_w = f.logWeight(cand)
+        log_sum_new = torch.logaddexp(log_sum, log_w)
+        take = torch.rand_like(log_w) < torch.exp(log_w - log_sum_new)
+        out = torch.where(take.unsqueeze(-1), cand, out)
+        log_sum = log_sum_new
+    return out * mask_m.unsqueeze(-1)
+
+
+def _saturatedInit(
+    ffx: Tensor,  # (b, s, d)
+    sigma_rfx: Tensor,  # (b, s, q)
+    y: Tensor,  # (b, m, n, 1)
+    X: Tensor,  # (b, m, n, d)
+    Z: Tensor,  # (b, m, n, q)
+    mask_n: Tensor,  # (b, m, n, 1)
+    likelihood_family: int,
+    L_corr: Tensor | None,
+) -> Tensor:
+    """Starting rfx modes (b, m, s, q) from one penalized IRLS step at the saturated fit.
+
+    glm's initialization (mustart = y + 1/2 for Poisson, (y + 1/2) / 2 for Bernoulli): with
+    η₀ = g(mustart) and IRLS weights w₀ = V(mustart), solve (ZᵀW₀Z + Σ⁻¹) b = ZᵀW₀(η₀ − Xβ) per
+    group. From b = 0, Newton on groups with counts in the thousands can take thousands of halved
+    steps; from here it needs a few.
+    """
+    if likelihood_family == 1:
+        mu0 = (y + 0.5) / 2.0
+        eta0, w0 = torch.logit(mu0), mu0 * (1.0 - mu0)
+    elif likelihood_family == 2:
+        eta0, w0 = torch.log(y + 0.5), y + 0.5
+    else:  # Normal: the objective is quadratic, any start converges in one Newton step
+        eta0, w0 = y, torch.ones_like(y)
+    L_rfx = _sigmaChol(sigma_rfx, L_corr)  # (b, s, q, q)
+    eye = torch.eye(L_rfx.shape[-1], dtype=L_rfx.dtype, device=L_rfx.device)
+    Sigma_inv = torch.cholesky_solve(eye.expand_as(L_rfx), L_rfx)
+    Zw = Z * (w0 * mask_n)  # (b, m, n, q)
+    ZWZ = torch.einsum('bmnq,bmnr->bmqr', Zw, Z)[:, :, None] + Sigma_inv[:, None]  # (b, m, s, q, q)
+    resid = eta0 - torch.einsum('bmnd,bsd->bmns', X, ffx)  # (b, m, n, s)
+    rhs = torch.einsum('bmnq,bmns->bmsq', Zw, resid)
+    init = torch.cholesky_solve(rhs.unsqueeze(-1), torch.linalg.cholesky(ZWZ)).squeeze(-1)
+    return init.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def logMarginalLikelihoodAGQ(
+    ffx: Tensor,  # (b, s, d)
+    sigma_rfx: Tensor,  # (b, s, q)
+    sigma_eps: Tensor,  # (b, s)
+    y: Tensor,  # (b, m, n, 1)
+    X: Tensor,  # (b, m, n, d)
+    Z: Tensor,  # (b, m, n, q)
+    mask_n: Tensor,  # (b, m, n, 1)
+    mask_m: Tensor,  # (b, m, 1)
+    likelihood_family: int,
+    n_nodes: int,
+    L_corr: Tensor | None = None,
+    init: Tensor | None = None,
+    n_newton: int = 3,
+) -> Tensor:
+    """Σ_j log p(y_j | θ_g) by adaptive Gauss-Hermite quadrature (AGQ). Returns (b, s).
+
+    Tensor-product probabilists' Gauss-Hermite nodes z_i, mapped through the Laplace Gaussian
+    b_i = b* + U⁻ᵀ z_i (Liu & Pierce 1994; lme4's nAGQ): p(y_j | θ_g) ≈ Σ_i ν_i p(y_j, b_i | θ_g)
+    / N(b_i; b*, H⁻¹), i.e. the IS² sum with deterministic nodes. n_nodes = 1 is the Laplace
+    approximation; the error decays geometrically in n_nodes, which makes AGQ the evidence
+    reference for GLMMs. Rfx dims unused by every dataset get a single node (exact there),
+    so the cost is n_nodes^q_active likelihood passes.
+    """
+    from numpy.polynomial.hermite_e import hermegauss
+
+    f = _GroupIntegrand(
+        ffx,
+        sigma_rfx,
+        sigma_eps,
+        y,
+        X,
+        Z,
+        mask_n,
+        mask_m,
+        likelihood_family,
+        L_corr,
+        init
+        if init is not None
+        else _saturatedInit(ffx, sigma_rfx, y, X, Z, mask_n, likelihood_family, L_corr),
+        n_newton,
+        defensive=0.0,
+        # the reference must find every mode: from b = 0, 3 halvings leave extreme-count Poisson
+        # groups stuck at the ±20 clamp (10^3-10^5-nat errors on 0.5-2% of oracle datasets)
+        n_backtrack=AGQ_N_BACKTRACK,
+    )
+    z_1d, w_1d = hermegauss(n_nodes)
+    z_1d = torch.as_tensor(z_1d, dtype=ffx.dtype, device=ffx.device)
+    log_w_1d = torch.as_tensor(w_1d / w_1d.sum(), dtype=ffx.dtype, device=ffx.device).log()
+    # padded rfx dims carry Z columns but σ = 0 (a point mass at 0): one node is exact there, and
+    # a full rule would cost n_nodes^q_max instead of n_nodes^q_active passes
+    active = ((Z != 0).flatten(0, 2).any(0) & (sigma_rfx > 0).flatten(0, 1).any(0)).tolist()  # (q,)
+    axes = [(z_1d, log_w_1d) if a else (z_1d.new_zeros(1), log_w_1d.new_zeros(1)) for a in active]
+    nodes = torch.cartesian_prod(*[z for z, _ in axes]).view(-1, len(axes))  # (P, q)
+    log_nu = torch.cartesian_prod(*[w for _, w in axes]).view(-1, len(axes)).sum(-1)  # (P,)
+
+    log_sum = torch.full_like(f.log_det_U, -torch.inf)  # (b, m, s)
+    for z, lw in zip(nodes, log_nu):
+        cand = f.laplaceDraw(z.expand_as(f.modes))
+        log_sum = torch.logaddexp(log_sum, lw + f.logWeight(cand))
+    return (log_sum * mask_m).sum(dim=1)
+
+
 class LaplaceImportanceSampler(ImportanceSampler):
     """SNIS with Laplace marginal weights and Laplace conditional rfx redraw.
 
@@ -408,6 +718,11 @@ class LaplaceImportanceSampler(ImportanceSampler):
     sample. With attach_only=True the weights are discarded (uniform) and only
     the rfx replacement is kept — zero weight bias at the cost of leaving global
     parameters uncorrected.
+
+    n_inner=K > 0 swaps the Laplace marginal for its unbiased IS² estimate
+    (logMarginalLikelihoodIS2): the weights then target the exact marginal posterior,
+    log_evidence is unbiased on the evidence scale, and the rfx are the estimate's
+    weight-selected inner draws instead of Laplace-Gaussian redraws.
     """
 
     def __init__(
@@ -415,6 +730,7 @@ class LaplaceImportanceSampler(ImportanceSampler):
         data: dict[str, Tensor],
         attach_only: bool = False,
         n_newton: int = 3,  # see laplaceRfxModes: 3 == 5 to <=0.002 on all metrics, ~15-35% cheaper
+        n_inner: int = 0,  # IS² draws per group; 0 keeps the Laplace marginal
         **kwargs,
     ) -> None:
         if kwargs.get('marginal') or kwargs.get('full'):
@@ -424,11 +740,30 @@ class LaplaceImportanceSampler(ImportanceSampler):
         self.rb_redraw = rb_redraw  # bypass parent's marginal-only validation
         self.attach_only = attach_only
         self.n_newton = n_newton
+        self.n_inner = n_inner
         self._modes: Tensor | None = None
         self._chol_H: Tensor | None = None
+        self._rfx: Tensor | None = None  # IS² inner draws, (b, m, s, q)
 
     def unnormalizedPosterior(self, proposal: Proposal) -> tuple[Tensor, Tensor]:
         lp, ffx, sigma_eps = self._logPriorGlobals(proposal)
+        if self.n_inner > 0:
+            ll, self._rfx, self._modes, self._chol_H = logMarginalLikelihoodIS2(
+                ffx,
+                proposal.sigma_rfx,
+                sigma_eps,
+                self.y,
+                self.X,
+                self.Z,
+                self.mask_n,
+                self.mask_m,
+                self.likelihood_family,
+                self.n_inner,
+                L_corr=self._getLCorr(proposal),
+                init=proposal.rfx,
+                n_newton=self.n_newton,
+            )
+            return ll, lp
         ll, modes, chol_H = logMarginalLikelihoodLaplace(
             ffx,
             proposal.sigma_rfx,
@@ -447,7 +782,10 @@ class LaplaceImportanceSampler(ImportanceSampler):
         return ll, lp
 
     def _redrawRfx(self, proposal: Proposal) -> None:
-        rfx = sampleRfxLaplace(self._modes, self._chol_H, self.mask_m)
+        if self.n_inner > 0:
+            rfx = self._rfx
+        else:
+            rfx = sampleRfxLaplace(self._modes, self._chol_H, self.mask_m)
         proposal.data['local']['samples'] = rfx
         proposal.data['local']['log_prob'] = torch.zeros_like(proposal.log_prob_l)
 

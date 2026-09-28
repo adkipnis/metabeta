@@ -21,7 +21,7 @@ from metabeta.evaluation import predictive as _predictive
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
-from metabeta.posthoc.metropolis import MetropolisSampler, suggestPoolSize
+from metabeta.posthoc.metropolis import IS2_N_INNER, MetropolisSampler, suggestPoolSize
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.dataloader import (
@@ -817,6 +817,8 @@ class Api:
                 burnin=IMH_BURNIN,
                 mode='marginal' if lf == 0 else 'laplace',
                 likelihood_family=lf,
+                # GLMMs: pseudo-marginal chain (unbiased IS² weights), i.e. the exact posterior
+                n_inner=0 if lf == 0 else IS2_N_INNER,
             )
             refined, diag = sampler(chunk_proposal)
             return refined, diag['accept_rate']
@@ -861,7 +863,7 @@ class Api:
                 stacklevel=4,
             )
         return proposal, {
-            'refine_method': 'imhMarginal' if lf == 0 else 'imhLaplace',
+            'refine_method': 'imhMarginal' if lf == 0 else 'imhPM',
             'accept_rate': a_bar.detach().float().cpu().numpy().copy(),
             'accept_threshold': IMH_ACCEPT_WARN,
             'accept_flag': flag,

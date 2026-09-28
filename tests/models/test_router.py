@@ -1239,7 +1239,7 @@ def test_router_imh_skips_local_flow_and_raw_flow_keeps_it(tmp_path: Path, monke
     monkeypatch.setattr(model.posterior_l, 'sample', _counting)
 
     result = router.sample(_glmm_batch(d=4, q=2), n_samples=64)  # IMH (default)
-    assert result.safeguards['refine_method'] == 'imhLaplace'
+    assert result.safeguards['refine_method'] == 'imhPM'
     assert result.proposal.n_samples == 64
     assert not calls
 

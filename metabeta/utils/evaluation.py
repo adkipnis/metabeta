@@ -1,3 +1,4 @@
+import os
 from typing import TYPE_CHECKING
 from dataclasses import dataclass
 from pathlib import Path
@@ -133,6 +134,9 @@ class EvaluationSummary:
         )
 
     def save(self, path: Path | str) -> None:
+        # write-then-rename, so a concurrent reader never loads a partial file
+        path = Path(path)
+        tmp = path.with_name(f'{path.name}.tmp{os.getpid()}')
         pd, ag = self.per_dataset, self.aggregated
         torch.save(
             {
@@ -161,8 +165,9 @@ class EvaluationSummary:
                 # top-level
                 'tpd': self.tpd,
             },
-            path,
+            tmp,
         )
+        os.replace(tmp, path)
 
     @classmethod
     def load(cls, path: Path | str) -> 'EvaluationSummary':

@@ -1,0 +1,516 @@
+"""Tests for the importance-sampling-squared (IS²) marginal likelihood in posthoc/laplace_glmm.py:
+the per-θ estimate of p(y | θ_g) must be unbiased (Tran et al., arXiv:1309.3339), so the
+evidence built on it is unbiased too."""
+
+import math
+
+import pytest
+import torch
+from torch import distributions as D
+from torch.nn import functional as F
+
+from metabeta.posthoc.laplace_glmm import (
+    LaplaceImportanceSampler,
+    laplaceRfxModes,
+    logMarginalLikelihoodAGQ,
+    logMarginalLikelihoodIS2,
+    refreshRfxIS2,
+)
+from metabeta.posthoc.metropolis import MetropolisSampler
+from metabeta.utils.families import logMarginalLikelihoodNormal
+from metabeta.utils.results import Proposal
+
+# dense grid over a scalar random effect, shared by the reference integrators (float64)
+_B_GRID = torch.linspace(-12.0, 12.0, 8001, dtype=torch.float64)
+
+
+def _gridLogMarginal(X, Z, y, ffx, sigma_rfx, sigma_eps, mask_m, likelihood_family):
+    """log p(y | θ) by dense-grid integration over a scalar random intercept, one θ (float64).
+
+    X, Z, y: per-group lists of (n_j, d), (n_j, 1), (n_j,); ffx (d,), sigma_rfx / sigma_eps scalars.
+    """
+    grid = _B_GRID
+    log_dx = math.log(float(grid[1] - grid[0]))
+    log_prior = -0.5 * (grid / sigma_rfx) ** 2 - math.log(sigma_rfx) - 0.5 * math.log(2 * math.pi)
+    out = 0.0
+    for j in range(len(X)):
+        if not mask_m[j]:
+            continue
+        eta = (X[j] @ ffx)[None, :] + grid[:, None] * Z[j][:, 0][None, :]  # (G, n)
+        yj = y[j][None, :]
+        if likelihood_family == 0:
+            ll = (
+                -0.5 * ((yj - eta) / sigma_eps) ** 2
+                - math.log(sigma_eps)
+                - 0.5 * math.log(2 * math.pi)
+            )
+        elif likelihood_family == 1:
+            ll = yj * eta - F.softplus(eta)
+        else:
+            ll = yj * eta - torch.exp(eta) - torch.lgamma(yj + 1.0)
+        out += float(torch.logsumexp(ll.sum(-1) + log_prior, 0)) + log_dx
+    return out
+
+
+def _gridPosteriorMean(X, Z, y, ffx, sigma_rfx, likelihood_family):
+    """E[b | θ, y_j] of one group's scalar random intercept by dense-grid integration."""
+    grid = _B_GRID
+    eta = (X @ ffx)[None, :] + grid[:, None] * Z[:, 0][None, :]
+    if likelihood_family == 1:
+        ll = y[None, :] * eta - F.softplus(eta)
+    else:
+        ll = y[None, :] * eta - torch.exp(eta)
+    w = torch.softmax(ll.sum(-1) - 0.5 * (grid / sigma_rfx) ** 2, 0)
+    return float((w * grid).sum())
+
+
+def _problem(likelihood_family, seed=0):
+    """Two active groups (one tiny, all-success for Bernoulli) + one padded group, q=1 active
+    rfx dim + one padded dim; returns batched tensors (b=1) and the per-θ values."""
+    g = torch.Generator().manual_seed(seed)
+    m, n, d = 3, 6, 2
+    X = torch.cat([torch.ones(m, n, 1), torch.randn(m, n, 1, generator=g)], -1).double()
+    Z = torch.cat([torch.ones(m, n, 1), torch.zeros(m, n, 1)], -1).double()
+    mask_n = torch.ones(m, n, 1, dtype=torch.float64)
+    mask_n[0, 3:] = 0.0  # group 0 keeps 3 observations
+    if likelihood_family == 0:
+        y = torch.randn(m, n, generator=g).double()
+    elif likelihood_family == 1:
+        y = torch.bernoulli(torch.full((m, n), 0.6), generator=g).double()
+        y[0] = 1.0  # all successes: likelihood flat as b → ∞, the heavy-tail case
+    else:
+        y = torch.poisson(torch.full((m, n), 3.0), generator=g).double()
+    y = y * mask_n[..., 0]
+    mask_m = torch.tensor([1.0, 1.0, 0.0], dtype=torch.float64)
+    ffx = torch.tensor([0.3, -0.5], dtype=torch.float64)
+    sigma_rfx, sigma_eps = 1.5, 0.8
+    return X, Z, y, mask_n, mask_m, ffx, sigma_rfx, sigma_eps
+
+
+def _estimate(problem, likelihood_family, n_rep, n_inner, **kwargs):
+    """n_rep independent IS² estimates of log p(y | θ) at one θ (replicates on the s axis)."""
+    X, Z, y, mask_n, mask_m, ffx, sigma_rfx, sigma_eps = problem
+    ll, rfx, _, _ = logMarginalLikelihoodIS2(
+        ffx.expand(1, n_rep, -1),
+        torch.tensor([sigma_rfx, 0.0], dtype=torch.float64).expand(1, n_rep, -1),
+        torch.full((1, n_rep), sigma_eps, dtype=torch.float64),
+        y[None, ..., None],
+        X[None],
+        Z[None],
+        mask_n[None],
+        mask_m[None, :, None],
+        likelihood_family,
+        n_inner=n_inner,
+        **kwargs,
+    )
+    return ll[0], rfx[0]  # (n_rep,), (m, n_rep, q)
+
+
+@pytest.mark.parametrize('likelihood_family', [0, 1, 2])
+def test_is2_marginal_is_unbiased(likelihood_family):
+    """mean_r exp(log p̂_r) matches the dense-grid p(y | θ) within Monte Carlo error."""
+    torch.manual_seed(1)
+    problem = _problem(likelihood_family)
+    X, Z, y, mask_n, mask_m, ffx, sigma_rfx, sigma_eps = problem
+    # the grid sees only each group's observed rows
+    keep = [mask_n[j, :, 0].bool() for j in range(3)]
+    want = _gridLogMarginal(
+        [X[j, keep[j]] for j in range(3)],
+        [Z[j, keep[j]] for j in range(3)],
+        [y[j, keep[j]] for j in range(3)],
+        ffx,
+        sigma_rfx,
+        sigma_eps,
+        mask_m,
+        likelihood_family,
+    )
+    ll, _ = _estimate(problem, likelihood_family, n_rep=20_000, n_inner=2)
+    ratio = torch.exp(ll - want)  # (n_rep,), unbiased for 1
+    se = ratio.std() / math.sqrt(ratio.numel())
+    assert torch.isfinite(ratio).all()
+    assert abs(ratio.mean().item() - 1.0) < 4 * se.item() + 1e-3, (ratio.mean(), se)
+
+
+@pytest.mark.parametrize('likelihood_family', [1, 2])
+def test_is2_rfx_weighted_by_estimate_recover_conditional_mean(likelihood_family):
+    """Σ_r p̂_r b_r / Σ_r p̂_r → E[b_j | θ, y_j]: the returned draw is the one the pseudo-marginal
+    extended target pairs with p̂, so p̂-weighted draws are exact conditional posterior draws."""
+    torch.manual_seed(2)
+    problem = _problem(likelihood_family)
+    X, Z, y, mask_n, mask_m, ffx, sigma_rfx, _ = problem
+    ll, rfx = _estimate(problem, likelihood_family, n_rep=20_000, n_inner=2)
+    w = torch.softmax(ll, 0)  # (n_rep,)
+    for j in range(2):
+        keep = mask_n[j, :, 0].bool()
+        want = _gridPosteriorMean(
+            X[j, keep], Z[j, keep], y[j, keep], ffx, sigma_rfx, likelihood_family
+        )
+        b = rfx[j, :, 0]
+        got = float((w * b).sum())
+        se = float(((w * (b - got)) ** 2).sum().sqrt())
+        assert abs(got - want) < 4 * se + 1e-3, (j, got, want, se)
+    assert (rfx[2] == 0).all()  # padded group
+    assert (rfx[..., 1] == 0).all() or rfx[..., 1].abs().max() < 1e-4  # padded rfx dim
+
+
+@pytest.mark.parametrize('supply_laplace', [False, True])
+def test_rfx_refresh_leaves_exact_conditional_invariant(supply_laplace):
+    """Conditional-IS refresh (keep the current draw, add K − 1 fresh ones, select ∝ weight):
+    exact conditional draws of an all-success group stay exact in mean and sd, although the
+    Laplace Gaussian the fresh draws come from is visibly off there — whether the Laplace
+    factors are recomputed or supplied (as the IMH does, from its pool pass)."""
+    torch.manual_seed(7)
+    problem = _problem(1)
+    X, Z, y, mask_n, mask_m, ffx, sigma_rfx, sigma_eps = problem
+    n_rep = 20_000
+    keep = mask_n[0, :, 0].bool()
+    grid = _B_GRID
+    eta = (X[0, keep] @ ffx)[None, :] + grid[:, None]
+    logp = (y[0, keep][None, :] * eta - F.softplus(eta)).sum(-1) - 0.5 * (grid / sigma_rfx) ** 2
+    p = torch.softmax(logp, 0)
+    mean, sd = float((p * grid).sum()), float((p * grid**2).sum() - (p * grid).sum() ** 2) ** 0.5
+    start = grid[torch.multinomial(p, n_rep, replacement=True)]  # exact draws of b_0
+
+    rfx = torch.zeros(1, 3, n_rep, 2, dtype=torch.float64)
+    rfx[0, 0, :, 0] = start
+    args = (
+        ffx.expand(1, n_rep, -1),
+        torch.tensor([sigma_rfx, 0.0], dtype=torch.float64).expand(1, n_rep, -1),
+        torch.full((1, n_rep), sigma_eps, dtype=torch.float64),
+        y[None, ..., None],
+        X[None],
+        Z[None],
+        mask_n[None],
+        mask_m[None, :, None],
+        1,
+    )
+    laplace = None
+    if supply_laplace:
+        modes, chol_H, *_ = laplaceRfxModes(*args[:9])
+        laplace = (modes, chol_H)
+    out = refreshRfxIS2(
+        *args,
+        rfx,
+        n_inner=4,
+        laplace=laplace,
+    )
+    b = out[0, 0, :, 0]
+    assert (b != start).float().mean() > 0.3  # the kernel moves
+    assert abs(b.mean().item() - mean) < 4 * sd / math.sqrt(n_rep) + 0.01, (b.mean(), mean)
+    assert abs(b.std().item() - sd) < 0.03 * sd, (b.std(), sd)
+    assert (out[0, 2] == 0).all()  # padded group
+
+
+# ---------------------------------------------------------------------------
+# Evidence and posterior of a tiny random-intercept Bernoulli model (d = q = 1)
+# ---------------------------------------------------------------------------
+
+TAU_FFX, TAU_RFX = 1.5, 1.0  # β₀ ~ N(0, 1.5²), σ ~ HalfNormal(1)
+
+
+def _tinyBernoulli(m=4, n=5, seed=3):
+    g = torch.Generator().manual_seed(seed)
+    b_true = torch.randn(m, 1, generator=g) * 1.2
+    y = torch.bernoulli(torch.sigmoid(0.4 + b_true).expand(m, n), generator=g).double()
+    y[0] = 1.0  # one all-success group
+
+    def ones(*shape):
+        return torch.ones(*shape, dtype=torch.float64)
+
+    return {
+        'X': ones(1, m, n, 1),
+        'Z': ones(1, m, n, 1),
+        'y': y[None],
+        'nu_ffx': torch.zeros(1, 1, dtype=torch.float64),
+        'tau_ffx': torch.full((1, 1), TAU_FFX, dtype=torch.float64),
+        'tau_rfx': torch.full((1, 1), TAU_RFX, dtype=torch.float64),
+        'family_ffx': torch.zeros(1, dtype=torch.long),
+        'family_sigma_rfx': torch.zeros(1, dtype=torch.long),
+        'eta_rfx': torch.zeros(1, dtype=torch.float64),
+        'mask_d': torch.ones(1, 1, dtype=torch.bool),
+        'mask_q': torch.ones(1, 1, dtype=torch.bool),
+        'mask_mq': torch.ones(1, m, 1, dtype=torch.bool),
+        'mask_m': torch.ones(1, m, dtype=torch.bool),
+        'mask_n': torch.ones(1, m, n, dtype=torch.bool),
+    }
+
+
+def _gridPosterior(data):
+    """(log p(D), E[β₀ | D], E[σ | D], E[b_0 | D]) by nested grid integration."""
+    y = data['y'][0]  # (m, n)
+    beta = torch.linspace(-7.0, 7.0, 281, dtype=torch.float64)
+    sigma = torch.linspace(1e-3, 6.0, 300, dtype=torch.float64)
+    u = torch.linspace(-9.0, 9.0, 721, dtype=torch.float64)  # b = σ u, u ~ N(0, 1)
+    log_du = math.log(float(u[1] - u[0]))
+    log_phi = -0.5 * u**2 - 0.5 * math.log(2 * math.pi)
+    eta = beta[:, None, None] + sigma[None, :, None] * u[None, None, :]  # (B, S, U)
+    ll_u = 0.0  # Σ_j log ∫ p(y_j | β + σ u) φ(u) du, (B, S)
+    for j in range(y.shape[0]):
+        k = y[j].sum()
+        ll_j = k * eta - y.shape[1] * F.softplus(eta)  # (B, S, U)
+        lse = torch.logsumexp(ll_j + log_phi, -1) + log_du
+        ll_u = ll_u + lse
+        if j == 0:
+            # E[b_0 | β, σ, y_0] for the posterior mean of the first group's intercept
+            w0 = torch.softmax(ll_j + log_phi, -1)
+            b0 = (w0 * sigma[None, :, None] * u).sum(-1)
+    log_prior = (
+        D.Normal(0.0, TAU_FFX).log_prob(beta)[:, None]
+        + D.HalfNormal(TAU_RFX).log_prob(sigma)[None, :]
+    )
+    log_joint = ll_u + log_prior  # (B, S)
+    log_cell = math.log(float(beta[1] - beta[0])) + math.log(float(sigma[1] - sigma[0]))
+    log_z = float(torch.logsumexp(log_joint.flatten(), 0)) + log_cell
+    post = torch.softmax(log_joint.flatten(), 0).view_as(log_joint)
+    return (
+        log_z,
+        float((post * beta[:, None]).sum()),
+        float((post * sigma[None, :]).sum()),
+        float((post * b0).sum()),
+    )
+
+
+def _gaussianProposal(s, m, loc_beta, scale_beta, scale_sigma):
+    """β₀ ~ N, σ ~ HalfNormal (covers σ → 0, where the posterior keeps mass); the rfx are
+    zeros, they only seed the Newton search."""
+    q_beta = D.Normal(torch.tensor(loc_beta, dtype=torch.float64), scale_beta)
+    q_sigma = D.HalfNormal(torch.tensor(scale_sigma, dtype=torch.float64))
+    beta, sigma = q_beta.sample((1, s, 1)), q_sigma.sample((1, s, 1))
+    log_q = (q_beta.log_prob(beta) + q_sigma.log_prob(sigma)).sum(-1)
+    proposed = {
+        'global': {'samples': torch.cat([beta, sigma], -1), 'log_prob': log_q},
+        'local': {
+            'samples': torch.zeros(1, m, s, 1, dtype=torch.float64),
+            'log_prob': torch.zeros(1, m, s, dtype=torch.float64),
+        },
+    }
+    return Proposal(proposed, has_sigma_eps=False)
+
+
+def test_is2_log_evidence_matches_quadrature_under_two_proposals():
+    torch.manual_seed(4)
+    data = _tinyBernoulli()
+    want = _gridPosterior(data)[0]
+    m = data['X'].shape[1]
+    # the Laplace evidence is off by ≈ −0.05 nats here (tiny groups, one all-success group)
+    for params in ((0.6, 1.2, 1.5), (1.0, 1.0, 2.0)):
+        sampler = LaplaceImportanceSampler(
+            data, n_inner=4, likelihood_family=1, pareto=False, constrain=False
+        )
+        out = sampler(_gaussianProposal(40_000, m, *params))
+        got = out.log_evidence.item()
+        assert abs(got - want) < 0.02, (params, got, want)
+
+
+def test_pseudo_marginal_imh_targets_exact_posterior():
+    """With IS² weights the IMH is pseudo-marginal: posterior means of the globals and of an
+    all-success group's intercept match quadrature (the Laplace redraw gives E[b_0] ≈ 0.83)."""
+    torch.manual_seed(5)
+    data = _tinyBernoulli()
+    _, want_beta, want_sigma, want_b0 = _gridPosterior(data)
+    n_chains, n_steps = 100, 200
+    sampler = MetropolisSampler(
+        data,
+        n_chains=n_chains,
+        n_steps=n_steps,
+        burnin=20,
+        mode='laplace',
+        likelihood_family=1,
+        n_eff_target=None,
+        n_inner=4,
+    )
+    out, _ = sampler(_gaussianProposal(n_chains * n_steps, data['X'].shape[1], 0.6, 1.2, 1.5))
+    assert abs(out.ffx.mean().item() - want_beta) < 0.04
+    assert abs(out.sigma_rfx.mean().item() - want_sigma) < 0.03
+    assert abs(out.rfx[0, 0].mean().item() - want_b0) < 0.04
+
+
+def test_imh_without_laplace_weights_runs():
+    """The pseudo-marginal rfx refresh must not touch the non-Laplace modes ('joint' here;
+    'marginal', the Gaussian default, shares the path), whose sampler has no IS² inner draws."""
+    torch.manual_seed(5)
+    data = _tinyBernoulli()
+    m = data['X'].shape[1]
+    sampler = MetropolisSampler(
+        data, n_chains=4, n_steps=50, mode='joint', likelihood_family=1, n_eff_target=None
+    )
+    out, _ = sampler(_gaussianProposal(200, m, 0.6, 1.2, 1.5))
+    assert out.rfx.shape[:2] == (1, m) and torch.isfinite(out.rfx).all()
+
+
+# ---------------------------------------------------------------------------
+# Adaptive Gauss-Hermite quadrature (AGQ): the deterministic evidence reference
+# ---------------------------------------------------------------------------
+
+
+def _slopeProblem(likelihood_family, seed=6):
+    """Two active groups with random intercept + slope (q = 2), one padded group, one padded
+    rfx dim (q_max = 3); b = 1, s = 2 global draws."""
+    g = torch.Generator().manual_seed(seed)
+    m, n, s = 3, 8, 2
+    x = torch.randn(m, n, 1, generator=g)
+    X = torch.cat([torch.ones(m, n, 1), x], -1).double()[None]
+    Z = torch.cat([torch.ones(m, n, 1), x, torch.zeros(m, n, 1)], -1).double()[None]
+    ffx = torch.tensor([[[0.2, -0.4], [-0.3, 0.6]]], dtype=torch.float64)
+    sigma_rfx = torch.tensor([[[0.9, 0.6, 0.0], [1.4, 0.3, 0.0]]], dtype=torch.float64)
+    sigma_eps = torch.tensor([[0.7, 1.1]], dtype=torch.float64)
+    if likelihood_family == 0:
+        y = torch.randn(1, m, n, 1, generator=g).double()
+    elif likelihood_family == 1:
+        y = torch.bernoulli(torch.full((1, m, n, 1), 0.5), generator=g).double()
+    else:
+        y = torch.poisson(torch.full((1, m, n, 1), 2.0), generator=g).double()
+    mask_n = torch.ones(1, m, n, 1, dtype=torch.float64)
+    mask_m = torch.tensor([[[1.0], [1.0], [0.0]]], dtype=torch.float64)
+    return ffx, sigma_rfx, sigma_eps, y, X, Z, mask_n, mask_m
+
+
+def _grid2dLogMarginal(ffx, sigma_rfx, y, X, Z, mask_m, likelihood_family):
+    """Σ_j log ∫∫ p(y_j | b) N(b; 0, diag σ²) db over a dense 2D grid, per global draw (b, s)."""
+    u = torch.linspace(-7.0, 7.0, 561, dtype=torch.float64)  # b_k = σ_k u
+    log_du = math.log(float(u[1] - u[0]))
+    u1, u2 = torch.meshgrid(u, u, indexing='ij')
+    log_phi = -0.5 * (u1**2 + u2**2) - math.log(2 * math.pi)
+    out = torch.zeros(ffx.shape[:2], dtype=torch.float64)
+    for k in range(ffx.shape[1]):
+        s1, s2 = sigma_rfx[0, k, 0], sigma_rfx[0, k, 1]
+        for j in range(X.shape[1]):
+            if not mask_m[0, j, 0]:
+                continue
+            eta = (
+                (X[0, j] @ ffx[0, k])[None, None, :]
+                + (s1 * u1)[..., None] * Z[0, j, :, 0]
+                + (s2 * u2)[..., None] * Z[0, j, :, 1]
+            )
+            yj = y[0, j, :, 0]
+            if likelihood_family == 1:
+                ll = yj * eta - F.softplus(eta)
+            else:
+                ll = yj * eta - torch.exp(eta) - torch.lgamma(yj + 1.0)
+            out[0, k] += torch.logsumexp((ll.sum(-1) + log_phi).flatten(), 0) + 2 * log_du
+    return out
+
+
+@pytest.mark.parametrize('likelihood_family', [0, 1, 2])
+def test_agq_marginal_matches_exact_integral(likelihood_family):
+    ffx, sigma_rfx, sigma_eps, y, X, Z, mask_n, mask_m = _slopeProblem(likelihood_family)
+    got = logMarginalLikelihoodAGQ(
+        ffx, sigma_rfx, sigma_eps, y, X, Z, mask_n, mask_m, likelihood_family, n_nodes=12
+    )
+    if likelihood_family == 0:
+        want = logMarginalLikelihoodNormal(ffx, sigma_rfx, sigma_eps, y, X, Z, mask_n, mask_m)
+        atol = 1e-6
+    else:
+        want = _grid2dLogMarginal(ffx, sigma_rfx, y, X, Z, mask_m, likelihood_family)
+        atol = 1e-5  # Laplace (n_nodes=1) is off by 0.02-0.04 nats here
+    assert got.shape == (1, 2)
+    assert torch.allclose(got, want, atol=atol), (got, want)
+
+
+def test_agq_padded_rfx_dims_with_covariates_cost_one_node():
+    """Real batches fill the Z columns of padded rfx dims (σ = 0); they must neither change the
+    marginal nor multiply the node count (12^8 tensor-product nodes would not fit in memory)."""
+    ffx, sigma_rfx, sigma_eps, y, X, Z, mask_n, mask_m = _slopeProblem(1)
+    n_pad = 6
+    Z_pad = torch.cat([Z[..., :2], Z[..., 1:2].expand(*Z.shape[:-1], n_pad + 1)], -1)
+    sigma_pad = torch.cat([sigma_rfx[..., :2], sigma_rfx.new_zeros(1, 2, n_pad + 1)], -1)
+    got = logMarginalLikelihoodAGQ(
+        ffx, sigma_pad, sigma_eps, y, X, Z_pad, mask_n, mask_m, 1, n_nodes=12
+    )
+    want = _grid2dLogMarginal(ffx, sigma_rfx, y, X, Z, mask_m, 1)
+    assert torch.allclose(got, want, atol=1e-5), (got, want)
+
+
+_X42 = torch.linspace(-2.62, 1.78, 20, dtype=torch.float64)
+# group 11 of Poisson small oracle dataset 492 at a NUTS draw: offsets = its Xβ, correlated rfx
+_Y492 = [3.0, 0, 1, 15, 0, 0, 0, 8, 1891, 0, 9, 3, 0, 0, 1, 0, 0, 1, 2, 14, 0, 4667]
+_X492 = [-0.2301, -0.0420, -0.3350, -0.9543, -0.0762, 0.0825, 0.1124, -0.8768, -2.6334, 0.2424,
+         -0.8565, -0.5131, 2.6570, 0.6862, 0.1343, 1.1741, 0.3294, -0.4631, -0.4476, -0.9469,
+         0.5229, -2.9416]  # fmt: skip
+_OFF492 = [-0.3089, -0.4085, -0.2534, 0.0744, -0.3904, -0.4744, -0.4902, 0.0333, 0.963, -0.5589,
+           0.0226, -0.1591, -1.8368, -0.7938, -0.5018, -1.052, -0.605, -0.1856, -0.1938, 0.0705,
+           -0.7074, 1.1261]  # fmt: skip
+EXTREME_GROUPS = {
+    # name: (y, x, offset Xβ, σ_rfx, rfx correlation, grid ranges of (b0, b1))
+    'small42': (
+        torch.exp(0.36 - 3.28 * _X42).round(), _X42, 0.1 + 0.1 * _X42,
+        (0.289, 1.225), 0.0, ((-1.0, 1.5), (-5.0, -2.0)),
+    ),
+    'small492': (
+        torch.tensor(_Y492, dtype=torch.float64), torch.tensor(_X492, dtype=torch.float64),
+        torch.tensor(_OFF492, dtype=torch.float64), (0.4662, 1.1199), -0.651,
+        ((-0.85, 1.2), (-2.8, -2.06)),
+    ),
+}  # fmt: skip
+
+
+@pytest.mark.parametrize('name', list(EXTREME_GROUPS))
+def test_agq_finds_the_mode_of_an_extreme_count_group(name):
+    """Poisson groups with counts in the thousands (shaped after / taken from Poisson small
+    oracle datasets): Newton from b = 0 got stuck at the ±20 clamp or 10^4 nats short of the
+    mode, which put the bridge reference 10^4 nats off."""
+    y, x, off, sigma, rho, (r0, r1) = EXTREME_GROUPS[name]
+    Z = torch.stack([torch.ones_like(x), x], -1)[None, None]  # (1, 1, n, 2)
+    X, ffx = off[None, None, :, None], torch.ones(1, 1, 1, dtype=torch.float64)
+    sigma_rfx = torch.tensor([[sigma]], dtype=torch.float64)
+    L_corr = torch.tensor([[1.0, 0.0], [rho, math.sqrt(1 - rho**2)]], dtype=torch.float64)
+    Y = y[None, None, :, None]
+    got = logMarginalLikelihoodAGQ(
+        ffx, sigma_rfx, sigma_rfx[..., 0], Y, X, Z, torch.ones_like(Y),
+        torch.ones(1, 1, 1, dtype=torch.float64), 2, n_nodes=12, L_corr=L_corr[None, None],
+    )  # fmt: skip
+    # dense grid over the region holding the conditional posterior of b (sd 0.03-0.13)
+    b0, b1 = torch.meshgrid(
+        torch.linspace(*r0, 801, dtype=torch.float64),
+        torch.linspace(*r1, 801, dtype=torch.float64),
+        indexing='ij',
+    )
+    eta = off + b0[..., None] + b1[..., None] * x
+    ll = (y * eta - eta.exp() - torch.lgamma(y + 1)).sum(-1)
+    L = torch.tensor(sigma, dtype=torch.float64)[:, None] * L_corr
+    log_prior = D.MultivariateNormal(torch.zeros(2, dtype=torch.float64), scale_tril=L).log_prob(
+        torch.stack([b0, b1], -1)
+    )
+    log_cell = math.log((r0[1] - r0[0]) / 800 * (r1[1] - r1[0]) / 800)
+    want = torch.logsumexp((ll + log_prior).flatten(), 0) + log_cell
+    assert torch.allclose(got[0, 0], want, atol=1e-2), (got, want)
+
+
+ACCELERATORS = [
+    pytest.param('cuda', marks=pytest.mark.skipif(not torch.cuda.is_available(), reason='no CUDA')),
+    pytest.param(
+        'mps', marks=pytest.mark.skipif(not torch.backends.mps.is_available(), reason='no MPS')
+    ),
+]
+
+
+@pytest.mark.parametrize('device', ACCELERATORS)
+def test_agq_and_pseudo_marginal_imh_run_on_accelerator(device):
+    """AGQ is deterministic, so it must match the CPU value on the model device (float32);
+    the pseudo-marginal IMH must run there end to end."""
+    problem = [t.float() for t in _slopeProblem(1)]
+    want = logMarginalLikelihoodAGQ(*problem, 1, n_nodes=5)
+    got = logMarginalLikelihoodAGQ(*[t.to(device) for t in problem], 1, n_nodes=5)
+    assert torch.allclose(got.cpu(), want, atol=1e-4)
+
+    data = {
+        k: (v.float() if v.is_floating_point() else v).to(device)
+        for k, v in _tinyBernoulli().items()
+    }
+    proposal = _gaussianProposal(400, data['X'].shape[1], 0.6, 1.2, 1.5)
+    for block in proposal.data.values():
+        for key in block:
+            block[key] = block[key].float()
+    proposal.to(device)
+    sampler = MetropolisSampler(
+        data,
+        n_chains=4,
+        n_steps=100,
+        burnin=10,
+        mode='laplace',
+        likelihood_family=1,
+        n_eff_target=None,
+        n_inner=4,
+    )
+    out, _ = sampler(proposal)
+    assert out.rfx.device.type == device and torch.isfinite(out.rfx).all()

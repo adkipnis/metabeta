@@ -1,4 +1,5 @@
 import hashlib
+import os
 from pathlib import Path
 from typing import Any
 
@@ -78,7 +79,11 @@ def saveProposalCache(
         for key, value in metadata.items():
             arrays[f'meta_{key}'] = np.array(value)
 
-    np.savez_compressed(path, **arrays)
+    # write-then-rename: a concurrent reader (e.g. two scripts sharing a condition's cache)
+    # sees either no file or the complete one, never a partial zip
+    tmp = path.with_name(f'{path.stem}.tmp{os.getpid()}.npz')
+    np.savez_compressed(tmp, **arrays)
+    os.replace(tmp, path)
     return path
 
 

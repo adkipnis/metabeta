@@ -98,9 +98,18 @@ def _psislw(log_w):
 WEIGHTS_VERSION = 2
 
 
+# Per-method revision on top of WEIGHTS_VERSION, bumped when one method's output changes, so
+# only that method's caches are ignored. imhPM r1 (2026-09-26): rfx refresh per kept state.
+METHOD_REVISION = {'imhPM': 1}
+
+
 def weightsTag(method: str, sep: str = '_') -> str:
-    """Cache-key suffix carrying WEIGHTS_VERSION for IS/IMH-derived methods; '' for the raw flow."""
-    return '' if method in ('mb', 'raw', 'coldNuts') else f'{sep}w{WEIGHTS_VERSION}'
+    """Cache-key suffix carrying WEIGHTS_VERSION (and any METHOD_REVISION) for IS/IMH-derived
+    methods; '' for the raw flow."""
+    if method in ('mb', 'raw', 'coldNuts'):
+        return ''
+    rev = METHOD_REVISION.get(method, 0)
+    return f'{sep}w{WEIGHTS_VERSION}' + (f'r{rev}' if rev else '')
 
 
 class ImportanceSampler:

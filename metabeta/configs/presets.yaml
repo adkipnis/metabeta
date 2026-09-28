@@ -86,9 +86,9 @@ posthoc:
   0:
     default: imhMarginal
   1:
-    default: imhLaplace
+    default: imhPM
   2:
-    default: imhLaplace
+    default: imhPM
 
 # CLI-only parameters (never have defaults in YAML configs)
 cli_only:
