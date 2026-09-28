@@ -15,7 +15,6 @@ import sys
 import time
 from pathlib import Path
 
-import arviz as az
 import pandas as pd
 import torch
 
@@ -31,6 +30,7 @@ from metabeta.posthoc.laplace_glmm import (  # noqa: E402
 )
 from metabeta.utils.config import ApproximatorConfig  # noqa: E402
 from metabeta.utils.dataloader import Collection, collateGrouped  # noqa: E402
+from metabeta.utils.psis import psislw  # noqa: E402
 
 FAMILIES = {'bernoulli': 1, 'poisson': 2}
 
@@ -82,7 +82,7 @@ class Tuning:
             batch64, n_inner=32, corr_prior=True, likelihood_family=self.lf
         )
         ll, lp = sampler.unnormalizedPosterior(proposal)
-        log_w, _ = az.psislw((ll + lp - proposal.log_prob_g).numpy())
+        log_w, _ = psislw((ll + lp - proposal.log_prob_g).numpy())
         w = torch.softmax(torch.as_tensor(log_w[0]), -1)  # (S,)
 
         _, ffx, sigma_eps = sampler._logPriorGlobals(proposal)

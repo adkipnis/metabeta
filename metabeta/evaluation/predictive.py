@@ -2,11 +2,11 @@ from typing import Literal
 import warnings
 import math
 import numpy as np
-import arviz as az
 from scipy.special import logsumexp as sp_logsumexp
 import torch
 from torch import distributions as D
 
+from metabeta.utils.psis import psislw
 from metabeta.utils.results import Proposal
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.families import posteriorPredictiveDist, sampleFfxTorch, sampleSigmaTorch
@@ -159,7 +159,7 @@ def psisLooNLL(
 
     b, m, n, s = log_p.shape
 
-    # PSIS per observation — az.psislw expects (n_obs, n_draws) with last axis = samples.
+    # PSIS per observation — psislw expects (n_obs, n_draws) with last axis = samples.
     # Only run PSIS on real (non-padded) observations; scatter results back afterward.
     valid = mask.reshape(b * m * n).numpy()  # (b*m*n,) bool
     log_w_flat = log_w.detach().reshape(b * m * n, s).numpy()
@@ -167,7 +167,7 @@ def psisLooNLL(
 
     with warnings.catch_warnings():
         warnings.simplefilter('ignore', RuntimeWarning)
-        log_w_psis_valid, k_valid = az.psislw(log_w_valid, reff=reff)
+        log_w_psis_valid, k_valid = psislw(log_w_valid, r_eff=reff)
 
     # Fallback for rows where PSIS fails (degenerate / constant weights):
     # substitute normalized raw log-weights and flag k as nan.
@@ -189,7 +189,7 @@ def psisLooNLL(
     log_w_psis = log_p.new_tensor(log_w_psis_np).reshape(b, m, n, s)
     k = log_p.new_tensor(k_np).reshape(b, m, n)
 
-    # az.psislw returns log-normalized weights (logsumexp = 0), so:
+    # psislw returns log-normalized weights (logsumexp = 0), so:
     # log p_loo(y_ij) = logsumexp(log_w_psis_norm + log_p_ij, dim=samples)
     log_p_loo = torch.logsumexp(log_w_psis + log_p, dim=-1)   # (b, m, n)
 

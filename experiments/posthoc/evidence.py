@@ -55,7 +55,6 @@ import sys
 import time
 from pathlib import Path
 
-import arviz as az
 import numpy as np
 import pandas as pd
 import torch
@@ -75,6 +74,7 @@ from metabeta.posthoc.laplace_glmm import (  # noqa: E402
 from metabeta.posthoc.metropolis import IS2_N_INNER, MetropolisSampler  # noqa: E402
 from metabeta.utils.config import ApproximatorConfig  # noqa: E402
 from metabeta.utils.constants import hasSigmaEps  # noqa: E402
+from metabeta.utils.psis import psislw  # noqa: E402
 from metabeta.utils.dataloader import Collection, collateGrouped, toDevice  # noqa: E402
 from metabeta.utils.families import logProbCorrRfx  # noqa: E402
 from metabeta.utils.preprocessing import logJacobianStandardization  # noqa: E402
@@ -392,7 +392,7 @@ def isEvidence(
     res = {'weights': out.is_results['weights'][0]}
     for s in pool_sizes:
         lw_s = lw[:s]
-        lw_np, k = az.psislw(lw_s.unsqueeze(0).numpy())
+        lw_np, k = psislw(lw_s.unsqueeze(0).numpy())
         w = torch.softmax(torch.as_tensor(lw_np[0]), -1)
         res[f'logev_is_s{s}'] = (torch.logsumexp(lw_s, 0) - math.log(s)).item()
         res[f'k_s{s}'] = float(k[0])
