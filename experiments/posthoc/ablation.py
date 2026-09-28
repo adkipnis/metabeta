@@ -123,6 +123,15 @@ FAMILY_INITIAL = {'normal': 'n', 'bernoulli': 'b', 'poisson': 'p'}
 LIKELIHOOD_FAMILY = {'normal': 0, 'bernoulli': 1, 'poisson': 2}
 RESULTS_DIR = REPO_ROOT / 'metabeta' / 'outputs' / 'results' / 'ablation'
 
+# (IMH mode, n_inner) per imh* condition; imhMarginal resolves to 'marginal' (Normal) or
+# 'global' (GLMM) at run time. n_inner > 0 (imhPM) makes the chain pseudo-marginal.
+IMH_CONDITIONS = {
+    'imhMarginal': ('marginal', 0),
+    'imhGlobal': ('global', 0),
+    'imhLaplace': ('laplace', 0),
+    'imhPM': ('laplace', IS2_N_INNER),
+}
+
 
 # fmt: off
 def setup() -> argparse.Namespace:
@@ -1024,51 +1033,24 @@ def main() -> None:
                     summary, diag = runISLaplace(
                         proposals, batches, full_batch, lf, attach_only=True
                     )
-                elif cond == 'imhMarginal':
-                    imh_mode = 'marginal' if lf == 0 else 'global'
+                elif cond in IMH_CONDITIONS:
+                    mode, n_inner = IMH_CONDITIONS[cond]
+                    if cond == 'imhMarginal':
+                        mode = 'marginal' if lf == 0 else 'global'
                     summary, diag, refined = runIMH(
-                        imh_mode,
+                        mode,
                         imh_proposals,
                         imh_batches,
                         full_batch,
                         lf,
                         n_steps=imh_n_steps,
+                        n_inner=n_inner,
                         device=args.device,
                     )
-                    imh_refined[imh_mode] = refined
-                elif cond == 'imhGlobal':
-                    summary, diag, refined = runIMH(
-                        'global',
-                        imh_proposals,
-                        imh_batches,
-                        full_batch,
-                        lf,
-                        n_steps=imh_n_steps,
-                        device=args.device,
-                    )
-                    imh_refined['global'] = refined
-                elif cond == 'imhLaplace':
-                    summary, diag, refined = runIMH(
-                        'laplace',
-                        imh_proposals,
-                        imh_batches,
-                        full_batch,
-                        lf,
-                        n_steps=imh_n_steps,
-                        device=args.device,
-                    )
-                    imh_refined['laplace'] = refined
-                elif cond == 'imhPM':
-                    summary, diag, _ = runIMH(
-                        'laplace',
-                        imh_proposals,
-                        imh_batches,
-                        full_batch,
-                        lf,
-                        n_steps=imh_n_steps,
-                        n_inner=IS2_N_INNER,
-                        device=args.device,
-                    )
+                    # cache the refined proposal for warmNuts seeding, but keep imhPM's
+                    # pseudo-marginal draws out of the 'laplace' slot imhLaplace seeds from
+                    if n_inner == 0:
+                        imh_refined[mode] = refined
                 elif cond == 'warmNuts':
                     # seed from the marginal-target MB-IMH posterior (the quality
                     # winner per family); if its condition was skipped or served from
