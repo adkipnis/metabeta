@@ -20,13 +20,16 @@ from metabeta.posthoc.metropolis import MetropolisSampler
 from metabeta.utils.families import logMarginalLikelihoodNormal
 from metabeta.utils.results import Proposal
 
+# dense grid over a scalar random effect, shared by the reference integrators (float64)
+_B_GRID = torch.linspace(-12.0, 12.0, 8001, dtype=torch.float64)
+
 
 def _gridLogMarginal(X, Z, y, ffx, sigma_rfx, sigma_eps, mask_m, likelihood_family):
     """log p(y | θ) by dense-grid integration over a scalar random intercept, one θ (float64).
 
     X, Z, y: per-group lists of (n_j, d), (n_j, 1), (n_j,); ffx (d,), sigma_rfx / sigma_eps scalars.
     """
-    grid = torch.linspace(-12.0, 12.0, 8001, dtype=torch.float64)
+    grid = _B_GRID
     log_dx = math.log(float(grid[1] - grid[0]))
     log_prior = -0.5 * (grid / sigma_rfx) ** 2 - math.log(sigma_rfx) - 0.5 * math.log(2 * math.pi)
     out = 0.0
@@ -51,7 +54,7 @@ def _gridLogMarginal(X, Z, y, ffx, sigma_rfx, sigma_eps, mask_m, likelihood_fami
 
 def _gridPosteriorMean(X, Z, y, ffx, sigma_rfx, likelihood_family):
     """E[b | θ, y_j] of one group's scalar random intercept by dense-grid integration."""
-    grid = torch.linspace(-12.0, 12.0, 8001, dtype=torch.float64)
+    grid = _B_GRID
     eta = (X @ ffx)[None, :] + grid[:, None] * Z[:, 0][None, :]
     if likelihood_family == 1:
         ll = y[None, :] * eta - F.softplus(eta)
@@ -161,7 +164,7 @@ def test_rfx_refresh_leaves_exact_conditional_invariant(supply_laplace):
     X, Z, y, mask_n, mask_m, ffx, sigma_rfx, sigma_eps = problem
     n_rep = 20_000
     keep = mask_n[0, :, 0].bool()
-    grid = torch.linspace(-12.0, 12.0, 8001, dtype=torch.float64)
+    grid = _B_GRID
     eta = (X[0, keep] @ ffx)[None, :] + grid[:, None]
     logp = (y[0, keep][None, :] * eta - F.softplus(eta)).sum(-1) - 0.5 * (grid / sigma_rfx) ** 2
     p = torch.softmax(logp, 0)
@@ -210,7 +213,10 @@ def _tinyBernoulli(m=4, n=5, seed=3):
     b_true = torch.randn(m, 1, generator=g) * 1.2
     y = torch.bernoulli(torch.sigmoid(0.4 + b_true).expand(m, n), generator=g).double()
     y[0] = 1.0  # one all-success group
-    ones = lambda *shape: torch.ones(*shape, dtype=torch.float64)
+
+    def ones(*shape):
+        return torch.ones(*shape, dtype=torch.float64)
+
     return {
         'X': ones(1, m, n, 1),
         'Z': ones(1, m, n, 1),
