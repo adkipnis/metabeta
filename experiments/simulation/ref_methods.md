@@ -134,3 +134,40 @@ sbatch scripts/fit-nuts.sh --data_id small-n-sampled   # after step 3 replaces t
   with `saveFits`. Six scripts had imports broken since earlier refactors (`Proposal`,
   `buildPymc`, `Fitter`, `gaussian_local` moved); repaired in passing.
 - `test.fit.npz` / `valid.fit.npz` stay on disk untouched; nothing reads them any more.
+
+## Step 3: fitter rework (done locally)
+
+- `metabeta/simulation/fit.py` is the one fitter: `Fitter(cfg)` with `--method
+  nuts|advi|pathfinder|laplace --level --idx`, budgets as module constants (`NUTS_LEVELS`,
+  `PATHFINDER_PATHS`, `ADVI_ITER`, snapshot schedules, `N_DRAWS = 4000`). Per-dataset files
+  `fits/{stem}_{tag}_{idx:03d}.npz`; `--reintegrate` aggregates a tag with `aggregateFits`
+  (zero padding to the largest shape, NaN/'' rows for failed fits) and writes through
+  `saveFits`. `nutsadvi.py`, the torch `laplace.py`, their tests and the PyMC parity
+  reference are deleted; `bambi_equivalence.py` builds the model directly.
+- Every tag carries `_duration` (model build + compile + fit), `_failed`, `_error`.
+  NUTS adds names, ESS bulk/tail, R-hat, divergences, tree-depth saturation, leapfrog steps,
+  step size, acceptance, E-BFMI, sampling time, draws/tune/target accept/chains, PyMC
+  version. ADVI: one 100k run, PyMC default optimiser, ELBO logged at
+  1k/2k/5k/10k/20k/50k/100k (mean of the last 100 one-sample estimates), draws at 10k
+  (`advi0`) and 100k (`advi1`) with the snapshot's own wall time (sampling time of earlier
+  snapshots excluded). Pathfinder: paths, Pareto k, compile/compute time, path status
+  counts, L-BFGS iterations; runs its paths sequentially (one core on the cluster).
+  Laplace: `fit_laplace` defaults (BFGS, inverse Hessian from the optimiser), optimizer
+  success/status/iterations/objective/gradient norm. A fit that raises is recorded as
+  failed, NUTS is not guarded (a NUTS crash is a job failure).
+- `check.py --partition test|valid` checks every started tag, prints the `fit-ref.sh`
+  refit command for gaps and reintegrates complete tags. `scripts/fit-ref.sh --method
+  --level --data_id [--partition] [--idx ...] [--n_datasets]` replaces `fit-nuts.sh`,
+  `fit-advi.sh` and `fit-selected.sh` (NUTS 4 cores, 6 h at L0/L1 and 12 h at L2; the
+  other methods one core, 6 h). Campaign hints of the derived-data generators print the
+  three NUTS levels plus the check command.
+- Smoke (2-dataset slice of `small-n-sampled`, Mac): all methods fit, reintegrate, load
+  through `Collection(fits=...)`; wall times 4–10 s NUTS L0, 5–12 s ADVI 100k, 1–2 s
+  Pathfinder, 0.4–6 s Laplace. Pathfinder's Pareto k was 3.8 on the correlated dataset
+  (PSIS unreliable), a diagnostic worth reporting later.
+- Found while migrating: `fit_laplace` rejects `chains` (deprecated) and BFGS reports
+  `success=False` for "precision loss" even at gradient norm 1e-8, so the status and the
+  gradient norm are stored rather than the flag alone. The local PyTensor shim needed an
+  absolute `-install_name` (noted in memory).
+- `scripts/fit-nuts-prior-grid.sh` (E2 prior grid, out of scope) still calls `fit.py --config --idx --method`, which the new CLI accepts; it now fits NUTS level 0.
+- 627 tests pass (11 Laplace tests removed, 4 fitter tests added).
