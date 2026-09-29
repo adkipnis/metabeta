@@ -4,11 +4,8 @@ Run once after fitting is complete, before submitting training jobs.
 All training runs on the same validation dataset will then load the cache
 immediately instead of recomputing it (and racing to write it) on startup.
 
-Typical layout:
-    valid.fit.npz — NUTS only
-    test.fit.npz  — NUTS + ADVI
-
-Methods not present in a fit file are silently skipped.
+Fits live in one file per method, ``{partition}.{method}.npz`` next to ``{partition}.npz``
+(see ``metabeta.utils.fits``); methods without a fit file are skipped.
 
 Usage (from repo root):
     uv run python metabeta/evaluation/cache.py --data_id small-n-sampled --partition valid
@@ -25,6 +22,7 @@ from tqdm import tqdm
 from metabeta.utils.config import loadDataConfig
 from metabeta.utils.dataloader import Dataloader
 from metabeta.utils.evaluation import AggregatedMetrics, EvaluationSummary, PerDatasetMetrics
+from metabeta.utils.fits import FIT_TAGS, fitPath
 from metabeta.utils.results import Proposal
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.regularization import corrToLower
@@ -58,14 +56,14 @@ def setup() -> argparse.Namespace:
                         help='Partition to cache: valid or test')
     parser.add_argument('--force', action='store_true',
                         help='Recompute even if a valid cache already exists')
-    parser.add_argument('--methods', type=str, default='nuts,advi',
-                        help='Comma-separated methods to cache: nuts,advi,laplace (default: nuts,advi)')
+    parser.add_argument('--methods', type=str, default='nuts,advi1,laplace',
+                        help=f'Comma-separated fit tags to cache, any of {",".join(FIT_TAGS)} (default: nuts,advi1,laplace)')
     return parser.parse_args()
 # fmt: on
 
 
 def _parseMethods(methods: str) -> tuple[str, ...]:
-    valid = {'nuts', 'advi', 'laplace'}
+    valid = set(FIT_TAGS)
     parsed = tuple(method.strip().lower() for method in methods.split(',') if method.strip())
     unknown = sorted(set(parsed) - valid)
     if unknown:
@@ -303,10 +301,6 @@ def _cache(
     force: bool,
     fit_path: Path,
 ) -> None:
-    if f'{method}_ffx' not in dl.dataset.raw:
-        logger.info('%s: no samples in %s, skipping.', method, fit_path.name)
-        return
-
     if not force and cache_path.exists():
         if cache_path.stat().st_mtime >= fit_path.stat().st_mtime:
             logger.info('Cache is up to date: %s', cache_path)
@@ -374,16 +368,21 @@ def main() -> None:
     rescale = likelihood_family == 0
     d_corr = max_q * (max_q - 1) // 2 if max_q >= 2 else 0
 
-    fit_path = data_dir / f'{args.partition}.fit.npz'
-    if not fit_path.exists():
-        logger.error('Fit file not found: %s', fit_path)
-        return
-
-    logger.info('Loading %s', fit_path)
-    dl = Dataloader(fit_path, batch_size=_BATCH_SIZE, sortish=True, max_d=max_d, max_q=max_q)
-    logger.info('Datasets: %d', len(dl.dataset))
-
+    data_path = data_dir / f'{args.partition}.npz'
     for method in _parseMethods(args.methods):
+        fit_path = fitPath(data_path, method)
+        if not fit_path.exists():
+            logger.info('%s: %s not found, skipping.', method, fit_path.name)
+            continue
+        logger.info('Loading %s with %s fits', data_path, method)
+        dl = Dataloader(
+            data_path,
+            batch_size=_BATCH_SIZE,
+            sortish=True,
+            max_d=max_d,
+            max_q=max_q,
+            fits=(method,),
+        )
         cache_path = data_dir / f'summary_{args.partition}_{method}.pt'
         _cache(dl, method, cache_path, likelihood_family, rescale, d_corr, args.force, fit_path)
 

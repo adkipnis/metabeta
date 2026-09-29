@@ -12,7 +12,7 @@ from metabeta.utils.evaluation import AggregatedMetrics, EvaluationSummary, PerD
 
 
 def test_parse_methods_accepts_comma_separated_methods():
-    assert _parseMethods('nuts, advi,laplace') == ('nuts', 'advi', 'laplace')
+    assert _parseMethods('nuts, advi1,laplace') == ('nuts', 'advi1', 'laplace')
 
 
 def test_parse_methods_rejects_unknown_method():
