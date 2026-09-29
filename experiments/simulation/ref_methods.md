@@ -35,7 +35,7 @@ Working document for the branch; folded into the PR at retirement and deleted.
    leapfrog steps, step size, acceptance, E-BFMI, chains, tune, target accept,
    durations, PyMC version. ADVI: ELBO curve, iterations, final ELBO (100 MC samples),
    durations. Pathfinder: paths, LBFGS iterations, Pareto k, compile/compute time.
-   Laplace unchanged.
+   Laplace: optimizer success, MAP objective, durations.
 9. **Budget rule**: every evaluated posterior uses 4000 draws (L2 thinned when it is
    evaluated against truth); the `nuts2` reference keeps 8000.
 10. **Curve**: all ids; points MB⁰, MB, NUTS L0, NUTS composite, ADVI0/1, Pathfinder0/1,
@@ -46,6 +46,12 @@ Working document for the branch; folded into the PR at retirement and deleted.
 11. **Main tables**: reference `nuts2` with the L2 converged mask; competitors `nuts`,
     `advi1`, `pathfinder1`, `laplace`; `--models all` = MB + these. Runtime tables show
     NUTS L0 and composite.
+13. **Laplace** (decided 2026-09-29): fitted with `pymc_extras.fit_laplace` on the same
+    `buildPymc` model, pymc-extras defaults, 4000 draws; same priors, extractor, timing and
+    writer as the other references. The torch reference fitter
+    `metabeta/simulation/laplace.py`, its tests and the PyMC parity reference retire in
+    step 3 (the package's `posthoc/laplace_glmm.py` is a different component and stays).
+    Pathfinder is kept alongside as the modern cheap reference; LA is the classical one.
 12. **Cluster**: one `scripts/fit-ref.sh --method --level --data_id --partition`;
     NUTS 4 CPUs, 16 GB, 6 h (L0/L1) / 12 h (L2); ADVI and Pathfinder 1 CPU. `check.py`
     verifies per-level files and reintegrates.
@@ -101,3 +107,30 @@ committed lock; never `uv lock` on the cluster. Then one smoke fit:
 ```bash
 sbatch scripts/fit-nuts.sh --data_id small-n-sampled   # after step 3 replaces this with fit-ref.sh
 ```
+
+## Step 2: per-method storage and loader (done locally)
+
+- `metabeta/utils/fits.py` owns the file format: `FIT_TAGS`, `fitPath`, `availableFits`,
+  `sourceSha`, `saveFits` (prefix + leading-axis validation, `source_sha`, refuses to
+  overwrite without `force`), `loadFits` (checksum check, optional key subset).
+  The SHA-256 of a 100 MB `test.npz` costs about 0.3 s per load.
+- `Collection(path, fits=(...))` merges the requested tags; `exclude_prefixes`,
+  `has_nuts`, `has_advi` are gone; `Dataloader(..., fits=...)` forwards. The permutation
+  and collate loops run over `FIT_TAGS` instead of the hard-coded three methods.
+- Writers: `Fitter.reintegrate` and `LaplaceFitter.go` write through `saveFits`; the
+  Laplace merge step (`--reintegrate`) is removed. Until step 3 replaces the fitter,
+  reintegration defaults to NUTS only (there is no `advi` tag; the old ADVI per-index
+  files carry `advi_*` keys).
+- Readers: evaluate.py maps models to tags (`_FIT_TAGS`: NUTS → `nuts`, ADVI → `advi1`,
+  Laplace → `laplace`); the light path streams `*_rfx` from `fitPath(...)` after
+  `loadFits` verified the checksum; `_getPartitionData(partition, fits=...)` replaces the
+  `need_fits`/`prefer_fit` flags. cache.py loads one method per Dataloader; train.py,
+  check.py, plotting/runtimes.py and `dataFilePath` (no `fit=`) follow.
+- Tests: `tests/utils/test_fits.py`; fixtures write fits with `saveFits`. 638 pass.
+- Experiments (`experiments/evaluation`, `posthoc`, `simulation`): paths point at
+  `test.npz`, fits come from `Collection(..., fits=)` or `loadFits`; ADVI rows and their
+  summary caches are keyed by the tag `advi1`. The derived-data generators (`ood_design`,
+  `prior_misspec`, `likelihood_misspec`) slice `test.nuts.npz` and re-stamp the checksum
+  with `saveFits`. Six scripts had imports broken since earlier refactors (`Proposal`,
+  `buildPymc`, `Fitter`, `gaussian_local` moved); repaired in passing.
+- `test.fit.npz` / `valid.fit.npz` stay on disk untouched; nothing reads them any more.
