@@ -16,6 +16,8 @@ from metabeta.simulation.laplace import (
     _stabilizePrecision,
     setup,
 )
+from metabeta.utils.dataloader import Collection
+from metabeta.utils.fits import loadFits
 
 
 def _write_batch(root: Path, data_id: str = 'test-n-laplace') -> None:
@@ -77,7 +79,6 @@ def _cfg(data_id: str = 'test-n-laplace', **kwargs) -> argparse.Namespace:
         'optimizer': 'LBFGS',
         'diagonal': False,
         'force': False,
-        'reintegrate': False,
     }
     values.update(kwargs)
     return argparse.Namespace(**values)
@@ -298,7 +299,7 @@ def test_go_writes_standalone_batch_file(tmp_path, monkeypatch):
         np.testing.assert_array_equal(raw['laplace_iterations'], np.array([3, 3]))
 
 
-def test_reintegrate_merges_sidecar_into_fit_file(tmp_path, monkeypatch):
+def test_go_writes_a_checksummed_fit_file(tmp_path, monkeypatch):
     _write_batch(tmp_path)
     fitter = LaplaceFitter(_cfg(force=True), srcdir=tmp_path)
 
@@ -324,19 +325,12 @@ def test_reintegrate_merges_sidecar_into_fit_file(tmp_path, monkeypatch):
     monkeypatch.setattr(LaplaceFitter, '_fitSingle', fake_fit_single)
     fitter.go()
 
-    fit_path = tmp_path / 'test-n-laplace' / 'test.fit.npz'
-    with np.load(tmp_path / 'test-n-laplace' / 'test.npz', allow_pickle=True) as raw:
-        base = dict(raw)
-    base['nuts_duration'] = np.array([10.0, 20.0])
-    np.savez(fit_path, **base)
-
-    fitter.reintegrate()
-
-    with np.load(fit_path, allow_pickle=True) as raw:
-        assert 'nuts_duration' in raw.files
-        assert 'laplace_ffx' in raw.files
-        assert raw['laplace_ffx'].shape == (2, 3, 6)
-        np.testing.assert_array_equal(raw['laplace_failed'], np.array([False, False]))
+    data_path = tmp_path / 'test-n-laplace' / 'test.npz'
+    fits = loadFits(data_path, 'laplace')
+    assert fits['laplace_ffx'].shape == (2, 3, 6)
+    np.testing.assert_array_equal(fits['laplace_failed'], np.array([False, False]))
+    col = Collection(data_path, permute=False, fits=('laplace',))
+    assert 'laplace_rfx' in col.raw
 
 
 def test_go_refuses_existing_output_without_force(tmp_path):
@@ -387,4 +381,3 @@ def test_setup_backfills_runtime_defaults_for_config(tmp_path, monkeypatch):
     assert cfg.maxeval == 200
     assert cfg.optimizer == 'LBFGS'
     assert cfg.force is False
-    assert cfg.reintegrate is False

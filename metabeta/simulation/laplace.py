@@ -2,9 +2,8 @@
 
 This module intentionally does not use PyMC.  It fits a pragmatic GLMM posterior
 with a direct torch objective, computes a dense transformed-space Hessian at the
-MAP, samples the Gaussian Laplace approximation, and writes method-only batch
-outputs to ``<partition>.laplace.npz``.
-The sidecar can be merged into ``<partition>.fit.npz`` for evaluation.
+MAP, samples the Gaussian Laplace approximation, and writes the per-method fit file
+``<partition>.laplace.npz`` (see ``metabeta.utils.fits``).
 
 The random-effect covariance uses a simple unconstrained Cholesky
 parameterization and prior.  This is not exact PyMC/LKJ prior parity; the PyMC
@@ -24,6 +23,7 @@ from tqdm import tqdm
 import torch
 
 from metabeta.utils.constants import FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF, hasSigmaEps
+from metabeta.utils.fits import fitPath, saveFits
 from metabeta.utils.names import datasetFilename
 from metabeta.utils.padding import unpad
 from metabeta.utils.templates import setupConfigParser, generateSimulationConfig
@@ -52,7 +52,6 @@ _RUNTIME_DEFAULTS = {
     'optimizer': 'LBFGS',
     'diagonal': False,
     'force': False,
-    'reintegrate': False,
 }
 
 
@@ -406,7 +405,7 @@ class LaplaceFitter:
         self.fname = datasetFilename(partition=cfg.partition, epoch=epoch)
         self.batch_path = self.srcdir / cfg.data_id / self.fname
         assert self.batch_path.exists(), f'{self.batch_path} does not exist'
-        self.outpath = self.batch_path.with_suffix('.laplace.npz')
+        self.outpath = fitPath(self.batch_path, 'laplace')
 
         self._batch_loaded = False
 
@@ -574,7 +573,8 @@ class LaplaceFitter:
 
     def go(self) -> None:
         self._loadBatch()
-        if self.outpath.exists() and not getattr(self.cfg, 'force', False):
+        force = getattr(self.cfg, 'force', False)
+        if self.outpath.exists() and not force:
             raise FileExistsError(f'{self.outpath} already exists; pass --force to overwrite')
 
         out = self._emptyFit()
@@ -586,35 +586,9 @@ class LaplaceFitter:
             fit = self._fitSingle(ds, np.random.default_rng(int(seeds[idx])))
             self._insertFit(out, idx, ds, fit)
 
-        np.savez_compressed(self.outpath, **out)
+        saveFits(self.batch_path, 'laplace', out, force=force)
         n_ok = int(np.sum(~out['laplace_failed']))
         print(f'Saved Laplace fits to {self.outpath}  ({n_ok}/{len(self)} OK)')
-
-    def reintegrate(self) -> None:
-        """Merge ``<partition>.laplace.npz`` sidecar keys into ``<partition>.fit.npz``."""
-        if not self.outpath.exists():
-            raise FileNotFoundError(f'cannot merge: {self.outpath} does not exist')
-
-        fit_path = self.batch_path.with_suffix('.fit.npz')
-        base_path = fit_path if fit_path.exists() else self.batch_path
-        with np.load(base_path, allow_pickle=True) as raw:
-            merged = dict(raw)
-        with np.load(self.outpath, allow_pickle=True) as raw:
-            laplace = {key: raw[key] for key in raw.files if key.startswith('laplace_')}
-
-        if not laplace:
-            raise ValueError(f'{self.outpath} contains no laplace_* keys')
-        n_laplace = len(next(iter(laplace.values())))
-        n_data = len(merged['y'])
-        if n_laplace != n_data:
-            raise ValueError(
-                f'{self.outpath} has {n_laplace} fits, but {base_path} has {n_data} datasets'
-            )
-
-        merged.update(laplace)
-        np.savez_compressed(fit_path, **merged)
-        n_ok = int(np.sum(~laplace['laplace_failed'].astype(bool)))
-        print(f'Merged Laplace fits into {fit_path}  ({n_ok}/{n_data} OK)')
 
 
 # fmt: off
@@ -637,7 +611,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--optimizer', type=str, default='LBFGS', help='Accepted for fit.py compatibility; scratch backend uses LBFGS')
     parser.add_argument('--diagonal', action='store_true', help='Force diagonal RFX covariance (default=False)')
     parser.add_argument('--force', action='store_true', help='Overwrite existing <partition>.laplace.npz (default=False)')
-    parser.add_argument('--reintegrate', action='store_true', help='Merge <partition>.laplace.npz into <partition>.fit.npz')
     cfg = setupConfigParser(parser, generateSimulationConfig, 'Fit hierarchical datasets with scratch Laplace approximation.')
     for key, value in _RUNTIME_DEFAULTS.items():
         if not hasattr(cfg, key):
@@ -655,10 +628,7 @@ def main() -> int:
         return 1
     try:
         fitter = LaplaceFitter(cfg)
-        if cfg.reintegrate:
-            fitter.reintegrate()
-        else:
-            fitter.go()
+        fitter.go()
     except (FileNotFoundError, ValueError) as exc:
         print(f'error: {exc}', file=sys.stderr)
         return 1
