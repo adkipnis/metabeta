@@ -193,7 +193,7 @@ def test_mb_imh_refines_in_rescaled_space(monkeypatch, tmp_path):
 def test_mb_imh_appears_in_light_path_plot_labels(monkeypatch, tmp_path):
     evaluator = _evaluator(
         plot=True,
-        converged_subset=False,
+        all_datasets=False,
         rescale=False,
         n_samples=1000,
         seed=0,

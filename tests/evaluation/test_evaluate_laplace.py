@@ -242,7 +242,7 @@ def test_fit_proposal_from_npz_matches_collated_orientation(tmp_path):
 
 def test_plot_with_fit_models_uses_light_path(monkeypatch, tmp_path):
     evaluator = Evaluator.__new__(Evaluator)
-    evaluator.cfg = argparse.Namespace(plot=True, converged_subset=False)
+    evaluator.cfg = argparse.Namespace(plot=True, all_datasets=False)
     evaluator.data_path_test = tmp_path / 'test.npz'
     evaluator.data_path_valid = evaluator.data_path_test
     fitPath(evaluator.data_path_test, 'nuts').touch()
@@ -267,7 +267,7 @@ def test_light_plot_uses_requested_display_order(monkeypatch, tmp_path):
     evaluator = Evaluator.__new__(Evaluator)
     evaluator.cfg = argparse.Namespace(
         plot=True,
-        converged_subset=False,
+        all_datasets=False,
         rescale=False,
         n_samples=1000,
         seed=0,
@@ -518,6 +518,7 @@ def test_save_tables_accepts_loo_nll(tmp_path):
 def test_cached_rows_do_not_require_dataloader(tmp_path):
     evaluator = Evaluator.__new__(Evaluator)
     evaluator.cfg = argparse.Namespace(
+        all_datasets=False,
         n_samples=1000,
         seed=0,
         k=0,
@@ -588,7 +589,7 @@ def test_table_only_cache_miss_uses_light_path_before_full_evaluation(tmp_path):
     evaluator.cfg = argparse.Namespace(
         save_tables=True,
         plot=False,
-        converged_subset=False,
+        all_datasets=False,
         partition='test',
         models='MB,NUTS',
         likelihood_family=0,
@@ -617,7 +618,7 @@ def test_table_only_cache_miss_raises_when_light_path_unavailable(tmp_path):
     evaluator.cfg = argparse.Namespace(
         save_tables=True,
         plot=False,
-        converged_subset=False,
+        all_datasets=False,
         partition='test',
         models='MB,NUTS',
         likelihood_family=0,
@@ -637,7 +638,7 @@ def test_table_only_cache_miss_can_fallback_for_mb_only():
     evaluator.cfg = argparse.Namespace(
         save_tables=True,
         plot=False,
-        converged_subset=False,
+        all_datasets=False,
         partition='test',
         models='MB',
         likelihood_family=0,
@@ -684,3 +685,40 @@ def test_partition_data_loads_file_ordered_with_requested_fits(monkeypatch):
     evaluator._getPartitionData('test', fits=('nuts',))
 
     assert calls == [('test', 16, False, ()), ('test', 16, False, ('nuts', 'laplace'))]
+
+
+def _nuts2Diagnostics(path, rhat_second: float):
+    n = 3
+    saveFits(
+        path,
+        'nuts2',
+        {
+            'nuts2_rhat': np.array([[1.0, 1.0], [1.0, rhat_second], [1.0, 1.0]]),
+            'nuts2_ess': np.full((n, 2), 900.0),
+            'nuts2_ess_tail': np.full((n, 2), 900.0),
+            'nuts2_divergences': np.zeros((n, 4), dtype=np.int64),
+            'nuts2_draws': np.full(n, 2000),
+            'nuts2_level': np.full(n, 2),
+        },
+    )
+
+
+def test_reference_mask_keeps_converged_datasets_unless_all_requested(tmp_path):
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(all_datasets=False)
+    evaluator.data_path_test = _data(tmp_path, 3)
+
+    assert evaluator._referenceMask('test', 3) is None  # no reference file yet
+    _nuts2Diagnostics(evaluator.data_path_test, rhat_second=1.2)
+    np.testing.assert_array_equal(evaluator._referenceMask('test', 3), [True, False, True])
+    evaluator.cfg.all_datasets = True
+    assert evaluator._referenceMask('test', 3) is None
+
+
+def test_reference_mask_is_none_when_everything_converged(tmp_path):
+    evaluator = Evaluator.__new__(Evaluator)
+    evaluator.cfg = argparse.Namespace(all_datasets=False)
+    evaluator.data_path_test = _data(tmp_path, 3)
+    _nuts2Diagnostics(evaluator.data_path_test, rhat_second=1.0)
+
+    assert evaluator._referenceMask('test', 3) is None

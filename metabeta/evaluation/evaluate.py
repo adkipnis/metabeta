@@ -34,7 +34,7 @@ from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.evaluation import (
     EvaluationSummary,
     dictMean,
-    nutsConvergeMask,
+    nutsConverged,
     subsetProposal,
 )
 from metabeta.utils.results import Proposal, concatProposalsBatch
@@ -62,9 +62,12 @@ from metabeta.plotting import plotComparison
 
 logger = logging.getLogger('evaluate.py')
 
-_ALL_MODELS = ('MB', 'NUTS', 'ADVI', 'LAPLACE')
-# Fit models and the per-method fit file (tag) each one reads, see metabeta.utils.fits.
-_FIT_TAGS = {'NUTS': 'nuts', 'ADVI': 'advi1', 'LAPLACE': 'laplace'}
+_ALL_MODELS = ('MB', 'NUTS', 'ADVI', 'PATHFINDER', 'LAPLACE')
+# Fit models and the per-method fit file (tag) each one reads, see metabeta.utils.fits. NUTS is
+# the composite (cheapest converged budget level per dataset); the reference that decides which
+# datasets enter the tables is the highest level.
+_FIT_TAGS = {'NUTS': 'nuts', 'ADVI': 'advi1', 'PATHFINDER': 'pathfinder1', 'LAPLACE': 'laplace'}
+_REFERENCE_TAG = 'nuts2'
 _FIT_MODELS = frozenset(_FIT_TAGS)
 
 # Post-hoc IMH refinement layered on the raw MB flow posterior. Not part of "all": it costs a
@@ -119,16 +122,8 @@ def setup() -> argparse.Namespace:
         help='IMH variant behind MB+IMH (default: the per-family default in presets.yaml)',
     )
     parser.add_argument(
-        '--converged_subset', action=argparse.BooleanOptionalAction, default=False,
-        help='Also evaluate on the NUTS-converged subset',
-    )
-    parser.add_argument(
-        '--convergence_mode', type=str, default='liberal', choices=['strict', 'liberal'],
-        help='NUTS convergence filter mode (default: liberal)',
-    )
-    parser.add_argument(
-        '--pareto_k_thr', type=float, default=0.7,
-        help='Pareto-k threshold for LOO-NLL subset (default: 0.7)',
+        '--all_datasets', action=argparse.BooleanOptionalAction, default=False,
+        help='Evaluate every dataset instead of only those where the nuts2 reference converged',
     )
     parser.add_argument(
         '--pred_coverage', action=argparse.BooleanOptionalAction, default=False,
@@ -206,9 +201,7 @@ class Evaluator:
 
         self.cfg.batch_size = getattr(cfg, 'batch_size', 8)
         self.cfg.save_tables = getattr(cfg, 'save_tables', False)
-        self.cfg.converged_subset = getattr(cfg, 'converged_subset', False)
-        self.cfg.convergence_mode = getattr(cfg, 'convergence_mode', 'liberal')
-        self.cfg.pareto_k_thr = getattr(cfg, 'pareto_k_thr', 0.7)
+        self.cfg.all_datasets = getattr(cfg, 'all_datasets', False)
         self.cfg.plot = getattr(cfg, 'plot', True)
         self.cfg.show = getattr(cfg, 'show', False)
         self.cfg.warmup = getattr(cfg, 'warmup', True)
@@ -266,7 +259,7 @@ class Evaluator:
         logger.info('%s [max RSS %.1f MiB]', msg % args if args else msg, self._maxRssMb())
 
     def _tableOnlyMode(self) -> bool:
-        return self.cfg.save_tables and not self.cfg.plot and not self.cfg.converged_subset
+        return self.cfg.save_tables and not self.cfg.plot
 
     def _directDataMode(self) -> bool:
         return hasattr(self.cfg, 'data_path_test') or hasattr(self.cfg, 'data_path_valid')
@@ -847,6 +840,20 @@ class Evaluator:
         with np.load(path, allow_pickle=True) as raw:
             return int(raw['y'].shape[0])
 
+    def _referenceMask(self, partition: str, n: int) -> np.ndarray | None:
+        """Datasets where the NUTS reference converged; None without a reference or with
+        --all_datasets (the convergence-validation check compares the two)."""
+        data_path = Path(self._partitionDataPath(partition))
+        if self.cfg.all_datasets or not fitPath(data_path, _REFERENCE_TAG).exists():
+            return None
+        keys = tuple(
+            f'{_REFERENCE_TAG}_{k}'
+            for k in ('rhat', 'ess', 'ess_tail', 'divergences', 'draws', 'level')
+        )
+        mask = nutsConverged(loadFits(data_path, _REFERENCE_TAG, keys=keys), _REFERENCE_TAG)
+        logger.info('%s converged on %d / %d datasets', _REFERENCE_TAG, int(mask.sum()), n)
+        return None if mask.all() else mask
+
     def _fitMaskFromPath(self, data_path: Path, method: str) -> np.ndarray | None:
         """Success mask of a method from its fit file; None when every dataset succeeded."""
         tag = _FIT_TAGS[method]
@@ -970,7 +977,7 @@ class Evaluator:
             for model in active
             if model in _FIT_MODELS
         }
-        common_mask = self._commonMask(list(masks.values()), n)
+        common_mask = self._commonMask([*masks.values(), self._referenceMask(partition, n)], n)
 
         rows: list[dict] = []
         missing: list[str] = []
@@ -1028,12 +1035,7 @@ class Evaluator:
     def _canLightEvaluateFromTableOnly(self, partition: str, models: list[str]) -> bool:
         active = self._activeModels(partition, models)
         need_fits = any(model in _FIT_MODELS for model in active)
-        return (
-            bool(active)
-            and need_fits
-            and not self.cfg.converged_subset
-            and not self._directDataMode()
-        )
+        return bool(active) and need_fits and not self._directDataMode()
 
     # -------------------------------------------------------------------------
     # Output
@@ -1072,7 +1074,7 @@ class Evaluator:
 
     @staticmethod
     def _displayModel(model: str) -> str:
-        return 'LA' if model == 'LAPLACE' else model
+        return {'LAPLACE': 'LA', 'PATHFINDER': 'PF'}.get(model, model)
 
     @classmethod
     def _plotLabel(cls, model: str) -> str:
@@ -1272,8 +1274,6 @@ class Evaluator:
         elif model == _MB_IMH:
             base = self._loadOrSampleMb(partition, dl)
             return self._refineMb(partition, base, full_batch), None
-        elif model == 'NUTS':
-            return self._fit2proposal(full_batch, prefix=_FIT_TAGS[model]), None
         elif model in _FIT_MODELS:
             tag = _FIT_TAGS[model]
             mask = fitBatchMask(full_batch, prefix=tag)
@@ -1325,7 +1325,7 @@ class Evaluator:
             for model in active
             if model in _FIT_MODELS
         }
-        common_mask = self._commonMask(list(masks.values()), n)
+        common_mask = self._commonMask([*masks.values(), self._referenceMask(partition, n)], n)
         common_batch = (
             subsetBatch(full_batch, common_mask) if common_mask is not None else full_batch
         )
@@ -1395,12 +1395,7 @@ class Evaluator:
             return []
 
         fits = self._fitTags(active)
-        if (
-            (self.cfg.plot or self._tableOnlyMode())
-            and fits
-            and not self.cfg.converged_subset
-            and not self._directDataMode()
-        ):
+        if (self.cfg.plot or self._tableOnlyMode()) and fits and not self._directDataMode():
             logger.info(
                 'Using light fit evaluation path for partition=%s; fit arrays are loaded '
                 'directly from npz by requested method.',
@@ -1418,9 +1413,12 @@ class Evaluator:
             if model not in _MB_MODELS
         }
 
-        # Align all proposals to their common batch (intersection of all native masks)
+        # Align all proposals to their common batch: intersection of the native masks and the
+        # reference's converged datasets
         n = full_batch['X'].shape[0]
-        common_mask = self._commonMask([mask for _, mask in raw.values()], n)
+        common_mask = self._commonMask(
+            [*(mask for _, mask in raw.values()), self._referenceMask(partition, n)], n
+        )
         common_batch = (
             subsetBatch(full_batch, common_mask) if common_mask is not None else full_batch
         )
@@ -1467,10 +1465,9 @@ class Evaluator:
                     raw[model] = self._getProposalAndMask(model, partition, full_batch, dl)
                     aligned[model] = self._alignToCommon(raw[model][0], raw[model][1], common_mask)
             plot_batch = self._plotBatch(common_batch)
-            if not self.cfg.converged_subset:
-                del common_batch, full_batch
-                gc.collect()
-                self._logMemory('Released full fit batch before plotting partition=%s', partition)
+            del common_batch, full_batch
+            gc.collect()
+            self._logMemory('Released full fit batch before plotting partition=%s', partition)
             plot_models = [model for model in active if model in aligned and model in summaries]
             plot_dir.mkdir(parents=True, exist_ok=True)
             self.plot(
@@ -1481,210 +1478,7 @@ class Evaluator:
                 plot_dir=plot_dir,
             )
 
-        # NUTS convergence diagnostics and sub-population rows
-        if self.cfg.converged_subset and 'NUTS' in active:
-            for model in active:
-                if model in _MB_MODELS and model not in raw:
-                    raw[model] = self._getProposalAndMask(model, partition, full_batch, dl)
-            rows += self._convergedRows(partition, active, raw, full_batch, fit_label, plot_dir)
-
         return rows
-
-    def _convergedRows(
-        self,
-        partition: str,
-        active: list[str],
-        raw: dict[str, tuple[Proposal, np.ndarray | None]],
-        full_batch: dict,
-        fit_label: str,
-        base_plot_dir: Path,
-    ) -> list[dict]:
-        """Evaluate NUTS-converged and LOO-reliable subsets; return additional table rows."""
-        nuts_proposal, _ = raw['NUTS']
-        # Full-batch NUTS summary for diagnostics (always cached)
-        summary_nuts_full = self._loadOrComputeSummary(nuts_proposal, full_batch, partition, 'nuts')
-        self._nutsFailureAnalysis(summary_nuts_full, full_batch)
-
-        n = full_batch['X'].shape[0]
-        conv_mask = nutsConvergeMask(full_batch, mode=self.cfg.convergence_mode)
-        if conv_mask is None or not (0 < int(conv_mask.sum()) < n):
-            return []
-
-        n_conv = int(conv_mask.sum())
-        logger.info('\nConverged subset (%s): %d / %d', self.cfg.convergence_mode, n_conv, n)
-
-        rows = self._subsetEval(
-            'conv',
-            active,
-            raw,
-            full_batch,
-            conv_mask,
-            fit_label,
-            do_plot=True,
-            base_plot_dir=base_plot_dir,
-        )
-
-        # LOO-reliable subset: NUTS Pareto-k filter applied on top of convergence
-        nuts_k = summary_nuts_full.per_dataset.loo_pareto_k
-        if nuts_k is not None:
-            k_thr = self.cfg.pareto_k_thr
-            k_mask = (nuts_k < k_thr).numpy() & conv_mask
-            n_k = int(k_mask.sum())
-            logger.info('Reliable LOO subset (k<%.1f): %d / %d', k_thr, n_k, n_conv)
-            if 0 < n_k < n_conv:
-                rows += self._subsetEval(
-                    'loo',
-                    active,
-                    raw,
-                    full_batch,
-                    k_mask,
-                    fit_label,
-                    do_plot=False,
-                    base_plot_dir=base_plot_dir,
-                )
-
-        return rows
-
-    def _subsetEval(
-        self,
-        tag: str,
-        active: list[str],
-        raw: dict[str, tuple[Proposal, np.ndarray | None]],
-        full_batch: dict,
-        subset_mask: np.ndarray,
-        fit_label: str,
-        do_plot: bool = False,
-        base_plot_dir: Path | None = None,
-    ) -> list[dict]:
-        """Evaluate active models on the subset of full_batch selected by subset_mask."""
-        n = full_batch['X'].shape[0]
-
-        # Re-index each model's proposal into the subset_mask context
-        sub_raw: dict[str, tuple[Proposal, np.ndarray | None]] = {}
-        for model, (proposal, src_mask) in raw.items():
-            if src_mask is None:
-                sub_raw[model] = (subsetProposal(proposal, subset_mask), subset_mask)
-            else:
-                new_mask = src_mask & subset_mask
-                sub_raw[model] = (subsetProposal(proposal, subset_mask[src_mask]), new_mask)
-
-        # Align within the subset context (handles any model with a narrower native mask)
-        sub_common_mask = self._commonMask([mask for _, mask in sub_raw.values()], n)
-        sub_common_batch = subsetBatch(full_batch, sub_common_mask)
-        sub_aligned: dict[str, Proposal] = {
-            model: self._alignToCommon(proposal, mask, sub_common_mask)
-            for model, (proposal, mask) in sub_raw.items()
-        }
-
-        summaries: dict[str, EvaluationSummary] = {}
-        rows: list[dict] = []
-        for model in active:
-            s = self.summary(sub_aligned[model], sub_common_batch)
-            summaries[model] = s
-            rows.append(self._makeRow(f'{self._displayModel(model)}_{tag}', s, fit_label))
-
-        if do_plot and len(active) > 1:
-            plot_dir = (base_plot_dir or self.plot_dir) / tag
-            plot_dir.mkdir(parents=True, exist_ok=True)
-            self.plot(
-                list(sub_aligned.values()),
-                list(summaries.values()),
-                [self._displayModel(model) for model in active],
-                sub_common_batch,
-                plot_dir=plot_dir,
-            )
-
-        return rows
-
-    def _nutsFailureAnalysis(
-        self,
-        summary: EvaluationSummary,
-        batch: dict[str, torch.Tensor],
-    ) -> None:
-        """Report NUTS convergence diagnostics and their Spearman correlation with LOO-NLL."""
-        if 'nuts_divergences' not in batch:
-            return
-
-        from scipy.stats import spearmanr
-
-        def _nanfield(key: str) -> np.ndarray | None:
-            return batch[key].numpy().astype(np.float64) if key in batch else None
-
-        def _param_stat(arr, fn):
-            if arr is None:
-                return None
-            a = arr.copy()
-            a[a <= 0] = np.nan
-            return fn(a, axis=-1)
-
-        conv = nutsConvergeMask(batch, mode=self.cfg.convergence_mode)
-        fail = ~conv
-        total_div = batch['nuts_divergences'].numpy().sum(-1)
-        duration = batch['nuts_duration'].numpy().ravel()
-
-        ess_tail = _nanfield('nuts_ess_tail')
-        rhat = _nanfield('nuts_rhat')
-        treedepth = _nanfield('nuts_max_treedepth')
-
-        min_ess = _param_stat(_nanfield('nuts_ess'), np.nanmin)
-        min_ess_tail = _param_stat(ess_tail, np.nanmin)
-        max_rhat = _param_stat(rhat, np.nanmax)
-        mean_treedepth_sat = treedepth.mean(-1) if treedepth is not None else None
-
-        loo = (
-            summary.per_dataset.loo_nll.numpy() if summary.per_dataset.loo_nll is not None else None
-        )
-        b = len(total_div)
-
-        f_rhat = (max_rhat > 1.01) if max_rhat is not None else np.zeros(b, bool)
-        f_div = total_div > 0
-        f_tree = (
-            (mean_treedepth_sat > 0.05) if mean_treedepth_sat is not None else np.zeros(b, bool)
-        )
-        f_ess = (min_ess < 400) if min_ess is not None else np.zeros(b, bool)
-        f_ess_tail = (min_ess_tail < 400) if min_ess_tail is not None else np.zeros(b, bool)
-
-        counts = {
-            'R-hat > 1.01': int(f_rhat.sum()),
-            'divergences > 0': int(f_div.sum()),
-            'tree-depth sat > 5%': int(f_tree.sum()),
-            'ESS < 400': int(f_ess.sum()),
-            'tail ESS < 400': int(f_ess_tail.sum()),
-            'any failure': int(fail.sum()),
-        }
-
-        diag_pairs = [
-            ('Max R-hat', max_rhat),
-            ('Total divergences', total_div),
-            ('Mean tree-depth sat', mean_treedepth_sat),
-            ('Min ESS (bulk)', min_ess),
-            ('Min ESS (tail)', min_ess_tail),
-            ('Duration [s]', duration),
-        ]
-        corr_rows = []
-        if loo is not None:
-            for name, diag in diag_pairs:
-                if diag is None:
-                    continue
-                ok = np.isfinite(diag) & np.isfinite(loo)
-                r_s = (
-                    float(spearmanr(diag[ok], loo[ok]).statistic) if ok.sum() > 2 else float('nan')
-                )
-                corr_rows.append([name, r_s])
-
-        lines = ['  ' + '  |  '.join(f'{k}: {v}/{b}' for k, v in counts.items())]
-        if loo is not None and fail.any() and (~fail).any():
-            fail_med = float(np.median(loo[fail]))
-            clean_med = float(np.median(loo[~fail]))
-            lines.append(
-                f'  Median LOO-NLL:  {fail_med:.3f} (fail) vs {clean_med:.3f} (clean)'
-                f'   Δ = {fail_med - clean_med:+.3f}'
-            )
-
-        corr_table = tabulate(
-            corr_rows, headers=['Diagnostic', 'ρ(LOO-NLL)'], floatfmt='.3f', tablefmt='simple'
-        )
-        logger.info('\nNUTS diagnostics (%d datasets)\n%s\n%s\n', b, corr_table, '\n'.join(lines))
 
     # -------------------------------------------------------------------------
     # Entry points
