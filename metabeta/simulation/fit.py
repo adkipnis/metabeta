@@ -48,6 +48,7 @@ ADVI_ITER = 100_000
 ADVI_ELBO_AT = (1_000, 2_000, 5_000, 10_000, 20_000, 50_000, 100_000)
 ADVI_DRAWS_AT = {10_000: 'advi0', 100_000: 'advi1'}
 ELBO_WINDOW = 100  # one-sample ELBO estimates averaged into one logged value
+POSTERIOR_KEYS = ('ffx', 'rfx', 'sigma_rfx', 'sigma_eps', 'corr_rfx')  # draw arrays of a fit
 
 _DEFAULT_SRCDIR = Path(__file__).resolve().parent / '..' / 'outputs' / 'data'
 
@@ -97,6 +98,26 @@ def aggregateFits(fits: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
                 arr[i] = np.nan
         out[key] = arr
     return out
+
+
+def markNonFinite(fits: dict[str, np.ndarray], tag: str) -> dict[str, np.ndarray]:
+    """Count a fit whose posterior draws contain non-finite values as failed.
+
+    ``pymc_extras.fit_laplace`` draws NaN without raising when the Hessian at the mode is
+    not positive definite; the draws of such a dataset are set to NaN like those of a fit
+    that raised, so every consumer sees one ``{tag}_failed`` flag.
+    """
+    keys = [f'{tag}_{k}' for k in POSTERIOR_KEYS if f'{tag}_{k}' in fits]
+    failed = fits[f'{tag}_failed'].astype(bool)
+    bad = np.zeros_like(failed)
+    for key in keys:
+        bad |= ~np.isfinite(fits[key]).reshape(len(failed), -1).all(1)
+    bad &= ~failed
+    for key in keys:
+        fits[key][bad] = np.nan
+    error = fits[f'{tag}_error'].astype(object)
+    error[bad] = 'non-finite draws'
+    return {**fits, f'{tag}_failed': failed | bad, f'{tag}_error': error.astype(str)}
 
 
 def _composite(fit: dict[str, np.ndarray], tag: str, converged: bool, elapsed: float) -> dict:
@@ -334,7 +355,7 @@ class Fitter:
         for p in paths:
             with np.load(p, allow_pickle=True) as f:
                 fits.append(dict(f))
-        return aggregateFits(fits)
+        return markNonFinite(aggregateFits(fits), tag)
 
     def reintegrate(self, tags: tuple[str, ...] | None = None) -> None:
         """Aggregate the per-dataset files of each tag into ``{partition}.{tag}.npz``."""
