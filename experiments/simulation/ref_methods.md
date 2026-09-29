@@ -233,3 +233,184 @@ sbatch scripts/fit-nuts.sh --data_id small-n-sampled   # after step 3 replaces t
 3. `metabeta/simulation/check.py --partition test --data_id ...` reintegrates and composes.
 4. `metabeta/evaluation/cache.py`, then evaluate.py / oracle_posterior.py / runtimes.py /
    ref_curve.py; `evaluate.py --all_datasets` once for the convergence-validation check.
+
+### Campaign log
+
+- 2026-09-29: cluster repo on `ref-methods`, venv at PyMC 6.3.2 / PyTensor 3.3.2 / ArviZ 1.3.0 /
+  pymc-extras 0.15.1. The old torch `test.laplace.npz` files collide with the new tag and were
+  moved to `{data_id}/old/`; `test.fit.npz` / `valid.fit.npz` stay untouched as the backup of
+  the old NUTS and ADVI fits (delete `old/` and `*.fit.npz` once the new fits are validated).
+- Smoke (two datasets of `huge-p-sampled`, every method; two of `small-n-sampled/valid` at
+  NUTS L2): all completed, ~3 min per array task including container start and compile.
+  Pathfinder Pareto k 2–12 on the huge Poisson sets; Laplace BFGS ends with status 2
+  (precision loss) and `jac` all zero, to be inspected against the nuts2 draws.
+- Full campaign: 96 arrays (84 test = 12 sets × {nuts0,1,2, advi, pathfinder0,1, laplace};
+  12 valid = nuts2), 49 152 tasks, user cap 100 concurrent jobs; expected ~1 day.
+- First reintegration (`small-n-sampled`, nuts2, 512/512): 0 failed, 485/512 converged, wall
+  time median 75 s / p90 174 s / max 397 s; posterior means agree with the old NUTS fits
+  (r = 1.0000 ffx, 0.9996 sigma_rfx). `check.py` runs under `--qos=cpu_priority` while the
+  campaign saturates the 100-job cap of `cpu_normal`; composition waits until every started
+  tag of a set is complete.
+- 12:15: single-core methods (advi, pathfinder, laplace) moved to `--qos cpu_preemptible`
+  (own cap of 200 jobs, 3-day wall); NUTS stays on `cpu_normal`. Throughput went from
+  ~1.5k to ~5–10k tasks/h; no preemptions observed.
+- `small-n-sampled`, all levels reintegrated: converged 286 / 395 / 485 of 512 at L0 / L1 / L2,
+  wall time median 45 / 52 / 75 s, no failed fits at any level or method; advi1 vs the old
+  ADVI posterior means r = 0.999 (ffx) / 0.996 (sigma_rfx).
+- 17:00: every test tag has 512/512 per-index files on all 12 sets; check.py runs per set in
+  parallel under `cpu_preemptible` (the serial priority job hit its 2 h limit after 8 sets),
+  cache.py chained after each check. Composites so far: medium-b 504, medium-p 488,
+  large-n 470, large-b 499 of 512 converged.
+- `medium-b-sampled` validation: composite `nuts` vs nuts2 posterior means r = 1.000; advi1
+  vs old ADVI r = 0.9997 / 0.994 but **45/512 advi1 runs fail** with PyMC's
+  `FloatingPointError: NaN occurred in optimization` before 100k iterations (the old run
+  stopped early); Pathfinder Pareto k median 2.0, < 0.7 on 0–1 % of datasets, sigma_rfx
+  1.6–1.7× nuts2; **Laplace sigma_rfx is 3.9× nuts2 with r ≈ 0** on this set, the same as
+  the old torch Laplace (4.5×, r = 0.18), so it is the method, not the new fitter. BFGS
+  status 2 (precision loss) on 483/512, `jac` all zero.
+- cache.py failed on the Bernoulli sets: ArviZ 1 raises `All tail values are the same` when
+  every draw predicts an observation equally well; `metabeta/utils/psis.py` now returns the
+  raw normalised weights with k = inf for such rows (the ArviZ < 1 convention), tests in
+  `tests/utils/test_psis.py`. Pushed 7d22fc36 to `origin/ref-methods` so the cluster could
+  pull it (the only push of this campaign).
+- ADVI failures are a Bernoulli phenomenon: old run 18 / 46 / 50 failed on medium-b /
+  large-b / huge-b, the new 100k run 45 / 70 / – (advi0 already 39 / 62), zero on all
+  Gaussian and Poisson sets.
+- Test composites, all 12 sets (converged of 512): small n/b/p 492/508/504, medium 474/504/488,
+  large 470/499/476, huge 444/487/473. Valid composites so far: small-n 483, small-b 508.
+- cache.py then failed on the Laplace tag of the small sets: `fit_laplace` returns all-NaN
+  draws without raising on 16 (small-n) / 28 (small-b) datasets (Hessian not positive
+  definite; BFGS status 2). `Fitter._aggregate` now marks fits with non-finite posterior
+  draws as failed (`markNonFinite`, error 'non-finite draws'); pushed c55a93ac and
+  reintegrated the laplace tag on every set.
+- Still failing after that on 5 sets: Laplace rfx / sigma_rfx draws of up to 1e68 (medium-b)
+  and 1e154 (large-n), finite in float64 but inf in the float32 evaluation stack.
+  `markNonFinite` now also counts draws beyond float32 range as non-finite (7a1acedb);
+  Laplace failure counts after both rules: small-n 16, small-b 28, medium-b 37 (+3),
+  large-n 24 (+1). Laplace reintegrated and cache.py rerun on all 12 sets.
+- Valid composites: small n/b/p 483/508/492, medium-n 468, medium-p 488, large-n 458.
+
+### Campaign result (test partition, 512 datasets per set)
+
+Converged (NUTS levels and composite) or Pareto k < 0.7 (Pathfinder):
+
+| set | nuts0 | nuts1 | nuts2 | nuts | advi0 | advi1 | pathfinder0 | pathfinder1 | laplace |
+|---|---|---|---|---|---|---|---|---|---|
+
+**converged**
+
+| set | nuts0 | nuts1 | nuts2 | nuts | advi0 | advi1 | pathfinder0 | pathfinder1 | laplace |
+|---|---|---|---|---|---|---|---|---|---|
+| small-n-sampled | 286 | 395 | 485 | 492 |  |  | k<0.7: 3 | k<0.7: 0 |  |
+| small-b-sampled | 316 | 450 | 503 | 508 |  |  | k<0.7: 30 | k<0.7: 12 |  |
+| small-p-sampled | 212 | 394 | 500 | 504 |  |  | k<0.7: 5 | k<0.7: 5 |  |
+| medium-n-sampled | 289 | 388 | 471 | 474 |  |  | k<0.7: 0 | k<0.7: 0 |  |
+| medium-b-sampled | 344 | 425 | 502 | 504 |  |  | k<0.7: 5 | k<0.7: 1 |  |
+| medium-p-sampled | 260 | 388 | 486 | 488 |  |  | k<0.7: 0 | k<0.7: 0 |  |
+| large-n-sampled | 305 | 356 | 466 | 470 |  |  | k<0.7: 0 | k<0.7: 0 |  |
+**failed**
+
+| set | nuts0 | nuts1 | nuts2 | nuts | advi0 | advi1 | pathfinder0 | pathfinder1 | laplace |
+|---|---|---|---|---|---|---|---|---|---|
+| small-n-sampled | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 16 |
+| small-b-sampled | 0 | 0 | 0 | 0 | 15 | 18 | 0 | 0 | 28 |
+| small-p-sampled | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 26 |
+| medium-n-sampled | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 17 |
+| medium-b-sampled | 0 | 0 | 0 | 0 | 39 | 45 | 0 | 0 | 39 |
+| medium-p-sampled | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 25 |
+| large-n-sampled | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 25 |
+| large-b-sampled | 0 | 0 | 0 | 0 | 62 | 70 | 0 | 0 | 42 |
+| large-p-sampled | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 24 |
+| huge-n-sampled | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 23 |
+| huge-b-sampled | 0 | 0 | 0 | 0 | 75 | 85 | 0 | 0 | 56 |
+| huge-p-sampled | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 52 |
+
+**median s**
+
+| set | nuts0 | nuts1 | nuts2 | nuts | advi0 | advi1 | pathfinder0 | pathfinder1 | laplace |
+|---|---|---|---|---|---|---|---|---|---|
+| small-n-sampled | 45 | 52 | 75 | 81 | 33 | 49 | 55 | 57 | 30 |
+| small-b-sampled | 46 | 54 | 83 | 73 | 31 | 50 | 58 | 60 | 29 |
+| small-p-sampled | 45 | 52 | 75 | 90 | 32 | 48 | 57 | 59 | 29 |
+| medium-n-sampled | 55 | 64 | 113 | 85 | 37 | 56 | 67 | 67 | 39 |
+| medium-b-sampled | 59 | 66 | 124 | 79 | 37 | 59 | 74 | 70 | 37 |
+| medium-p-sampled | 56 | 63 | 120 | 91 | 37 | 57 | 70 | 71 | 37 |
+| large-n-sampled | 64 | 70 | 131 | 88 | 41 | 62 | 76 | 76 | 46 |
+| large-b-sampled | 65 | 73 | 153 | 77 | 41 | 63 | 75 | 81 | 48 |
+| large-p-sampled | 70 | 77 | 155 | 93 | 41 | 62 | 90 | 82 | 47 |
+| huge-n-sampled | 74 | 81 | 151 | 94 | 44 | 68 | 81 | 92 | 62 |
+| huge-b-sampled | 75 | 88 | 189 | 91 | 46 | 69 | 85 | 93 | 59 |
+| huge-p-sampled | 79 | 94 | 197 | 98 | 44 | 68 | 85 | 87 | 59 |
+
+
+### Compile-time profiling (2026-09-29, huge-p-sampled dataset 0, m=27 n=250 d=16 q=1)
+
+Wall time of one fit = build + fit, PyTensor cache cold (empty `base_compiledir`) vs warm
+(same dataset fitted before). Cluster = Xeon Gold 6136, 1 BLAS thread, container g++;
+MacBook = M3, clang.
+
+| | Pathfinder 4 paths | Laplace | NUTS L0 (sampling only) |
+|---|---|---|---|
+| cluster, cold, compiledir on Lustre | 149 s | 38 s | 25 s (7.8 s) |
+| cluster, cold, compiledir on node /tmp | 80 s | 32 s | 22 s (7.7 s) |
+| cluster, warm | 10 s | 7 s | 13 s (7.6 s) |
+| MacBook, cold | 24–37 s | 10 s | 10 s (1.2 s) |
+| MacBook, warm | 3 s | 2 s | 2.5 s (1.2 s) |
+
+pymc-extras' `compute_time` contains compilation (warm: 0.2–1.2 s). The cache is only
+partly shared across datasets: a new dataset of the same family still compiles 3–13 s on
+the MacBook (new broadcast patterns; q = 2 adds the LKJ/Cholesky kernels, 36 s), against
+1–3 s for a repeat of the same dataset. Every campaign task started cold, so the recorded
+durations of every method are dominated by compilation. Cluster NUTS sampling time for
+this dataset was 32 s in the campaign smoke and 7.8 s here: node-to-node noise.
+
+Steady state (cache filling over 11 Poisson datasets, node-local compiledir, one fit per
+dataset and method): a *new* dataset still compiles on top of the warm cache.
+
+| per new dataset | Pathfinder 4 paths | Laplace | NUTS L0 wall − sampling |
+|---|---|---|---|
+| cluster (Xeon 6136) | 34–59 s (pymc-extras compute 25–47 s) | 21–80 s (175 s at m=122, q=3) | 10–20 s |
+| MacBook (M3) | 8–15 s | 5–25 s (61 s at m=122, q=3) | 3–6 s |
+
+Repeat of the same dataset: cluster 8 / 6 / 4 s, MacBook 3 / 2 / 1.5 s. Cluster sampling
+time of NUTS L0 varies 8–74 s across these datasets, MacBook 1–14 s (5–7× slower cluster
+core). So the campaign `duration` = cold compile (≈ 40–70 s on the cluster) + residual
+compile + compute; a pre-warmed cache removes only the first term.
+
+### Warm-cache rerun of the compiled methods (2026-09-29, evening)
+
+Decision (Alex): keep the cold NUTS fits, rerun ADVI, Pathfinder and Laplace from a
+pre-warmed PyTensor cache, the state of a user who has fitted one such GLMM before, and
+report the cold compile cost once. Cold wall times are backed up in
+`{data_id}/test.cold_durations.npz` (keys `{tag}_duration/_failed`, Pathfinder
+`compile_time/compute_time`) and pulled to `~/Downloads/hpc-pull/cold_durations/`; cold
+medians: ADVI 100k 49–69 s, Pathfinder 55–93 s, Laplace 29–62 s. `scripts/warm-cache.sh
+--family {n,b,p}` builds `~/pytensor_cache_{f}.tar` from brief fits on the first
+random-intercept and first random-slope dataset of `small-{f}-sampled`;
+`scripts/fit-ref.sh --warm` unpacks it into a node-local compile directory (all tasks now
+compile on node /tmp instead of Lustre). Stale `summary_test_{advi1,pathfinder1,laplace}.pt`
+caches are deleted before recaching.
+- Valid partition complete (nuts2 → `valid.nuts.npz`, converged of 512): small n/b/p
+  483/508/492, medium 468/499/488, large 458/493/479, huge 445/486/469.
+- Warm rerun: 456 tasks failed on one node (`cpusrv32`, `/tmp` full → `mkdir: No space
+  left on device`); node excluded from the pending arrays, the gaps are refitted from the
+  `check.py` output afterwards. Warm ADVI 100k on `small-n-sampled`: median 29 s (cold 49 s).
+- Warm rerun done 2026-09-30 00:00 (advi, pathfinder0/1, laplace on all 12 sets; the 456
+  gaps refitted; every tag 512/512, reintegrated and composed again). Failure counts are
+  unchanged up to ±2 Laplace fits per set (borderline Hessians flip with the kernel
+  fusion of the cached build). Median wall time cold → warm (s):
+
+| set | ADVI 10k | ADVI 100k | Pathfinder 4 | Pathfinder 20 | Laplace |
+|---|---|---|---|---|---|
+| small (n/b/p) | 33/31/32 → 11/10/10 | 49/50/48 → 28/29/27 | 55/58/57 → 17/17/18 | 57/60/59 → 18/18/18 | 30/29/29 → 13/13/13 |
+| medium | 37/37/37 → 15/14/14 | 56/59/57 → 34/37/34 | 67/74/70 → 28/26/26 | 67/70/71 → 29/27/27 | 39/37/37 → 21/18/18 |
+| large | 41/41/41 → 18/18/18 | 62/63/62 → 37/40/39 | 76/75/90 → 36/34/34 | 76/81/82 → 37/36/36 | 46/48/47 → 27/28/28 |
+| huge | 44/46/44 → 20/22/21 | 68/69/68 → 42/45/46 | 81/85/85 → 43/41/43 | 92/93/87 → 45/44/46 | 62/59/59 → 34/39/41 |
+
+  NUTS stays cold (L0 45–79 s, L1 52–94 s, L2 75–197 s median); its compile share is
+  `duration − sampling_time − build` (≈ 10–20 s on the cluster).
+- cache.py done on all 12 sets (nuts, advi1, pathfinder1, laplace; 30–63 min each).
+- Old fits deleted per Alex (2026-09-30): `{data_id}/test.fit.npz`, `valid.fit.npz` and
+  `old/test.laplace.npz` on all 12 sampled sets. Per-index `fits/test_inla*` and the
+  `fits_warm_*` directories are untouched; the July `summary_test_advi.pt` caches are
+  orphaned (no consumer) but left in place.
