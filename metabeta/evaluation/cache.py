@@ -56,8 +56,8 @@ def setup() -> argparse.Namespace:
                         help='Partition to cache: valid or test')
     parser.add_argument('--force', action='store_true',
                         help='Recompute even if a valid cache already exists')
-    parser.add_argument('--methods', type=str, default='nuts,advi1,laplace',
-                        help=f'Comma-separated fit tags to cache, any of {",".join(FIT_TAGS)} (default: nuts,advi1,laplace)')
+    parser.add_argument('--methods', type=str, default='nuts,advi1,pathfinder1,laplace',
+                        help=f'Comma-separated fit tags to cache, any of {",".join(FIT_TAGS)} (default: the four competitors)')
     return parser.parse_args()
 # fmt: on
 
