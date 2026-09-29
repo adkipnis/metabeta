@@ -11,7 +11,7 @@ the stored hyperparameters that define the fitted model are rewritten:
 
 Because metabeta reads those fields as posterior context and ``utils/pymc.buildPymc`` reads
 them to construct the PyMC model, writing them into a data dir is enough to make *both*
-inference paths fit the same misspecified prior — no changes to fit.py or fit-nuts.sh.  That
+inference paths fit the same misspecified prior — no changes to fit.py or fit-ref.sh.  That
 is the whole point of doing this at generation time rather than perturbing in memory: without
 a matching NUTS refit there is no gold standard to compare the degradation against.
 
@@ -36,9 +36,9 @@ Usage (from repo root):
     uv run python experiments/simulation/prior_misspec.py --print_commands
 
 After generation, produce NUTS fits per condition dir (cluster):
-    sbatch --array=0-31 scripts/fit-nuts.sh --data_id small-n-tau3
-then reintegrate (from metabeta/simulation/):
-    uv run python fit.py --size small --family 0 --ds_type tau3 --reintegrate
+    scripts/fit-ref.sh --method nuts --level 2 --n_datasets 32 --data_id small-n-tau3
+then check and reintegrate:
+    uv run python metabeta/simulation/check.py --partition test --data_id small-n-tau3
 and optionally precompute analytical stats (from metabeta/analytical/):
     uv run python precompute.py --size small --family 0 --ds_type tau3 --partition test
 """
@@ -52,6 +52,7 @@ import yaml
 from metabeta.utils.constants import FFX_FAMILIES, SIGMA_FAMILIES
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.experiments import DATA_DIR
+from metabeta.simulation.fit import NUTS_LEVELS
 from metabeta.utils.fits import availableFits, fitPath, saveFits
 
 # sibling experiment script (this directory is sys.path[0] at run time); the npz slicing,
@@ -254,21 +255,22 @@ def printCommands(
     conditions: list[str],
     n_datasets: int,
 ) -> None:
-    """Print the NUTS fit campaign, one size at a time (baseline dirs need no fits)."""
+    """Print the NUTS ladder campaign, one size at a time (baseline dirs need no fits)."""
     for size in sizes:
         print(f'\n# --- {size} ---')
         for family in families:
             for tag in conditions:
-                print(
-                    f'sbatch --array=0-{n_datasets - 1} scripts/fit-nuts.sh '
-                    f'--data_id {size}-{family}-{tag}'
-                )
-        print('# after all fits of this size finished (from metabeta/simulation/):')
+                for level in range(len(NUTS_LEVELS)):
+                    print(
+                        f'scripts/fit-ref.sh --method nuts --level {level} '
+                        f'--n_datasets {n_datasets} --data_id {size}-{family}-{tag}'
+                    )
+        print('# after all fits of this size finished (checks the fits, then reintegrates):')
         for family in families:
             for tag in conditions:
                 print(
-                    f'uv run python fit.py --size {size} --family {FAMILY_IDS[family]} '
-                    f'--ds_type {tag} --reintegrate'
+                    f'uv run python metabeta/simulation/check.py --partition test '
+                    f'--data_id {size}-{family}-{tag}'
                 )
 
 

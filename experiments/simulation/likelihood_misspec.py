@@ -21,7 +21,7 @@ Each (size, family) source produces standard-format data dirs under outputs/data
     {size}-{fam}-{tag}          one dir per condition (student3, negbin1, latent20, ...),
                                 test.npz only — NUTS fits to be produced with fit.py
 
-The three-token data_id keeps the whole toolchain working unmodified (fit-nuts.sh, fit.py,
+The three-token data_id keeps the whole toolchain working unmodified (fit-ref.sh, fit.py,
 precompute.py).  Selected source indices are shared across conditions within a (size, family)
 and recorded in each config.yaml (``misspec_orig_indices``).
 
@@ -31,9 +31,9 @@ Usage (from repo root):
     uv run python experiments/simulation/likelihood_misspec.py --print_commands
 
 After generation, produce NUTS fits per condition dir (cluster):
-    sbatch --array=0-31 scripts/fit-nuts.sh --data_id small-n-student3
-then reintegrate (from metabeta/simulation/):
-    uv run python fit.py --size small --family 0 --ds_type student3 --reintegrate
+    scripts/fit-ref.sh --method nuts --level 2 --n_datasets 32 --data_id small-n-student3
+then check and reintegrate:
+    uv run python metabeta/simulation/check.py --partition test --data_id small-n-student3
 and optionally precompute analytical stats (from metabeta/analytical/):
     uv run python precompute.py --size small --family 0 --ds_type student3 --partition test
 """
@@ -51,6 +51,7 @@ from metabeta.simulation.simulator import SCALE_PARAMS, SCALE_HYPERPARAMS
 from metabeta.utils.families import POISSON_ETA_CLIP_MAX
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.experiments import DATA_DIR
+from metabeta.simulation.fit import NUTS_LEVELS
 from metabeta.utils.fits import availableFits, fitPath, saveFits
 
 logger = logging.getLogger(__name__)
@@ -310,22 +311,24 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
 
 
 def printCommands(families: list[str], sizes: list[str], n_datasets: int) -> None:
-    """Print the NUTS fit campaign, one size at a time (baseline dirs need no fits)."""
+    """Print the NUTS ladder campaign, one size at a time (baseline dirs need no fits)."""
     for size in sizes:
         print(f'\n# --- {size} ---')
         for family in families:
             _, conditions = CONDITIONS[family]
             for tag, _ in conditions:
-                print(
-                    f'sbatch --array=0-{n_datasets - 1} scripts/fit-nuts.sh --data_id {size}-{family}-{tag}'
-                )
-        print('# after all fits of this size finished (from metabeta/simulation/):')
+                for level in range(len(NUTS_LEVELS)):
+                    print(
+                        f'scripts/fit-ref.sh --method nuts --level {level} '
+                        f'--n_datasets {n_datasets} --data_id {size}-{family}-{tag}'
+                    )
+        print('# after all fits of this size finished (checks the fits, then reintegrates):')
         for family in families:
             _, conditions = CONDITIONS[family]
             for tag, _ in conditions:
                 print(
-                    f'uv run python fit.py --size {size} --family {FAMILY_IDS[family]} '
-                    f'--ds_type {tag} --reintegrate'
+                    f'uv run python metabeta/simulation/check.py --partition test '
+                    f'--data_id {size}-{family}-{tag}'
                 )
 
 
