@@ -2,9 +2,9 @@
 experiments/evaluation/agreement_marginals.py — Marginal posterior overlays: MB (IMH-refined) vs NUTS.
 
 For chosen datasets from the pre-generated real-data test batches (outputs/data/
-{size}-{fam}-real/test.fit.npz), overlays the marginal posterior densities of the IMH-refined
-MB posterior (purple) and NUTS (golden) for one fixed effect, one sigma, one random-effect
-correlation, and one random effect per dataset (one row each).
+{size}-{fam}-real/test.npz with its NUTS fits in test.nuts.npz), overlays the marginal posterior
+densities of the IMH-refined MB posterior (purple) and NUTS (golden) for one fixed effect, one
+sigma, one random-effect correlation, and one random effect per dataset (one row each).
 
 Within each dataset, the displayed parameter of each type is the one with the smallest
 normalized 1D Wasserstein distance to the NUTS marginal (quantile-matched, scaled by the NUTS
@@ -135,34 +135,16 @@ def loadProposals(
     """
     if data_id not in CKPTS:
         raise KeyError(f'no reference checkpoint known for {data_id}')
-    data_path = DATA_DIR / data_id / 'test.fit.npz'
+    data_path = DATA_DIR / data_id / 'test.npz'
     ckpt_dir = CHECKPOINT_DIR / CKPTS[data_id]
     device = setDevice(device_name)
     model, model_cfg = loadModel(ckpt_dir, prefix, device)
 
     col = Collection(
-        data_path,
-        permute=False,
-        max_d=model_cfg.max_d,
-        max_q=model_cfg.max_q,
-        exclude_prefixes=('advi_', 'laplace_'),
+        data_path, permute=False, max_d=model_cfg.max_d, max_q=model_cfg.max_q, fits=('nuts',)
     )
     B_total = len(col)
     batch = collateGrouped([col[i] for i in range(B_total)])
-
-    # inject precomputed analytical stats from the sibling test.npz (as in real_posterior.py)
-    if 'stats' not in batch:
-        base_path = data_path.with_name('test.npz')
-        if base_path.exists():
-            base_col = Collection(
-                base_path, permute=False, max_d=model_cfg.max_d, max_q=model_cfg.max_q
-            )
-            if len(base_col) == B_total:
-                base_batch = collateGrouped([base_col[i] for i in range(B_total)])
-                if 'stats' in base_batch:
-                    batch['stats'] = base_batch['stats']
-                del base_batch
-            del base_col
 
     conv_mask = nutsConvergeMask(batch, mode='strict')
     idx_full = np.arange(B_total)
@@ -313,7 +295,7 @@ def plotAgreement(
         b = int(conv_pos[0])
 
         panels = pickPanels(p_mb, p_nuts, batch, b, ffx_overrides.get((data_id, idx)))
-        with np.load(DATA_DIR / data_id / 'test.fit.npz', allow_pickle=True) as raw:
+        with np.load(DATA_DIR / data_id / 'test.npz', allow_pickle=True) as raw:
             src = str(np.asarray(raw['source'][idx]).item()).split('__')[0]
         family = FAMILY[data_id.split('-')[1]]
         logger.info(

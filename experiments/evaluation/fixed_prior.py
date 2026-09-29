@@ -252,8 +252,10 @@ class FixedPriorStudy:
 
     def loadBatch(self, size: str) -> tuple[dict[str, torch.Tensor], np.ndarray, Path]:
         """Selected datasets of {size}-{family}-sampled with their NUTS fits and P1 stats."""
-        data_path = DATA_DIR / f'{size}-{self.family}-sampled' / 'test.fit.npz'
-        col = Collection(data_path, permute=False, max_d=self.max_d, max_q=self.max_q)
+        data_path = DATA_DIR / f'{size}-{self.family}-sampled' / 'test.npz'
+        col = Collection(
+            data_path, permute=False, max_d=self.max_d, max_q=self.max_q, fits=('nuts',)
+        )
         B = len(col)
         if self.cfg.n_datasets > B:
             raise ValueError(f'n_datasets={self.cfg.n_datasets} exceeds test-set size {B}')
@@ -261,12 +263,8 @@ class FixedPriorStudy:
         idx = np.sort(np.random.default_rng(self.cfg.seed).permutation(B)[: self.cfg.n_datasets])
         mask = np.zeros(B, dtype=bool)
         mask[idx] = True
+        # carries the P1 analytical stats precomputed in test.npz (the paper-default context)
         batch = collateGrouped([col[i] for i in idx])
-        # P1 analytical stats precomputed in the sibling test.npz (the paper-default context)
-        base = Collection(
-            data_path.with_name('test.npz'), permute=False, max_d=self.max_d, max_q=self.max_q
-        )
-        batch['stats'] = collateGrouped([base[i] for i in idx])['stats']
         return batch, mask, data_path
 
     def nutsLoo(self, proposal, batch, data_path: Path, mask: np.ndarray) -> np.ndarray:

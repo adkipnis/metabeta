@@ -29,7 +29,8 @@ from metabeta.utils.sampling import setSeed
 from metabeta.utils.config import assimilateConfig, loadDataConfig
 from metabeta.utils.templates import loadConfigFromCheckpoint
 from metabeta.utils.dataloader import Dataloader, toDevice
-from metabeta.utils.evaluation import Proposal, concatProposalsBatch, nutsConvergeMask
+from metabeta.utils.evaluation import nutsConvergeMask
+from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.models.approximator import Approximator
 from metabeta.utils.experiments import dataFilePath, loadApproximator
 
@@ -76,12 +77,12 @@ def _dataPath(cfg) -> Path:
     data_cfg_train = loadDataConfig(cfg.data_id)
     assimilateConfig(cfg, data_cfg_train)
     data_id = loadDataConfig(cfg.data_id_valid)['data_id']
-    return dataFilePath(data_id, 'test', fit=True)
+    return dataFilePath(data_id, 'test')
 
 
 def _loadTestData(path: Path, batch_size: int) -> Dataloader:
     # sortish=False to preserve npz order (needed to align with raw npz fields)
-    return Dataloader(path, batch_size=batch_size, sortish=False)
+    return Dataloader(path, batch_size=batch_size, sortish=False, fits=('nuts',))
 
 
 def _loadModel(cfg, device) -> Approximator:

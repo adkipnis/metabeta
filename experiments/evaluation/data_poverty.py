@@ -424,14 +424,10 @@ def distributionTable(per_size: dict[str, np.ndarray], edges: list[float], unit_
 # Per-size collection
 
 
-def _loadFit(fit_path: Path, B: int, max_d: int, max_q: int, data_id: str) -> dict:
+def _loadFit(data_path: Path, B: int, max_d: int, max_q: int) -> dict:
     # only the NUTS draws are scored; the ADVI and Laplace rfx draws are 15 GiB each (float64)
-    # at huge and would otherwise be decompressed with them
-    col_fit = Collection(
-        fit_path, permute=False, max_d=max_d, max_q=max_q, exclude_prefixes=('advi_', 'laplace_')
-    )
-    if len(col_fit) != B:
-        raise ValueError(f'{data_id}: test.npz ({B}) and test.fit.npz ({len(col_fit)}) misaligned')
+    # at huge, so their fit files are not loaded
+    col_fit = Collection(data_path, permute=False, max_d=max_d, max_q=max_q, fits=('nuts',))
     return collateGrouped([col_fit[i] for i in range(B)])
 
 
@@ -466,10 +462,7 @@ def collectSize(cfg, size: str, device: torch.device) -> dict | None:
 
     # The NUTS draws of the fit file are held in RAM twice (Collection, then collation): read it
     # here for the convergence mask only, and again just for the NUTS scoring.
-    fit_path = data_path.with_name('test.fit.npz')
-    fit_batch = _loadFit(fit_path, B, max_d, max_q, data_id)
-    if 'stats' in fit_batch and 'stats' not in batch:
-        batch['stats'] = fit_batch['stats']
+    fit_batch = _loadFit(data_path, B, max_d, max_q)
     conv = nutsConvergeMask(fit_batch, mode=cfg.convergence_mode)
     conv = np.ones(B, dtype=bool) if conv is None else conv.astype(bool)
     del fit_batch
@@ -555,7 +548,7 @@ def collectSize(cfg, size: str, device: torch.device) -> dict | None:
     score(IMH_LABEL, proposal_imh, imh_method)
     del proposal_imh
 
-    proposal_nuts = fit2proposal(_loadFit(fit_path, B, max_d, max_q, data_id), 'nuts')
+    proposal_nuts = fit2proposal(_loadFit(data_path, B, max_d, max_q), 'nuts')
     # NUTS stores ~4000 draws; subsample to n_samples draws, ample for coverage/quantiles/means.
     if proposal_nuts.n_samples > cfg.n_samples:
         proposal_nuts = _sliceDraws(proposal_nuts, cfg.n_samples)

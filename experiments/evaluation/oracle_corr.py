@@ -30,11 +30,11 @@ from tabulate import tabulate
 
 # sibling experiment script (this directory is sys.path[0] at run time)
 from oracle_posterior import (
+    REFERENCE_METHODS,
     STATS,
     _capFull,
     _fmtMd,
     _fmtTex,
-    fitExcludePrefixes,
     loadRegimeBatch,
     methodFitBatch,
     nutsConvergeMaskFromNpz,
@@ -47,6 +47,7 @@ from metabeta.utils.dataloader import subsetBatch
 from metabeta.utils.device import setDevice
 from metabeta.utils.evaluation import subsetProposal
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR
+from metabeta.utils.fits import fitPath
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.plot import DPI, legendProxy, paramColors, savePlot
 from metabeta.utils.posterior_eval import (
@@ -177,7 +178,6 @@ def buildRow(label: str, regime: str, metrics: dict[str, torch.Tensor]) -> dict:
 def evaluateRegime(
     model,
     data_path: Path,
-    base_path: Path,
     max_d: int,
     max_q: int,
     lf: int,
@@ -197,7 +197,7 @@ def evaluateRegime(
     correlated ∩ NUTS-converged subset, counts the subset sizes for the table caption."""
     logger.info('\n--- Regime: %s (correlation parameters) ---', regime)
 
-    data_batch, n_total, n_kept, cap_mask = loadRegimeBatch(base_path, max_d, max_q)
+    data_batch, n_total, n_kept, cap_mask = loadRegimeBatch(data_path, max_d, max_q)
     logger.info('  Capacity filter: %d / %d (d≤%d, q≤%d)', n_kept, n_total, max_d, max_q)
     if n_kept == 0 or max_q < 2:
         logger.warning('  No correlation parameters to evaluate — skipping.')
@@ -273,24 +273,25 @@ def evaluateRegime(
     gc.collect()
 
     # Reference methods, streamed one at a time (only one fit-tensor set resident).
-    for label, method in (('NUTS', 'nuts'), ('ADVI', 'advi'), ('LA', 'laplace')):
-        fit_batch, _, _, _ = loadRegimeBatch(
-            data_path, max_d, max_q, exclude_prefixes=fitExcludePrefixes(method)
-        )
-        if f'{method}_corr_rfx' not in fit_batch:
+    for label, tag in REFERENCE_METHODS:
+        if not fitPath(data_path, tag).exists():
+            logger.info('  %s: no fit file — skipping.', label)
+            continue
+        fit_batch, _, _, _ = loadRegimeBatch(data_path, max_d, max_q, fits=(tag,))
+        if f'{tag}_corr_rfx' not in fit_batch:
             logger.info('  %s: no correlation fits in file — skipping.', label)
             del fit_batch
             gc.collect()
             continue
-        success = fitBatchMask(fit_batch, method) & sel
+        success = fitBatchMask(fit_batch, tag) & sel
         logger.info('  %s success within selection: %d / %d', label, int(success.sum()), n_sel)
         if not success.any():
             del fit_batch
             gc.collect()
             continue
-        method_batch = subsetBatch(methodFitBatch(fit_batch, method), success)
+        method_batch = subsetBatch(methodFitBatch(fit_batch, tag), success)
         del fit_batch
-        proposal = fit2proposal(method_batch, method)
+        proposal = fit2proposal(method_batch, tag)
         data_sub = subsetBatch(data_batch, success)
         if rescale:
             proposal.rescale(data_sub['sd_y'])
@@ -436,18 +437,14 @@ def main() -> None:
     stem = f'{ckpt_dir.name}_{data_id}'
     methods = cfg.methods if cfg.methods is not None else posthocDefaults(lf)
 
-    data_path = DATA_DIR / data_id / 'test.fit.npz'
-    base_path = DATA_DIR / data_id / 'test.npz'
+    data_path = DATA_DIR / data_id / 'test.npz'
     if not data_path.exists():
-        logger.error('%s: test.fit.npz not found', data_id)
+        logger.error('%s: test.npz not found', data_id)
         return
-    if not base_path.exists():
-        base_path = data_path
 
     rows, counts = evaluateRegime(
         model,
         data_path,
-        base_path,
         max_d,
         max_q,
         lf,

@@ -40,6 +40,7 @@ from metabeta.utils.logger import setupLogging
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.sampling import setSeed
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR, REPO_ROOT
+from metabeta.utils.fits import fitPath
 from metabeta.utils.posterior_eval import (
     fit2proposal,
     loadModel,
@@ -123,27 +124,17 @@ def collectCondition(
         )
         return None
     ckpt_dir = _ckpt_dir(FAMILY_NAMES[family], size, seed)
-    data_path = DATA_DIR / data_id / 'test.fit.npz'
-    if not data_path.exists() or not ckpt_dir.exists():
-        logger.warning('%s: data or checkpoint missing — skipping', data_id)
+    data_path = DATA_DIR / data_id / 'test.npz'
+    if not fitPath(data_path, 'nuts').exists() or not ckpt_dir.exists():
+        logger.warning('%s: data, NUTS fit or checkpoint missing — skipping', data_id)
         return None
 
     model, model_cfg = loadModel(ckpt_dir, cfg.prefix, device)
     max_d, max_q, lf = model_cfg.max_d, model_cfg.max_q, model_cfg.likelihood_family
 
-    col = Collection(data_path, permute=False, max_d=max_d, max_q=max_q)
+    col = Collection(data_path, permute=False, max_d=max_d, max_q=max_q, fits=('nuts',))
     B = len(col)
     batch = collateGrouped([col[i] for i in range(B)])
-
-    # Reuse precomputed analytical stats from the sibling test.npz (matches condition_number).
-    if 'stats' not in batch:
-        base_path = data_path.with_name('test.npz')
-        if base_path.exists():
-            base_col = Collection(base_path, permute=False, max_d=max_d, max_q=max_q)
-            if len(base_col) == B:
-                base_batch = collateGrouped([base_col[i] for i in range(B)])
-                if 'stats' in base_batch:
-                    batch['stats'] = base_batch['stats']
 
     conv = nutsConvergeMask(batch, mode=cfg.convergence_mode)
     if conv is None:

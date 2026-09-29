@@ -7,7 +7,7 @@ strict and liberal criteria of ``nutsConvergeMask``, the sigma_eps driver
 analysis (Normal only, where the true generative sigma_eps is known), and
 Spearman correlations between sampler health and the NUTS LOO-NLL.
 
-Only the small diagnostic arrays of each test.fit.npz are read (never the
+Only the small diagnostic arrays of each test.nuts.npz are read (never the
 posterior sample tensors); per-dataset LOO-NLL comes from the cached
 full-split NUTS evaluation summary (summary_test_nuts.pt) written by
 evaluate.py / ablation.py, where available.
@@ -27,6 +27,7 @@ from tabulate import tabulate
 
 from metabeta.utils.evaluation import EvaluationSummary, nutsConvergeMask
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR
+from metabeta.utils.fits import fitPath, loadFits
 
 FAMILIES = {'n': 'Normal', 'b': 'Bernoulli', 'p': 'Poisson'}
 SIZES = ['small', 'medium', 'large', 'huge']
@@ -61,13 +62,15 @@ def setup() -> argparse.Namespace:
 
 
 def loadDiagnostics(path: Path) -> dict[str, np.ndarray] | None:
-    """Read only the diagnostic members of a reintegrated test.fit.npz."""
-    if not path.exists():
+    """Read only the diagnostic members of the reintegrated test.nuts.npz (plus EXTRA_KEYS)."""
+    if not (path.exists() and fitPath(path, 'nuts').exists()):
+        return None
+    diag = loadFits(path, 'nuts', keys=DIAG_KEYS)
+    if 'nuts_divergences' not in diag:
         return None
     with np.load(path, allow_pickle=True) as f:
-        if 'nuts_divergences' not in f.files:
-            return None
-        return {k: f[k] for k in DIAG_KEYS + EXTRA_KEYS if k in f.files}
+        diag.update({k: f[k] for k in EXTRA_KEYS if k in f.files})
+    return diag
 
 
 def _paramStat(arr: np.ndarray, fn) -> np.ndarray:
@@ -289,7 +292,7 @@ def main() -> None:
             per_variant: dict[str, dict[str, np.ndarray]] = {}
             for variant in args.variants:
                 data_id = f'{size}-{family}-{variant}'
-                diag = loadDiagnostics(DATA_DIR / data_id / 'test.fit.npz')
+                diag = loadDiagnostics(DATA_DIR / data_id / 'test.npz')
                 if diag is None:
                     continue
                 per = perDataset(diag)
@@ -305,10 +308,10 @@ def main() -> None:
                 )
 
     if not bench_rows:
-        raise ValueError('no reintegrated test.fit.npz with NUTS diagnostics found')
+        raise ValueError('no reintegrated test.nuts.npz with NUTS diagnostics found')
 
     bench_md = renderMd(bench_rows, BENCH_COLS)
-    print('\n=== NUTS convergence audit (test.fit.npz, 4 chains x 1000 draws) ===\n')
+    print('\n=== NUTS convergence audit (test.nuts.npz, 4 chains x 1000 draws) ===\n')
     print(bench_md)
 
     variant_md = ''
@@ -326,7 +329,7 @@ def main() -> None:
 
     md = (
         '# NUTS convergence audit\n\n'
-        'Diagnostics from the reintegrated `test.fit.npz` baselines '
+        'Diagnostics from the reintegrated `test.nuts.npz` baselines '
         '(4 chains, 2,000 tuning steps, 1,000 draws, target accept 0.8).\n'
         'Tree-sat: fraction of datasets whose chains saturate max tree depth on >5% of draws.\n'
         'Convergence criteria: see `nutsConvergeMask` in `metabeta/utils/evaluation.py`.\n\n'

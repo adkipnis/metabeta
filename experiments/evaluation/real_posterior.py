@@ -2,7 +2,8 @@
 experiments/evaluation/real_posterior.py — Posterior comparison on real data: MB and ADVI vs NUTS.
 
 Evaluates a model checkpoint on the pre-generated real-data test batch at
-outputs/data/{size}-{fam}-real/test.fit.npz, comparing MB and ADVI posteriors
+outputs/data/{size}-{fam}-real/test.npz (NUTS and ADVI fits in its sibling
+test.nuts.npz / test.advi1.npz), comparing MB and ADVI posteriors
 against NUTS as reference.  Since there are no ground-truth parameters, all
 metrics are relative to NUTS; only NUTS-converged datasets are included.
 
@@ -435,29 +436,17 @@ def evaluateReal(
     summary_chunk_size: int = 4,
     warmup: bool = True,
 ) -> list[dict]:
-    col = Collection(data_path, permute=False, max_d=max_d, max_q=max_q)
+    col = Collection(data_path, permute=False, max_d=max_d, max_q=max_q, fits=('nuts', 'advi1'))
     B_total = len(col)
     batch = collateGrouped([col[i] for i in range(B_total)])
-
-    # Precomputed analytical stats (beta_est/BLUPs from precompute.py) live in the sibling
-    # {partition}.npz, not the .fit.npz; inject them so MB sampling reuses the MAP statistics
-    # instead of recomputing glmm() live (matching evaluate.py / oracle_posterior.py).
+    # precomputed analytical stats (beta_est/BLUPs from precompute.py) let MB sampling reuse
+    # the MAP statistics instead of recomputing glmm() live (matching evaluate.py)
     if 'stats' not in batch:
-        base_path = data_path.with_name(data_path.name.replace('.fit.npz', '.npz'))
-        if base_path.exists() and base_path != data_path:
-            base_col = Collection(base_path, permute=False, max_d=max_d, max_q=max_q)
-            if len(base_col) == B_total:
-                base_batch = collateGrouped([base_col[i] for i in range(B_total)])
-                if 'stats' in base_batch:
-                    batch['stats'] = base_batch['stats']
-                del base_batch
-            del base_col
-        if 'stats' not in batch:
-            logger.warning(
-                'No precomputed stats for %s — MB sampling recomputes glmm() live (slower). '
-                'Run metabeta/analytical/precompute.py for this data_id/partition.',
-                data_path.parent.name,
-            )
+        logger.warning(
+            'No precomputed stats for %s — MB sampling recomputes glmm() live (slower). '
+            'Run metabeta/analytical/precompute.py for this data_id/partition.',
+            data_path.parent.name,
+        )
 
     # Restrict to NUTS-converged datasets
     conv_mask = nutsConvergeMask(batch, mode=convergence_mode)
@@ -478,7 +467,7 @@ def evaluateReal(
     conv_full = conv_mask if conv_mask is not None else np.ones(B_total, dtype=bool)
 
     # ADVI subset (some fits may have failed)
-    advi_mask = fitBatchMask(batch, 'advi')
+    advi_mask = fitBatchMask(batch, 'advi1')
     n_advi = int(advi_mask.sum())
     logger.info('ADVI available: %d / %d', n_advi, B)
     advi_batch: dict | None = subsetBatch(batch, advi_mask) if n_advi > 0 else None
@@ -500,7 +489,7 @@ def evaluateReal(
         warmup=warmup,
     )
     proposal_nuts = fit2proposal(batch, 'nuts')
-    proposal_advi = fit2proposal(advi_batch, 'advi') if advi_batch is not None else None
+    proposal_advi = fit2proposal(advi_batch, 'advi1') if advi_batch is not None else None
 
     # Rescale all to original data space before metric computation
     if rescale:
@@ -542,7 +531,7 @@ def evaluateReal(
             proposal_advi,
             advi_batch,
             data_path,
-            'advi',
+            'advi1',
             advi_full,
             lf,
             rescale,
@@ -603,7 +592,7 @@ def evaluateReal(
                 'ADVI',
                 proposal_advi,
                 advi_batch,
-                advi_batch.get('advi_duration') if advi_batch is not None else None,
+                advi_batch.get('advi1_duration') if advi_batch is not None else None,
                 summary_advi,
             )
         ]
@@ -775,9 +764,9 @@ def main() -> None:
 
     rows_by_regime: dict[str, list[dict]] = {}
     for data_id in data_ids:
-        data_path = DATA_DIR / data_id / 'test.fit.npz'
+        data_path = DATA_DIR / data_id / 'test.npz'
         if not data_path.exists():
-            logger.warning('Skipping %s: test.fit.npz not found', data_id)
+            logger.warning('Skipping %s: test.npz not found', data_id)
             continue
         regime = data_id.split('-')[0]
         logger.info('\n--- Regime: %s (%s) ---', regime, data_id)

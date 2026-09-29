@@ -29,12 +29,8 @@ from metabeta.utils.config import assimilateConfig, loadDataConfig
 from metabeta.utils.templates import loadConfigFromCheckpoint
 from metabeta.utils.dataloader import Dataloader, toDevice, subsetBatch
 from metabeta.utils.preprocessing import rescaleData
-from metabeta.utils.evaluation import (
-    Proposal,
-    concatProposalsBatch,
-    nutsConvergeMask,
-    subsetProposal,
-)
+from metabeta.utils.evaluation import nutsConvergeMask, subsetProposal
+from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.models.approximator import Approximator
 from metabeta.utils.experiments import dataFilePath, loadApproximator
 
@@ -80,9 +76,9 @@ def _loadTestData(cfg) -> Dataloader:
     data_cfg_train = loadDataConfig(cfg.data_id)
     assimilateConfig(cfg, data_cfg_train)
     data_id = loadDataConfig(cfg.data_id_valid)['data_id']
-    path = dataFilePath(data_id, 'test', fit=True)
+    path = dataFilePath(data_id, 'test')
     assert path.exists(), f'data not found: {path}'
-    return Dataloader(path, batch_size=cfg.batch_size, sortish=True)
+    return Dataloader(path, batch_size=cfg.batch_size, sortish=True, fits=('nuts',))
 
 
 def _loadModel(cfg, device) -> 'Approximator':
