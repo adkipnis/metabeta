@@ -567,9 +567,8 @@ def safeCholesky(
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Batched Cholesky that never raises: jitter escalation, then eigh repair.
 
-    Torch analog of the numpy fallback in simulation/laplace.py: symmetrize,
-    retry with scale-aware jitter (×10 per round), eigenvalue-floor repair via
-    eigh, and as a last resort the identity. Non-finite or identity-fallback
+    Symmetrize, retry with scale-aware jitter (×10 per round), eigenvalue-floor
+    repair via eigh, and as a last resort the identity. Non-finite or identity-fallback
     elements are flagged in the returned ``degenerate`` mask (..., ) — callers
     must treat their factors as placeholders, not approximations of M.
     """
