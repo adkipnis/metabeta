@@ -74,6 +74,7 @@ from metabeta.utils.families import POISSON_X_CLIP_ABS
 from metabeta.utils.preprocessing import transformPredictors
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.experiments import DATA_DIR
+from metabeta.utils.fits import availableFits, fitPath, saveFits
 
 logger = logging.getLogger(__name__)
 
@@ -264,11 +265,9 @@ def ensureBaseline(
     kind = LIK_CONDITIONS[family][0]  # keep the sibling's family-specific baseline kind
     base_dir.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(base_dir / 'test.npz', **{k: v[idx] for k, v in source.items()})
-    # advi_/laplace_ fits are irrelevant here and dominate the file size — drop them.
-    sliced_fit = sliceNpzStreaming(
-        src_dir / 'test.fit.npz', idx, drop_prefixes=('advi_', 'laplace_')
-    )
-    np.savez_compressed(base_dir / 'test.fit.npz', **sliced_fit)
+    # only the NUTS fits travel with the baseline; saveFits stamps the new test.npz's checksum
+    sliced_nuts = sliceNpzStreaming(fitPath(src_dir / 'test.npz', 'nuts'), idx)
+    saveFits(base_dir / 'test.npz', 'nuts', sliced_nuts, force=True)
     writeConfig(src_dir, base_dir, base_id, cfg.n_datasets, kind, 0.0, idx, cfg.seed)
     logger.info('%s: baseline written (%d datasets)', base_id, cfg.n_datasets)
     return base_id
@@ -279,9 +278,9 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
     src_id = f'{size}-{family}-sampled'
     src_dir = DATA_DIR / src_id
     test_path = src_dir / 'test.npz'
-    fit_path = src_dir / 'test.fit.npz'
+    fit_path = fitPath(test_path, 'nuts')
     if not test_path.exists() or not fit_path.exists():
-        logger.warning('%s: test.npz or test.fit.npz missing — skipping', src_id)
+        logger.warning('%s: test.npz or test.nuts.npz missing — skipping', src_id)
         return []
 
     with np.load(test_path, allow_pickle=True) as z:
@@ -301,7 +300,7 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
         if out_dir.exists():
             # regenerated X/y invalidates any fits of the previous data — remove them so
             # stale per-index fit files cannot be reintegrated against the new datasets
-            stale = [p for p in [out_dir / 'test.fit.npz'] if p.exists()]
+            stale = [fitPath(out_dir / 'test.npz', t) for t in availableFits(out_dir / 'test.npz')]
             stale += sorted((out_dir / 'fits').glob('*.npz'))
             for p in stale:
                 p.unlink()

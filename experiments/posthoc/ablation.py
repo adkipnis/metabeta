@@ -40,7 +40,7 @@ svgd         : SVGD with per-dim bandwidth + cosine LR decay — opt in with --i
                off by default (too slow to be practically useful: ~40s/dataset, and gives
                a fraction of a nat of marginal-log-p improvement over the flow samples it starts
                from — see metabeta/outputs/results/ablation/*.md for reference numbers)
-coldNuts     : NUTS results extracted from test.fit.npz (pre-computed, no rerun) — only
+coldNuts     : NUTS results extracted from test.nuts.npz (pre-computed, no rerun) — only
                available with --split=test
 warmNuts     : warm-started NUTS seeded by the MB-IMH posterior (imhMarginal for Normal,
                imhLaplace for GLMMs): the IMH draws provide chain start points and the
@@ -109,6 +109,7 @@ from metabeta.posthoc.metropolis import IS2_N_INNER, MetropolisSampler, suggestP
 from metabeta.posthoc.warmnuts import WarmNuts, _stackProposals, needsEscalation
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.dataloader import Collection, collateGrouped, toDevice
+from metabeta.utils.fits import fitPath, loadFits
 from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.padding import unpad
@@ -199,10 +200,9 @@ def loadData(path: Path, n_limit: int | None) -> tuple[list, list[dict], dict, d
     tensor_batch : single collated tensor dict, un-rescaled (for NUTS flow init)
     full_batch   : rescaled tensor_batch (ground truth for evaluation)
     """
-    # exclude the fitted posterior-sample arrays: a *.fit.npz decompresses to ~20 GB
-    # (nuts_/advi_/laplace_ rfx are ~6.5 GB each); only runNutsFromNpz needs the nuts
-    # arrays and it re-opens the file lazily itself
-    col = Collection(path, permute=False, exclude_prefixes=('nuts_', 'advi_', 'laplace_'))
+    # no reference fits merged: the NUTS fit decompresses to ~6.5 GB (nuts_rfx) and only
+    # runNutsFromNpz needs it, so it loads test.nuts.npz lazily itself
+    col = Collection(path, permute=False)
     n = len(col) if n_limit is None else min(n_limit, len(col))
     items = [col[i] for i in range(n)]
     tensor_batch = collateGrouped(items)
@@ -711,7 +711,8 @@ def _nutsSummaryCache(npz_path: Path, n_ds: int) -> EvaluationSummary | None:
     """
     partition = npz_path.name.split('.')[0]
     cache_path = npz_path.parent / f'summary_{partition}_nuts.pt'
-    if not cache_path.exists() or cache_path.stat().st_mtime < npz_path.stat().st_mtime:
+    fit_mtime = fitPath(npz_path, 'nuts').stat().st_mtime
+    if not cache_path.exists() or cache_path.stat().st_mtime < fit_mtime:
         return None
     try:
         summary = EvaluationSummary.load(cache_path)
@@ -756,18 +757,19 @@ def _mbSummaryCache(
 
 
 def runNutsFromNpz(npz_path: Path, ds_list: list, tensor_batch: dict, full_batch: dict, lf: int):
-    """Extract pre-computed NUTS results from test.fit.npz and evaluate."""
+    """Extract pre-computed NUTS results from test.nuts.npz and evaluate."""
     n_ds = len(ds_list)
     has_se = hasSigmaEps(lf)
 
     cached = _nutsSummaryCache(npz_path, n_ds)
     if cached is not None:
         # only the tiny diagnostic arrays are needed; skip the ~6.5 GB nuts_rfx load entirely
-        with np.load(npz_path, allow_pickle=True) as data:
-            nuts_divergences = data['nuts_divergences'][:n_ds]
-            nuts_duration = data['nuts_duration'][:n_ds]
-            nuts_ess = data['nuts_ess'][:n_ds]
-            n_s = data['nuts_sigma_rfx'].shape[-1]
+        keys = ('nuts_divergences', 'nuts_duration', 'nuts_ess', 'nuts_sigma_rfx')
+        data = loadFits(npz_path, 'nuts', keys=keys)
+        nuts_divergences = data['nuts_divergences'][:n_ds]
+        nuts_duration = data['nuts_duration'][:n_ds]
+        nuts_ess = data['nuts_ess'][:n_ds]
+        n_s = data['nuts_sigma_rfx'].shape[-1]
         total_divs = int(np.asarray(nuts_divergences).sum())
         total_time = float(np.asarray(nuts_duration, dtype=np.float64).sum())
         reff = float(nuts_ess.mean() / n_s)
@@ -778,19 +780,29 @@ def runNutsFromNpz(npz_path: Path, ds_list: list, tensor_batch: dict, full_batch
         print(ablTable(cached, lf))
         return
 
-    # hoist each npz member once: NpzFile decompresses the *entire* member on every
-    # [] access (nuts_rfx alone is ~6.5 GB), so per-iteration indexing re-decompresses
-    # it n_ds times; slice to n_ds and downcast to float32 immediately
-    with np.load(npz_path, allow_pickle=True) as data:
-        n_total = data['nuts_divergences'].shape[0]
-        nuts_ffx = data['nuts_ffx'][:n_ds].astype(np.float32)
-        nuts_sigma_rfx = data['nuts_sigma_rfx'][:n_ds].astype(np.float32)
-        nuts_sigma_eps = data['nuts_sigma_eps'][:n_ds].astype(np.float32) if has_se else None
-        nuts_rfx = data['nuts_rfx'][:n_ds].astype(np.float32)
-        nuts_corr_rfx = data['nuts_corr_rfx'][:n_ds].astype(np.float32)
-        nuts_divergences = data['nuts_divergences'][:n_ds]
-        nuts_duration = data['nuts_duration'][:n_ds]
-        nuts_ess = data['nuts_ess'][:n_ds]
+    # load each member once (nuts_rfx alone is ~6.5 GB); slice to n_ds and downcast to
+    # float32 immediately
+    keys = (
+        'nuts_ffx',
+        'nuts_sigma_rfx',
+        'nuts_sigma_eps',
+        'nuts_rfx',
+        'nuts_corr_rfx',
+        'nuts_divergences',
+        'nuts_duration',
+        'nuts_ess',
+    )
+    data = loadFits(npz_path, 'nuts', keys=keys)
+    n_total = data['nuts_divergences'].shape[0]
+    nuts_ffx = data['nuts_ffx'][:n_ds].astype(np.float32)
+    nuts_sigma_rfx = data['nuts_sigma_rfx'][:n_ds].astype(np.float32)
+    nuts_sigma_eps = data['nuts_sigma_eps'][:n_ds].astype(np.float32) if has_se else None
+    nuts_rfx = data['nuts_rfx'][:n_ds].astype(np.float32)
+    nuts_corr_rfx = data['nuts_corr_rfx'][:n_ds].astype(np.float32)
+    nuts_divergences = data['nuts_divergences'][:n_ds]
+    nuts_duration = data['nuts_duration'][:n_ds]
+    nuts_ess = data['nuts_ess'][:n_ds]
+    del data
 
     proposals = []
     total_divs = 0
@@ -920,9 +932,7 @@ def main() -> None:
             )
             print(f'{"#" * 70}')
 
-            fit_npz = cfg['data_dir'] / 'test.fit.npz'
-            split_name = 'test.fit.npz' if args.split == 'test' else 'valid.npz'
-            data_path = cfg['data_dir'] / split_name
+            data_path = cfg['data_dir'] / f'{args.split}.npz'
             items, ds_list, tensor_batch, full_batch = loadData(data_path, args.n_datasets)
             n_ds = len(ds_list)
             print(
@@ -983,7 +993,7 @@ def main() -> None:
                     print()
                     continue
                 if cond == 'coldNuts':
-                    runNutsFromNpz(fit_npz, ds_list, tensor_batch, full_batch, lf)
+                    runNutsFromNpz(data_path, ds_list, tensor_batch, full_batch, lf)
                     print()
                     continue
 

@@ -15,10 +15,11 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from metabeta.simulation.fit import Fitter
+from metabeta.simulation.nutsadvi import Fitter
 from metabeta.simulation.prior import bambiDefaultPriors
 from metabeta.utils.evaluation import nutsConvergeMask
 from metabeta.utils.experiments import DATA_DIR, PREPROCESSED_DATA_DIR
+from metabeta.utils.fits import saveFits
 from metabeta.utils.padding import aggregate
 
 
@@ -176,11 +177,10 @@ def main() -> None:
 
     cfg0 = _fitCfg(args, idx=0)
     fitter0 = Fitter(cfg0, srcdir=DATA_DIR)
-    batch.update(fitter0._aggregate('nuts'))
-    fit_path = batch_path.with_suffix('.fit.npz')
-    np.savez_compressed(fit_path, **batch, allow_pickle=True)
-    print(f'Wrote NUTS reference batch to {fit_path}')
-    _summarizeConvergence(batch)
+    nuts = fitter0._aggregate('nuts')
+    fit_path = saveFits(batch_path, 'nuts', nuts, force=True)
+    print(f'Wrote NUTS reference fits to {fit_path}')
+    _summarizeConvergence({**batch, **nuts})
 
 
 if __name__ == '__main__':

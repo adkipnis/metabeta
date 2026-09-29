@@ -17,7 +17,7 @@ parameters and prior context coherent, so the stressor is tail shape rather than
 Each (size, family) source produces standard-format data dirs under outputs/data/:
 
     {size}-{fam}-misbase        severity-0 baseline: slice of the original test.npz AND its
-                                test.fit.npz (existing NUTS fits reused — zero refits)
+                                test.nuts.npz (existing NUTS fits reused — zero refits)
     {size}-{fam}-{tag}          one dir per condition (student3, negbin1, latent20, ...),
                                 test.npz only — NUTS fits to be produced with fit.py
 
@@ -51,6 +51,7 @@ from metabeta.simulation.simulator import SCALE_PARAMS, SCALE_HYPERPARAMS
 from metabeta.utils.families import POISSON_ETA_CLIP_MAX
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.experiments import DATA_DIR
+from metabeta.utils.fits import availableFits, fitPath, saveFits
 
 logger = logging.getLogger(__name__)
 
@@ -107,16 +108,13 @@ def _readHeader(f) -> tuple[tuple[int, ...], bool, np.dtype]:
     raise ValueError(f'unsupported npy version: {version}')
 
 
-def sliceNpzStreaming(
-    path: Path,
-    idx: np.ndarray,
-    drop_prefixes: tuple[str, ...] = (),
-) -> dict[str, np.ndarray]:
+def sliceNpzStreaming(path: Path, idx: np.ndarray) -> dict[str, np.ndarray]:
     """Slice every array in an npz along axis 0 without decompressing full arrays.
 
     Fit files hold keys with tens of GB decompressed (e.g. huge nuts_rfx); this streams
     each entry row by row and keeps only the selected rows, bounding peak memory by the
     slice size.  ``idx`` holds unique positions in any order; rows are returned in that order.
+    0-d members (the fit file's ``source_sha``) have no dataset axis and are skipped.
     """
     want = {int(orig): new for new, orig in enumerate(idx)}
     out: dict[str, np.ndarray] = {}
@@ -125,10 +123,10 @@ def sliceNpzStreaming(
             if not name.endswith('.npy'):
                 continue
             key = name[:-4]
-            if key.startswith(drop_prefixes):
-                continue
             with zf.open(name) as f:
                 shape, fortran, dtype = _readHeader(f)
+                if not shape:
+                    continue
                 if fortran:
                     raise ValueError(f'{path}:{key} is Fortran-ordered; streaming assumes C order')
                 last = int(idx.max())
@@ -246,9 +244,9 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
     src_id = f'{size}-{family}-sampled'
     src_dir = DATA_DIR / src_id
     test_path = src_dir / 'test.npz'
-    fit_path = src_dir / 'test.fit.npz'
+    fit_path = fitPath(test_path, 'nuts')
     if not test_path.exists() or not fit_path.exists():
-        logger.warning('%s: test.npz or test.fit.npz missing — skipping', src_id)
+        logger.warning('%s: test.npz or test.nuts.npz missing — skipping', src_id)
         return []
 
     with np.load(test_path, allow_pickle=True) as z:
@@ -266,9 +264,8 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
     else:
         base_dir.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(base_dir / 'test.npz', **{k: v[idx] for k, v in source.items()})
-        # advi_/laplace_ fits are irrelevant here and dominate the file size — drop them.
-        sliced_fit = sliceNpzStreaming(fit_path, idx, drop_prefixes=('advi_', 'laplace_'))
-        np.savez_compressed(base_dir / 'test.fit.npz', **sliced_fit)
+        # only the NUTS fits travel with the baseline; saveFits stamps the new test.npz's checksum
+        saveFits(base_dir / 'test.npz', 'nuts', sliceNpzStreaming(fit_path, idx), force=True)
         writeConfig(src_dir, base_dir, base_id, cfg.n_datasets, kind, 0.0, idx, cfg.seed)
         logger.info('%s: baseline written (%d datasets)', base_id, cfg.n_datasets)
     created.append(base_id)
@@ -285,7 +282,7 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
         if out_dir.exists():
             # regenerated y invalidates any fits of the previous data — remove them so
             # stale per-index fit files cannot be reintegrated against the new datasets
-            stale = [p for p in [out_dir / 'test.fit.npz'] if p.exists()]
+            stale = [fitPath(out_dir / 'test.npz', t) for t in availableFits(out_dir / 'test.npz')]
             stale += sorted((out_dir / 'fits').glob('*.npz'))
             for p in stale:
                 p.unlink()

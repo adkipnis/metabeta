@@ -1,7 +1,7 @@
 """
 warmstart_nuts.py — Warm-started NUTS vs cold NUTS baseline on real data.
 
-cold_std baseline is always loaded from test.fit.npz (NUTS, ta=0.80, tune=2000,
+cold_std baseline is always loaded from test.nuts.npz (NUTS, ta=0.80, tune=2000,
 draws=1000, chains=4) — no NUTS is re-run by this script.
 
 Conditions (warm only)
@@ -52,10 +52,11 @@ from tabulate import tabulate
 from metabeta.evaluation.summary import getSummary
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.warmnuts import WarmNuts
-from metabeta.simulation.fit import buildPymc, extractAll
+from metabeta.utils.pymc import buildPymc, extractAll
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.dataloader import Collection, collateGrouped
-from metabeta.utils.evaluation import Proposal
+from metabeta.utils.results import Proposal
+from metabeta.utils.fits import fitPath, loadFits
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.padding import padToModel, unpad
 from metabeta.utils.warmfit import cachePath, loadFit, saveFit
@@ -107,7 +108,7 @@ def setup() -> argparse.Namespace:
     p.add_argument('--n_datasets', type=int, default=16)
     p.add_argument('--conditions', nargs='*', default=['warm_2000'],
                    choices=[c.label for c in CONDITIONS],
-                   help='warm conditions to run (cold_std always loaded from test.fit.npz)')
+                   help='warm conditions to run (cold_std always loaded from test.nuts.npz)')
     p.add_argument('--seed',       type=int, default=42)
     p.add_argument('--refit',        action='store_true', help='ignore cache')
     p.add_argument('--benchmark_mb', action='store_true',
@@ -152,14 +153,14 @@ def loadData(
 
 
 def loadFitDatasets(
-    fit_path: Path, n_limit: int, max_d: int, max_q: int
+    data_path: Path, n_limit: int, max_d: int, max_q: int
 ) -> tuple[dict, list[dict]]:
-    """Load datasets from a .fit.npz file, padded to model capacity.
+    """Load datasets from a test.npz file, padded to model capacity.
 
     Datasets whose d or q exceed the model's capacity are skipped.
     Returns (tensor_batch, list of unpadded dicts) — same contract as loadData.
     """
-    with np.load(fit_path, allow_pickle=True) as raw:
+    with np.load(data_path, allow_pickle=True) as raw:
         raw = dict(raw)
     n_use = min(len(raw['d']), n_limit)
     col_items: list[dict] = []
@@ -545,19 +546,20 @@ def printAnalysis(results: list[dict], active_conds: list[str]) -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Import cold_std from test.fit.npz
+# Import cold_std from test.nuts.npz
 # ---------------------------------------------------------------------------
 
 
-def _importColdStd(test_fit_path: Path, fits_dir: Path, n: int, refit: bool = False) -> list[dict]:
-    """Load NUTS fits from test.fit.npz, cache ALL datasets as cold_std, return first n.
+def _importColdStd(data_path: Path, fits_dir: Path, n: int, refit: bool = False) -> list[dict]:
+    """Load NUTS fits from test.nuts.npz, cache ALL datasets as cold_std, return first n.
 
     All datasets are cached (free — no NUTS re-running) so plotting scripts see the
     full distribution. Only the first n results are returned for quality comparison
     against warm conditions.
     """
-    with np.load(test_fit_path, allow_pickle=True) as f:
+    with np.load(data_path, allow_pickle=True) as f:
         raw = dict(f)
+    raw.update(loadFits(data_path, 'nuts'))
     n_total = len(raw['d'])
 
     results = []
@@ -638,18 +640,18 @@ def run(args: argparse.Namespace) -> None:
         )
         n_ds = len(ds_list)
 
-        test_fit_path = data_dir / 'test.fit.npz'
-        if not test_fit_path.exists():
-            print(f'  [warn] test.fit.npz not found in {data_dir} — skipping')
+        test_path = data_dir / 'test.npz'
+        if not fitPath(test_path, 'nuts').exists():
+            print(f'  [warn] test.nuts.npz not found in {data_dir} — skipping')
             continue
 
         if args.benchmark_mb and model is not None:
-            test_tb, test_ds = loadFitDatasets(test_fit_path, args.n_datasets, max_d, max_q)
+            test_tb, test_ds = loadFitDatasets(test_path, args.n_datasets, max_d, max_q)
             print(f'  [mb] benchmarking {len(test_ds)} test datasets...')
             _benchmarkMB(model, test_tb, test_ds, fits_dir, refit=args.refit)
 
-        print(f'\n--- cold_std: imported from test.fit.npz ---')
-        all_results: list[dict] = _importColdStd(test_fit_path, fits_dir, n_ds, args.refit)
+        print(f'\n--- cold_std: imported from test.nuts.npz ---')
+        all_results: list[dict] = _importColdStd(test_path, fits_dir, n_ds, args.refit)
 
         for cond in cold_live_conds:
             print(

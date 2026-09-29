@@ -33,18 +33,28 @@ from metabeta.utils.sampling import sampleCounts
 # Source datasets (sorted): 556_analcatdata_apnea2, 557_analcatdata_apnea1,
 #   arabidopsis, chem97, epil, grouseticks, mmmec, owls, salamanders.
 # All use q=1 (random intercept). Range: 0.48-1.57, mean≈0.82, p95≈1.53.
-NUTS_ETA_SDS = np.array([
-    0.57, 0.61, 0.87, 0.48, 0.91, 1.57, 0.89, 0.53, 1.47,
-])
+NUTS_ETA_SDS = np.array(
+    [
+        0.57,
+        0.61,
+        0.87,
+        0.48,
+        0.91,
+        1.57,
+        0.89,
+        0.53,
+        1.47,
+    ]
+)
 
 CONFIGS = [
-    dict(label='small  (d=2,  q=1, m=20)',  d=2,  q=1, m=20,  n_per_group=10),
-    dict(label='small  (d=4,  q=2, m=30)',  d=4,  q=2, m=30,  n_per_group=8),
-    dict(label='medium (d=6,  q=1, m=60)',  d=6,  q=1, m=60,  n_per_group=12),
-    dict(label='medium (d=8,  q=3, m=80)',  d=8,  q=3, m=80,  n_per_group=10),
+    dict(label='small  (d=2,  q=1, m=20)', d=2, q=1, m=20, n_per_group=10),
+    dict(label='small  (d=4,  q=2, m=30)', d=4, q=2, m=30, n_per_group=8),
+    dict(label='medium (d=6,  q=1, m=60)', d=6, q=1, m=60, n_per_group=12),
+    dict(label='medium (d=8,  q=3, m=80)', d=8, q=3, m=80, n_per_group=10),
     dict(label='large  (d=12, q=2, m=100)', d=12, q=2, m=100, n_per_group=15),
-    dict(label='huge   (d=14, q=1, m=80)',  d=14, q=1, m=80,  n_per_group=12),
-    dict(label='huge   (d=16, q=4, m=60)',  d=16, q=4, m=60,  n_per_group=10),
+    dict(label='huge   (d=14, q=1, m=80)', d=14, q=1, m=80, n_per_group=12),
+    dict(label='huge   (d=16, q=4, m=60)', d=16, q=4, m=60, n_per_group=10),
 ]
 
 N_SAMPLES = 300
@@ -66,19 +76,21 @@ def setup() -> argparse.Namespace:
 
 def _loadNutsEtaSds() -> np.ndarray:
     """Compute sd(eta_hat) per dataset from the saved NUTS reference fit."""
-    from pathlib import Path
     from metabeta.utils.experiments import DATA_DIR
+    from metabeta.utils.fits import fitPath, loadFits
 
-    fit_path = DATA_DIR / 'real-p-reference' / 'test.fit.npz'
+    data_path = DATA_DIR / 'real-p-reference' / 'test.npz'
+    fit_path = fitPath(data_path, 'nuts')
     if not fit_path.exists():
         raise FileNotFoundError(
             f'NUTS reference not found: {fit_path}\n'
             'Run first:  uv run python experiments/simulation/real_nuts_reference.py'
             ' --y-type count --data-id real-p-reference'
         )
-    with np.load(fit_path, allow_pickle=True) as data:
-        nuts_ffx = data['nuts_ffx']      # (n_ds, d_max, n_samples)
-        nuts_rfx = data['nuts_rfx']      # (n_ds, q_max, m_max, n_samples)
+    nuts = loadFits(data_path, 'nuts', keys=('nuts_ffx', 'nuts_rfx'))
+    nuts_ffx = nuts['nuts_ffx']          # (n_ds, d_max, n_samples)
+    nuts_rfx = nuts['nuts_rfx']          # (n_ds, q_max, m_max, n_samples)
+    with np.load(data_path, allow_pickle=True) as data:
         X_all = data['X']                # (n_ds, n_max, d_max)
         groups_all = data['groups']      # (n_ds, n_max)
         n_arr = data['n']
@@ -177,18 +189,14 @@ def main() -> None:
         all_clips.append(clips)
         frac_clipped = float(np.mean(clips > 0))
         p95_clip = float(np.quantile(clips, 0.95))
-        print(
-            f'{label:<32}  {_quantile_str(sds)}  {frac_clipped:6.1%}  {p95_clip:8.4f}'
-        )
+        print(f'{label:<32}  {_quantile_str(sds)}  {frac_clipped:6.1%}  {p95_clip:8.4f}')
 
     all_sds_flat = np.concatenate(all_sds)
     all_clips_flat = np.concatenate(all_clips)
     print()
     frac_clipped = float(np.mean(all_clips_flat > 0))
     p95_clip = float(np.quantile(all_clips_flat, 0.95))
-    print(
-        f'{"overall":<32}  {_quantile_str(all_sds_flat)}  {frac_clipped:6.1%}  {p95_clip:8.4f}'
-    )
+    print(f'{"overall":<32}  {_quantile_str(all_sds_flat)}  {frac_clipped:6.1%}  {p95_clip:8.4f}')
 
     print()
     print('Clip fraction summary (fraction of obs with eta > clip max):')

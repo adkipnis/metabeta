@@ -21,7 +21,7 @@ genuine modelling error, and the question is whether metabeta degrades in step w
 Each (size, family) source produces standard-format data dirs under outputs/data/:
 
     {size}-{fam}-priorbase      unperturbed baseline: slice of the original test.npz AND its
-                                test.fit.npz (existing NUTS fits reused — zero refits)
+                                test.nuts.npz (existing NUTS fits reused — zero refits)
     {size}-{fam}-{tag}          one dir per condition (tau033, tau3, mu1, mu2, famrot),
                                 test.npz only — NUTS fits to be produced with fit.py
 
@@ -52,6 +52,7 @@ import yaml
 from metabeta.utils.constants import FFX_FAMILIES, SIGMA_FAMILIES
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.experiments import DATA_DIR
+from metabeta.utils.fits import availableFits, fitPath, saveFits
 
 # sibling experiment script (this directory is sys.path[0] at run time); the npz slicing,
 # index selection and stale-key lists are identical for both misspecification studies.
@@ -178,9 +179,9 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
     src_id = f'{size}-{family}-sampled'
     src_dir = DATA_DIR / src_id
     test_path = src_dir / 'test.npz'
-    fit_path = src_dir / 'test.fit.npz'
+    fit_path = fitPath(test_path, 'nuts')
     if not test_path.exists() or not fit_path.exists():
-        logger.warning('%s: test.npz or test.fit.npz missing — skipping', src_id)
+        logger.warning('%s: test.npz or test.nuts.npz missing — skipping', src_id)
         return []
 
     with np.load(test_path, allow_pickle=True) as z:
@@ -198,9 +199,8 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
     else:
         base_dir.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(base_dir / 'test.npz', **_dropStaleKeys(source, idx))
-        # advi_/laplace_ fits are irrelevant here and dominate the file size — drop them.
-        sliced_fit = sliceNpzStreaming(fit_path, idx, drop_prefixes=('advi_', 'laplace_'))
-        np.savez_compressed(base_dir / 'test.fit.npz', **sliced_fit)
+        # only the NUTS fits travel with the baseline; saveFits stamps the new test.npz's checksum
+        saveFits(base_dir / 'test.npz', 'nuts', sliceNpzStreaming(fit_path, idx), force=True)
         writeConfig(
             src_dir, base_dir, base_id, cfg.n_datasets, BASE_TAG, 1.0, 0.0, False, idx, cfg.seed
         )
@@ -219,7 +219,7 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
         if out_dir.exists():
             # a rewritten prior invalidates any fits of the previous data — remove them so
             # stale per-index fit files cannot be reintegrated against the new prior
-            stale = [p for p in [out_dir / 'test.fit.npz'] if p.exists()]
+            stale = [fitPath(out_dir / 'test.npz', t) for t in availableFits(out_dir / 'test.npz')]
             stale += sorted((out_dir / 'fits').glob('*.npz'))
             for p in stale:
                 p.unlink()

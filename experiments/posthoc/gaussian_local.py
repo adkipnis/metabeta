@@ -38,10 +38,11 @@ from metabeta.utils.config import assimilateConfig, loadDataConfig
 from metabeta.utils.templates import loadConfigFromCheckpoint
 from metabeta.utils.dataloader import Dataloader, toDevice
 from metabeta.utils.preprocessing import rescaleData
-from metabeta.utils.evaluation import Proposal, concatProposalsBatch, dictMean
+from metabeta.utils.evaluation import dictMean
+from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.models.approximator import Approximator
 from metabeta.evaluation.summary import getSummary
-from metabeta.posthoc.gaussian_local import gaussianCeiling, gaussianHybrid
+from metabeta.analytical.lmm.gaussian_local import gaussianCeiling, gaussianHybrid
 from metabeta.utils.experiments import dataFilePath, loadApproximator
 
 logger = logging.getLogger('gaussian_ceiling')
@@ -103,7 +104,7 @@ def _loadData(cfg: argparse.Namespace) -> tuple[Dataloader, Dataloader]:
     data_id = data_cfg_valid['data_id']
 
     def _dl(partition: str) -> Dataloader:
-        path = dataFilePath(data_id, partition, fit=partition == 'test')
+        path = dataFilePath(data_id, partition)
         assert path.exists(), f'data not found: {path}'
         return Dataloader(path, batch_size=cfg.batch_size, sortish=True)
 

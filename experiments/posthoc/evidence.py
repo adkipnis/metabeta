@@ -10,7 +10,7 @@ Per dataset (standardized space — the space the flow density lives in):
   IS         : log p(D) ≈ logsumexp(log_w) - log S from ImportanceSampler(marginal=True),
                for pool prefixes S in --pool-sizes (flow draws are i.i.d.).
   bridgeNuts : Meng-Wong iterative bridge sampling on the cached NUTS draws
-               (test.fit.npz), warped-Gaussian proposal fitted on one half of the draws
+               (test.nuts.npz), warped-Gaussian proposal fitted on one half of the draws
                and evaluated on the other, with the halves swapped as a noise floor.
                The unnormalized target reuses ImportanceSampler.unnormalizedPosterior
                (marginal likelihood + priors) in unconstrained coordinates.
@@ -76,6 +76,7 @@ from metabeta.utils.config import ApproximatorConfig  # noqa: E402
 from metabeta.utils.constants import hasSigmaEps  # noqa: E402
 from metabeta.utils.psis import psislw  # noqa: E402
 from metabeta.utils.dataloader import Collection, collateGrouped, toDevice  # noqa: E402
+from metabeta.utils.fits import loadFits  # noqa: E402
 from metabeta.utils.families import logProbCorrRfx  # noqa: E402
 from metabeta.utils.preprocessing import logJacobianStandardization  # noqa: E402
 from metabeta.utils.regularization import (  # noqa: E402
@@ -102,7 +103,7 @@ def setup() -> argparse.Namespace:
     p.add_argument('--family', default='normal', choices=list(FAMILIES))
     p.add_argument('--sizes', nargs='+', default=['small'], choices=SIZES)
     p.add_argument('--n-inner', type=int, default=IS2_N_INNER, help='IS² draws per group (GLMMs)')
-    p.add_argument('--split', default='test', choices=['test'], help='only test.fit.npz carries NUTS draws')
+    p.add_argument('--split', default='test', choices=['test'], help='only the test partition carries NUTS draws (test.nuts.npz)')
     p.add_argument('--prefix', default='latest', help='checkpoint prefix (latest = the checkpoint of the paper tables)')
     p.add_argument('--n-datasets', type=int, default=32, help='datasets per size (first n of the split)')
     p.add_argument('--pool-sizes', nargs='+', type=int, default=[1000, 2000, 4000], help='IS pool prefixes; the largest is drawn')
@@ -135,8 +136,7 @@ def loadModel(ckpt: Path) -> tuple[Approximator, int]:
 def loadNuts(npz_path: Path, n_ds: int) -> dict[str, np.ndarray]:
     """Global NUTS draws (standardized space) and diagnostics for the first n_ds datasets.
 
-    Each NpzFile member decompresses in full on access, so every key is read once; the
-    rfx draws (GBs) are never touched.
+    Every key is read once; the rfx draws (GBs) are never touched.
     """
     keys = (
         'nuts_ffx',
@@ -147,8 +147,7 @@ def loadNuts(npz_path: Path, n_ds: int) -> dict[str, np.ndarray]:
         'nuts_ess',
         'nuts_divergences',
     )
-    with np.load(npz_path, allow_pickle=True) as data:
-        return {k: np.asarray(data[k][:n_ds]) for k in keys if k in data.files}
+    return {k: v[:n_ds] for k, v in loadFits(npz_path, 'nuts', keys=keys).items()}
 
 
 def loadCsv(path: Path) -> pd.DataFrame:
@@ -746,7 +745,7 @@ def runSize(size: str, args: argparse.Namespace) -> None:
     seed = BEST_SEEDS[(args.family, size)]
     ckpt = _ckpt_dir(args.family, size, seed) / f'{args.prefix}.pt'
     data_dir = DATA_DIR / f'{size}-{args.family[0]}-sampled'
-    npz_path = data_dir / f'{args.split}.fit.npz'
+    npz_path = data_dir / f'{args.split}.npz'
     label = f'{args.family.capitalize()} ({size}), {args.split}, n={args.n_datasets}'
     if lf != 0:
         label += f', IS² K={args.n_inner}'
@@ -754,7 +753,7 @@ def runSize(size: str, args: argparse.Namespace) -> None:
 
     model, epoch = loadModel(ckpt)
     model.to(args.device)
-    col = Collection(npz_path, permute=False, exclude_prefixes=('nuts_', 'advi_', 'laplace_'))
+    col = Collection(npz_path, permute=False)
     n_ds = min(args.n_datasets, len(col))
     nuts = loadNuts(npz_path, n_ds)
     print(f'model epoch={epoch}  d_ffx={model.d_ffx}  d_rfx={model.d_rfx}  datasets={n_ds}')
