@@ -201,65 +201,45 @@ class EvaluationSummary:
         return cls(per_dataset=per_dataset, aggregated=aggregated, tpd=d.get('tpd'))
 
 
-_NUTS_THRESHOLDS = {
-    # Intended for posterior shape comparisons: NUTS must be a reliable reference.
-    'strict': dict(div_rate=0.005, rhat=1.01, ess=400, td=0.05),
-    # Intended for LOO-NLL comparisons: removes only directionally-biased failures
-    # (high divergence rate → posterior too concentrated → LOO-NLL too optimistic).
-    # Keeps ~92% of datasets on small-n-sampled.
-    'liberal': dict(div_rate=0.020, rhat=1.05, ess=200, td=0.20),
-}
+# NUTS convergence (Vehtari et al. 2021, Bayesian Analysis 16(2), doi:10.1214/20-BA1221):
+# rank-normalised R-hat <= 1.01 and bulk and tail ESS >= 400 for every sampled variable.
+# Divergences must be absent; at the highest budget level a rate of 0.1 % is tolerated, since
+# with target_accept 0.99 a divergence is a tiny step-size artefact rather than a missed
+# region. Tree-depth saturation is an efficiency signal and is reported, not filtered.
+RHAT_MAX = 1.01
+ESS_MIN = 400
+DIVERGENCE_RATE_MAX = {0: 0.0, 1: 0.0, 2: 1e-3}
 
 
-def nutsConvergeMask(
-    batch: dict[str, torch.Tensor],
-    mode: str = 'strict',
-) -> np.ndarray | None:
-    """Boolean mask (shape b) that is True for NUTS-converged datasets.
+def nutsConverged(diag: dict[str, np.ndarray], prefix: str = 'nuts') -> np.ndarray:
+    """Boolean mask (shape b) of NUTS runs that pass the convergence criterion.
 
-    Args:
-        batch: Dataset batch containing nuts_* diagnostic arrays.
-        mode:  'strict' (default) — for posterior shape comparisons, requires
-                   div_rate ≤ 0.5%, rhat ≤ 1.01, ESS ≥ 400, td_sat ≤ 5%.
-               'liberal' — for LOO-NLL comparisons, removes only clear failures:
-                   div_rate ≤ 2%, rhat ≤ 1.05, ESS ≥ 200, td_sat ≤ 20%.
+    ``diag`` holds the ``{prefix}_*`` arrays of a fit file with the dataset axis first:
+    ``rhat``, ``ess``, ``ess_tail`` (b, n_params; padded entries <= 0 are ignored),
+    ``divergences`` (b, chains), ``draws`` and ``level`` (b,).
     """
-    if 'nuts_divergences' not in batch:
-        return None
 
-    thr = _NUTS_THRESHOLDS[mode]
-
-    def _field(key: str) -> np.ndarray | None:
-        return batch[key].numpy().astype(np.float64) if key in batch else None
-
-    def _param_stat(arr: np.ndarray | None, fn) -> np.ndarray | None:
-        if arr is None:
-            return None
-        a = arr.copy()
+    def stat(key: str, fn) -> np.ndarray:
+        a = np.asarray(diag[f'{prefix}_{key}'], dtype=np.float64).copy()
         a[a <= 0] = np.nan
         return fn(a, axis=-1)
 
-    div_arr = batch['nuts_divergences'].numpy()                    # (b, chains)
-    total_div = div_arr.sum(-1)                                    # (b,)
-    n_chains = div_arr.shape[-1]
-    n_draws = int(batch['nuts_draws'].item()) if 'nuts_draws' in batch else 1000
-    total_samples = n_chains * n_draws
+    divergences = np.asarray(diag[f'{prefix}_divergences'])  # (b, chains)
+    total = divergences.shape[-1] * np.asarray(diag[f'{prefix}_draws']).reshape(-1)
+    level = np.asarray(diag[f'{prefix}_level']).reshape(-1).astype(int)
+    div_max = np.vectorize(DIVERGENCE_RATE_MAX.get)(level)
+    ok_div = divergences.sum(-1) / total <= div_max
+    ok_rhat = stat('rhat', np.nanmax) <= RHAT_MAX
+    ok_ess = stat('ess', np.nanmin) >= ESS_MIN
+    ok_ess_tail = stat('ess_tail', np.nanmin) >= ESS_MIN
+    return ok_div & ok_rhat & ok_ess & ok_ess_tail
 
-    max_rhat = _param_stat(_field('nuts_rhat'), np.nanmax)
-    min_ess = _param_stat(_field('nuts_ess'), np.nanmin)
-    min_ess_tail = _param_stat(_field('nuts_ess_tail'), np.nanmin)
-    treedepth = _field('nuts_max_treedepth')
-    mean_treedepth_sat = treedepth.mean(-1) if treedepth is not None else None
 
-    b = len(total_div)
-    f_rhat = (max_rhat > thr['rhat']) if max_rhat is not None else np.zeros(b, bool)
-    f_div = (total_div / total_samples) > thr['div_rate']
-    f_tree = (
-        (mean_treedepth_sat > thr['td']) if mean_treedepth_sat is not None else np.zeros(b, bool)
-    )
-    f_ess = (min_ess < thr['ess']) if min_ess is not None else np.zeros(b, bool)
-    f_ess_tail = (min_ess_tail < thr['ess']) if min_ess_tail is not None else np.zeros(b, bool)
-    return ~(f_rhat | f_div | f_tree | f_ess | f_ess_tail)
+def nutsConvergeMask(batch: dict[str, torch.Tensor], prefix: str = 'nuts') -> np.ndarray:
+    """``nutsConverged`` on a collated batch (tensors, dataset axis first)."""
+    keys = ('rhat', 'ess', 'ess_tail', 'divergences', 'draws', 'level')
+    diag = {f'{prefix}_{k}': batch[f'{prefix}_{k}'].cpu().numpy() for k in keys}
+    return nutsConverged(diag, prefix)
 
 
 def subsetProposal(proposal: 'Proposal', mask: np.ndarray) -> 'Proposal':
