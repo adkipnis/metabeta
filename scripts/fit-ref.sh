@@ -9,7 +9,8 @@
 #
 # Methods: nuts (levels 0|1|2, 4 cores), advi (both snapshots in one run), pathfinder
 # (levels 0|1), laplace; the last three use one core. --idx refits selected datasets only,
-# the default array covers datasets 0-511. Afterwards: metabeta/simulation/check.py.
+# the default array covers datasets 0-511. --qos cpu_preemptible runs under the second user
+# cap (200 jobs) next to cpu_normal (100). Afterwards: metabeta/simulation/check.py.
 
 set -euo pipefail
 
@@ -17,6 +18,7 @@ METHOD=""
 LEVEL=0
 TAG=""
 PARTITION="test"
+QOS="cpu_normal"
 N_DATASETS=512
 IDX_VALUES=()
 
@@ -26,6 +28,7 @@ while [[ $# -gt 0 ]]; do
         --level) LEVEL="$2"; shift 2 ;;
         --data_id) TAG="$2"; shift 2 ;;
         --partition) PARTITION="$2"; shift 2 ;;
+        --qos) QOS="$2"; shift 2 ;;
         --n_datasets) N_DATASETS="$2"; shift 2 ;;
         --idx)
             shift
@@ -80,7 +83,7 @@ if [[ -z "${SLURM_ARRAY_TASK_ID:-}" ]]; then
         --error="$LOG_DIR/%A_%a.err" \
         --array="$ARRAY" \
         --partition=cpu_p \
-        --qos=cpu_normal \
+        --qos="$QOS" \
         --nodes=1 \
         --cpus-per-task="$CPUS" \
         --mem=16G \
