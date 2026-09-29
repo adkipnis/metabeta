@@ -10,7 +10,10 @@
 # Methods: nuts (levels 0|1|2, 4 cores), advi (both snapshots in one run), pathfinder
 # (levels 0|1), laplace; the last three use one core. --idx refits selected datasets only,
 # the default array covers datasets 0-511. --qos cpu_preemptible runs under the second user
-# cap (200 jobs) next to cpu_normal (100). Afterwards: metabeta/simulation/check.py.
+# cap (200 jobs) next to cpu_normal (100). --warm ~/pytensor_cache_{n|b|p}.tar (from
+# scripts/warm-cache.sh) starts every task from that PyTensor cache instead of an empty one,
+# so the recorded wall time is that of a user who has fitted one such GLMM before.
+# Afterwards: metabeta/simulation/check.py.
 
 set -euo pipefail
 
@@ -19,6 +22,7 @@ LEVEL=0
 TAG=""
 PARTITION="test"
 QOS="cpu_normal"
+WARM=""
 N_DATASETS=512
 IDX_VALUES=()
 
@@ -29,6 +33,7 @@ while [[ $# -gt 0 ]]; do
         --data_id) TAG="$2"; shift 2 ;;
         --partition) PARTITION="$2"; shift 2 ;;
         --qos) QOS="$2"; shift 2 ;;
+        --warm) WARM="$2"; shift 2 ;;
         --n_datasets) N_DATASETS="$2"; shift 2 ;;
         --idx)
             shift
@@ -59,6 +64,7 @@ esac
 for value in "${IDX_VALUES[@]}"; do
     [[ "$value" =~ ^[0-9]+$ ]] || { echo "Invalid idx value: $value" >&2; exit 1; }
 done
+[[ -z "$WARM" || -f "$WARM" ]] || { echo "Warm cache not found: $WARM" >&2; exit 1; }
 
 JOB_NAME="${METHOD}${LEVEL}"
 LOG_DIR="logs/$JOB_NAME"
@@ -88,7 +94,8 @@ if [[ -z "${SLURM_ARRAY_TASK_ID:-}" ]]; then
         --cpus-per-task="$CPUS" \
         --mem=16G \
         --time="$TIME" \
-        "$0" --method "$METHOD" --level "$LEVEL" --data_id "$TAG" --partition "$PARTITION" "${MAP_ARGS[@]}"
+        "$0" --method "$METHOD" --level "$LEVEL" --data_id "$TAG" --partition "$PARTITION" \
+            ${WARM:+--warm "$WARM"} "${MAP_ARGS[@]}"
     exit 0
 fi
 
@@ -113,13 +120,16 @@ VENV="$HOME/metabeta/.venv-apptainer"
 # outputs/data is symlinked to workspace storage; bind it so the link resolves in-container
 DATA_ROOT="/lustre/groups/hcai/workspace/alexander.kipnis/datasets"
 
-JOB_TMPDIR="$HOME/tmp/pytensor_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
+# node-local compile directory; empty (cold) unless a warm cache is unpacked into it
+JOB_TMPDIR="${SLURM_TMPDIR:-/tmp}/pytensor_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
 mkdir -p "$JOB_TMPDIR"
 trap 'rm -rf "$JOB_TMPDIR"' EXIT
+[[ -n "$WARM" ]] && tar xf "$WARM" -C "$JOB_TMPDIR"
 
 apptainer exec \
   --bind "$HOME:$HOME" \
   --bind "$DATA_ROOT:$DATA_ROOT" \
+  --bind /tmp:/tmp \
   "$SIF" \
   bash -lc "
     set -euo pipefail
@@ -141,6 +151,7 @@ apptainer exec \
     echo 'PYTENSOR_FLAGS:' \$PYTENSOR_FLAGS
     echo 'SLURM_CPUS_PER_TASK:' ${SLURM_CPUS_PER_TASK}
     echo 'Fitting dataset idx:' '$FIT_IDX'
+    echo 'warm cache:' '${WARM:-none}'
 
     python metabeta/simulation/fit.py \
       --size '$SIZE' \
