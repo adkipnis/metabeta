@@ -232,9 +232,9 @@ def _sliceDraws(p: Proposal, s: int) -> Proposal:
 
 
 def _nutsSummary(data_path: Path, prop, batch, lf: int, chunk: int):
-    """NUTS LOO is checkpoint-independent and already cached full-set as summary_test_nuts.pt;
+    """NUTS LOO is checkpoint-independent and already cached full-set as summary_test_nuts2.pt;
     load it directly (25 min/size to recompute) and only fall back to computing if absent."""
-    p = data_path.parent / 'summary_test_nuts.pt'
+    p = data_path.parent / 'summary_test_nuts2.pt'
     if p.exists():
         try:
             s = EvaluationSummary.load(p)
@@ -245,7 +245,7 @@ def _nutsSummary(data_path: Path, prop, batch, lf: int, chunk: int):
         except (KeyError, ValueError, RuntimeError) as exc:
             logger.warning('%s: NUTS summary load failed (%s) — recomputing', p, exc)
     return loadOrComputeSummary(
-        prop, batch, data_path, 'nuts', None, lf, True, summary_chunk_size=chunk
+        prop, batch, data_path, 'nuts2', None, lf, True, summary_chunk_size=chunk
     )
 
 
@@ -427,7 +427,7 @@ def distributionTable(per_size: dict[str, np.ndarray], edges: list[float], unit_
 def _loadFit(data_path: Path, B: int, max_d: int, max_q: int) -> dict:
     # only the NUTS draws are scored; the ADVI and Laplace rfx draws are 15 GiB each (float64)
     # at huge, so their fit files are not loaded
-    col_fit = Collection(data_path, permute=False, max_d=max_d, max_q=max_q, fits=('nuts',))
+    col_fit = Collection(data_path, permute=False, max_d=max_d, max_q=max_q, fits=('nuts2',))
     return collateGrouped([col_fit[i] for i in range(B)])
 
 
@@ -463,7 +463,7 @@ def collectSize(cfg, size: str, device: torch.device) -> dict | None:
     # The NUTS draws of the fit file are held in RAM twice (Collection, then collation): read it
     # here for the convergence mask only, and again just for the NUTS scoring.
     fit_batch = _loadFit(data_path, B, max_d, max_q)
-    conv = nutsConvergeMask(fit_batch, mode=cfg.convergence_mode)
+    conv = nutsConvergeMask(fit_batch, 'nuts2')
     conv = np.ones(B, dtype=bool) if conv is None else conv.astype(bool)
     del fit_batch
 
@@ -548,12 +548,12 @@ def collectSize(cfg, size: str, device: torch.device) -> dict | None:
     score(IMH_LABEL, proposal_imh, imh_method)
     del proposal_imh
 
-    proposal_nuts = fit2proposal(_loadFit(data_path, B, max_d, max_q), 'nuts')
-    # NUTS stores ~4000 draws; subsample to n_samples draws, ample for coverage/quantiles/means.
+    proposal_nuts = fit2proposal(_loadFit(data_path, B, max_d, max_q), 'nuts2')
+    # NUTS stores 8000 draws; subsample to n_samples draws, ample for coverage/quantiles/means.
     if proposal_nuts.n_samples > cfg.n_samples:
         proposal_nuts = _sliceDraws(proposal_nuts, cfg.n_samples)
     proposal_nuts.rescale(sd_y)
-    score(NUTS_LABEL, proposal_nuts, 'nuts')
+    score(NUTS_LABEL, proposal_nuts, 'nuts2')
     return out
 
 
@@ -584,7 +584,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--summary_chunk_size', type=int, default=4)
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--convergence_mode', type=str, default='strict', choices=['liberal', 'strict'])
     parser.add_argument('--predictive', action=argparse.BooleanOptionalAction, default=True,
                         help='Compute per-dataset LOO-NLL (cached; --no-predictive to skip).')
     parser.add_argument('--distribution_only', action='store_true')

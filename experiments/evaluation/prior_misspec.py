@@ -102,7 +102,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--summary_chunk_size', type=int, default=4)
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--convergence_mode', type=str, default='strict', choices=['liberal', 'strict'])
     parser.add_argument('--methods', type=str, nargs='*', default=None,
                         help='refinements added as extra rows (default: family preset); MB always included')
     parser.add_argument('--per_size', action='store_true',
@@ -179,7 +178,7 @@ def main() -> None:
 
     md = [
         f'# Prior misspecification ({family})\n',
-        f'Sizes: {", ".join(sizes)}. Reference: NUTS ({cfg.convergence_mode}), refit under '
+        f'Sizes: {", ".join(sizes)}. Reference: NUTS, refit under '
         'each perturbed prior. All metrics on the NUTS-converged subset (paired).\n',
         '## MB↔NUTS agreement by perturbation (median ± MAD over converged datasets)\n',
         agree_md,

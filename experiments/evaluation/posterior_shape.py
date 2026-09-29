@@ -78,7 +78,7 @@ def _loadTestData(cfg) -> Dataloader:
     data_id = loadDataConfig(cfg.data_id_valid)['data_id']
     path = dataFilePath(data_id, 'test')
     assert path.exists(), f'data not found: {path}'
-    return Dataloader(path, batch_size=cfg.batch_size, sortish=True, fits=('nuts',))
+    return Dataloader(path, batch_size=cfg.batch_size, sortish=True, fits=('nuts2',))
 
 
 def _loadModel(cfg, device) -> 'Approximator':
@@ -422,9 +422,9 @@ def main() -> None:
     full_batch = dl_test.fullBatch()
     batch_rescaled = rescaleData(full_batch) if cfg.rescale else full_batch
     proposal_mb = _sampleMB(model, dl_test, cfg.n_samples, device, cfg.rescale)
-    proposal_nuts = _batchToProposal(full_batch, 'nuts', cfg.rescale)
+    proposal_nuts = _batchToProposal(full_batch, 'nuts2', cfg.rescale)
 
-    conv_mask = nutsConvergeMask(full_batch)
+    conv_mask = nutsConvergeMask(full_batch, 'nuts2')
     if conv_mask is not None:
         logger.info('Converged NUTS: %d / %d datasets', int(conv_mask.sum()), len(conv_mask))
         batch_rescaled = subsetBatch(batch_rescaled, conv_mask)

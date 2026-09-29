@@ -2,7 +2,7 @@
 experiments/evaluation/agreement_marginals.py — Marginal posterior overlays: MB (IMH-refined) vs NUTS.
 
 For chosen datasets from the pre-generated real-data test batches (outputs/data/
-{size}-{fam}-real/test.npz with its NUTS fits in test.nuts.npz), overlays the marginal posterior
+{size}-{fam}-real/test.npz with the NUTS reference fits in test.nuts2.npz), overlays the marginal posterior
 densities of the IMH-refined MB posterior (purple) and NUTS (golden) for one fixed effect, one
 sigma, one random-effect correlation, and one random effect per dataset (one row each).
 
@@ -13,7 +13,7 @@ written by posterior_eval (loadOrSampleMB / loadOrRefine), so reruns are cheap; 
 miss, MB sampling and IMH refinement run live.
 
 The default datasets are the strongest-agreement examples found on the small-*-real test sets
-(NUTS-converged, strict mode): cane (small-b-real, #67; best correlation agreement) and
+(NUTS-converged): cane (small-b-real, #67; best correlation agreement) and
 respiratory (small-n-real, #262; best overall agreement among q=2 datasets).
 
 Usage (from repo root):
@@ -62,6 +62,7 @@ CKPTS = {
 }
 
 FAMILY = {'n': 'normal', 'b': 'bernoulli', 'p': 'poisson'}
+REFERENCE_TAG = 'nuts2'
 
 COL_MB = '#663399'    # rebeccapurple — metabeta
 COL_NUTS = '#B8860B'  # darkgoldenrod — NUTS
@@ -141,16 +142,18 @@ def loadProposals(
     model, model_cfg = loadModel(ckpt_dir, prefix, device)
 
     col = Collection(
-        data_path, permute=False, max_d=model_cfg.max_d, max_q=model_cfg.max_q, fits=('nuts',)
+        data_path,
+        permute=False,
+        max_d=model_cfg.max_d,
+        max_q=model_cfg.max_q,
+        fits=(REFERENCE_TAG,),
     )
     B_total = len(col)
     batch = collateGrouped([col[i] for i in range(B_total)])
 
-    conv_mask = nutsConvergeMask(batch, mode='strict')
-    idx_full = np.arange(B_total)
-    if conv_mask is not None:
-        batch = subsetBatch(batch, conv_mask)
-        idx_full = idx_full[conv_mask]
+    conv_mask = nutsConvergeMask(batch, REFERENCE_TAG)
+    batch = subsetBatch(batch, conv_mask)
+    idx_full = np.arange(B_total)[conv_mask]
 
     p_mb, _ = loadOrSampleMB(
         model,
@@ -165,7 +168,7 @@ def loadProposals(
         conv_mask,
         warmup=False,
     )
-    p_nuts = fit2proposal(batch, 'nuts')
+    p_nuts = fit2proposal(batch, REFERENCE_TAG)
     p_mb.rescale(batch['sd_y'])
     p_nuts.rescale(batch['sd_y'])
     batch = rescaleData(batch)

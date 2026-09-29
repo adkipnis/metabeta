@@ -125,18 +125,18 @@ def collectCondition(
         return None
     ckpt_dir = _ckpt_dir(FAMILY_NAMES[family], size, seed)
     data_path = DATA_DIR / data_id / 'test.npz'
-    if not fitPath(data_path, 'nuts').exists() or not ckpt_dir.exists():
+    if not fitPath(data_path, 'nuts2').exists() or not ckpt_dir.exists():
         logger.warning('%s: data, NUTS fit or checkpoint missing — skipping', data_id)
         return None
 
     model, model_cfg = loadModel(ckpt_dir, cfg.prefix, device)
     max_d, max_q, lf = model_cfg.max_d, model_cfg.max_q, model_cfg.likelihood_family
 
-    col = Collection(data_path, permute=False, max_d=max_d, max_q=max_q, fits=('nuts',))
+    col = Collection(data_path, permute=False, max_d=max_d, max_q=max_q, fits=('nuts2',))
     B = len(col)
     batch = collateGrouped([col[i] for i in range(B)])
 
-    conv = nutsConvergeMask(batch, mode=cfg.convergence_mode)
+    conv = nutsConvergeMask(batch, 'nuts2')
     if conv is None:
         logger.warning('%s: no NUTS diagnostics; treating all as converged', data_id)
         conv = np.ones(B, dtype=bool)
@@ -155,7 +155,7 @@ def collectCondition(
         device,
         None,
     )
-    proposal_nuts = fit2proposal(batch, 'nuts')
+    proposal_nuts = fit2proposal(batch, 'nuts2')
     proposal_mb.rescale(batch['sd_y'])
     proposal_nuts.rescale(batch['sd_y'])
     batch = rescaleData(batch)
@@ -165,7 +165,7 @@ def collectCondition(
             proposal_nuts,
             batch,
             data_path,
-            'nuts',
+            'nuts2',
             None,
             lf,
             True,
@@ -449,7 +449,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--summary_chunk_size', type=int, default=4)
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--convergence_mode', type=str, default='strict', choices=['liberal', 'strict'])
     parser.add_argument('--methods', type=str, nargs='*', default=None,
                         help='refinements added as extra rows (default: family preset); MB always included')
     parser.add_argument('--per_size', action='store_true',
@@ -521,7 +520,7 @@ def main() -> None:
 
     md = [
         f'# Likelihood misspecification ({family})\n',
-        f'Sizes: {", ".join(sizes)}. Reference: NUTS ({cfg.convergence_mode}). '
+        f'Sizes: {", ".join(sizes)}. Reference: NUTS. '
         f'All metrics on the NUTS-converged subset (paired).\n',
         '## MB↔NUTS agreement by severity (median ± MAD over converged datasets)\n',
         agree_md,

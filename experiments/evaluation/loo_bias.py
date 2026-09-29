@@ -1,14 +1,14 @@
 """
 experiments/evaluation/loo_bias.py
 
-Answers: under which NUTS exclusion criteria is the LOO-NLL comparison least biased?
+Answers: does excluding non-converged NUTS datasets change the LOO-NLL comparison?
 
 Key bias mechanism: NUTS divergences cause the posterior to be too concentrated
 (sampler skips high-curvature tails), making NUTS LOO-NLL artificially low.
-Strict exclusion removes these datasets; liberal keeps them. If the MB-NUTS gap
-changes significantly between modes, the exclusion choice is load-bearing.
+The convergence filter removes these datasets. If the MB-NUTS gap changes
+significantly between all and converged datasets, the exclusion is load-bearing.
 
-Outputs per exclusion mode (none / liberal / strict):
+Outputs per subset (all / converged):
   - N datasets included
   - Median MB and NUTS LOO-NLL
   - Median and IQR of gap (MB − NUTS)  [positive = MB worse]
@@ -53,7 +53,7 @@ logger = logging.getLogger('loo_bias')
 def setup() -> argparse.Namespace:
     # fmt: off
     parser = argparse.ArgumentParser(
-        description='LOO-NLL bias analysis under different NUTS exclusion criteria',
+        description='LOO-NLL bias analysis: all vs NUTS-converged datasets',
         argument_default=argparse.SUPPRESS,
     )
     parser.add_argument('--checkpoint',    type=str, required=True)
@@ -119,10 +119,10 @@ def _sampleMB(model, dl: Dataloader, n_samples: int, device, rescale: bool) -> P
 
 def _nutsProposal(batch: dict, rescale: bool, subsample: int | None = None) -> Proposal:
     """Build Proposal from stored NUTS samples, optionally subsampling draws."""
-    ffx = batch['nuts_ffx']        # (B, S, d)
-    sigma_rfx = batch['nuts_sigma_rfx']  # (B, S, q)
-    has_se = 'nuts_sigma_eps' in batch
-    sigma_eps = batch['nuts_sigma_eps'].unsqueeze(-1) if has_se else None  # (B, S, 1)
+    ffx = batch['nuts2_ffx']        # (B, S, d)
+    sigma_rfx = batch['nuts2_sigma_rfx']  # (B, S, q)
+    has_se = 'nuts2_sigma_eps' in batch
+    sigma_eps = batch['nuts2_sigma_eps'].unsqueeze(-1) if has_se else None  # (B, S, 1)
 
     if subsample is not None and ffx.shape[1] > subsample:
         idx = torch.randperm(ffx.shape[1])[:subsample]
@@ -130,9 +130,9 @@ def _nutsProposal(batch: dict, rescale: bool, subsample: int | None = None) -> P
         sigma_rfx = sigma_rfx[:, idx]
         if sigma_eps is not None:
             sigma_eps = sigma_eps[:, idx]
-        rfx = batch['nuts_rfx'][:, :, idx, :]  # (B, m, S, q)
+        rfx = batch['nuts2_rfx'][:, :, idx, :]  # (B, m, S, q)
     else:
-        rfx = batch['nuts_rfx']
+        rfx = batch['nuts2_rfx']
 
     parts_g = [ffx, sigma_rfx] + ([sigma_eps] if has_se else [])
     global_samples = torch.cat(parts_g, dim=-1)
@@ -140,7 +140,7 @@ def _nutsProposal(batch: dict, rescale: bool, subsample: int | None = None) -> P
         'global': {'samples': global_samples, 'log_prob': torch.zeros(global_samples.shape[:2])},
         'local': {'samples': rfx, 'log_prob': torch.zeros(rfx.shape[:-1])},
     }
-    p = Proposal(proposed, has_sigma_eps=has_se, corr_rfx=batch.get('nuts_corr_rfx'))
+    p = Proposal(proposed, has_sigma_eps=has_se, corr_rfx=batch.get('nuts2_corr_rfx'))
     if rescale:
         p.rescale(batch['sd_y'])
     return p
@@ -148,11 +148,11 @@ def _nutsProposal(batch: dict, rescale: bool, subsample: int | None = None) -> P
 
 def _nutsReff(batch: dict, subsample: int | None = None) -> float:
     """Estimate mean reff = mean_ESS / n_draws for PSIS calibration."""
-    ess = batch['nuts_ess'].numpy().copy().astype(float)
+    ess = batch['nuts2_ess'].numpy().copy().astype(float)
     ess[ess <= 0] = np.nan
     min_ess = np.nanmin(ess, axis=-1)          # (B,)
-    n_draws = int(batch['nuts_draws'].item()) if 'nuts_draws' in batch else 1000
-    n_chains = batch['nuts_divergences'].shape[-1]
+    n_draws = int(batch['nuts2_draws'].item()) if 'nuts2_draws' in batch else 1000
+    n_chains = batch['nuts2_divergences'].shape[-1]
     denom = float(subsample if subsample is not None else n_chains * n_draws)
     reff = float(np.nanmedian(min_ess) / denom)
     return max(min(reff, 1.0), 0.01)
@@ -218,8 +218,7 @@ def printModeComparison(
     k_thr: float = 0.7,
 ) -> None:
     all_mask = np.ones(len(mb_loo), dtype=bool)
-    liberal_mask = nutsConvergeMask(batch, mode='liberal')
-    strict_mask = nutsConvergeMask(batch, mode='strict')
+    conv_mask = nutsConvergeMask(batch, 'nuts2')
     # Filter only on NUTS k: ensures the reference (NUTS LOO) is reliable.
     # MB k is intentionally NOT used as a filter — filtering on MB k would discard
     # datasets where MB's LOO estimate is unreliable, hiding potential MB failures.
@@ -227,18 +226,16 @@ def printModeComparison(
 
     rows = [
         _summaryRow('all (no filter)', mb_loo, nuts_loo, all_mask),
-        _summaryRow('liberal', mb_loo, nuts_loo, liberal_mask),
-        _summaryRow('strict', mb_loo, nuts_loo, strict_mask),
-        _summaryRow(f'strict + NUTS k<{k_thr}', mb_loo, nuts_loo, strict_mask & nuts_k_mask),
-        _summaryRow(f'liberal + NUTS k<{k_thr}', mb_loo, nuts_loo, liberal_mask & nuts_k_mask),
+        _summaryRow('converged', mb_loo, nuts_loo, conv_mask),
+        _summaryRow(f'converged + NUTS k<{k_thr}', mb_loo, nuts_loo, conv_mask & nuts_k_mask),
     ]
-    print('\n=== MB vs NUTS LOO-NLL by exclusion mode (positive gap = MB worse) ===')
+    print('\n=== MB vs NUTS LOO-NLL by subset (positive gap = MB worse) ===')
     print(tabulate(rows, headers='keys', tablefmt='simple'))
     print(
-        f'  k > {k_thr} fraction (all):    MB {np.mean(mb_k > k_thr):.2f}, NUTS {np.mean(nuts_k > k_thr):.2f}'
+        f'  k > {k_thr} fraction (all):       MB {np.mean(mb_k > k_thr):.2f}, NUTS {np.mean(nuts_k > k_thr):.2f}'
     )
     print(
-        f'  k > {k_thr} fraction (strict): MB {np.mean(mb_k[strict_mask] > k_thr):.2f}, NUTS {np.mean(nuts_k[strict_mask] > k_thr):.2f}'
+        f'  k > {k_thr} fraction (converged): MB {np.mean(mb_k[conv_mask] > k_thr):.2f}, NUTS {np.mean(nuts_k[conv_mask] > k_thr):.2f}'
     )
     print(f'  (NUTS k filter only — MB k retained to avoid cherry-picking)\n')
 
@@ -248,8 +245,8 @@ def printDivRateBins(
     nuts_loo: np.ndarray,
     batch: dict,
 ) -> None:
-    div_arr = batch['nuts_divergences'].numpy()
-    n_draws = int(batch['nuts_draws'].item()) if 'nuts_draws' in batch else 1000
+    div_arr = batch['nuts2_divergences'].numpy()
+    n_draws = int(batch['nuts2_draws'].item()) if 'nuts2_draws' in batch else 1000
     div_rate = div_arr.sum(-1) / (div_arr.shape[-1] * n_draws)
     gap = mb_loo - nuts_loo
 
@@ -295,7 +292,7 @@ def main() -> None:
     device = setDevice(cfg.device)
     data_path = _dataPath(cfg)
     # sortish=False: preserve npz order for nutsConvergeMask alignment
-    dl = Dataloader(data_path, batch_size=8, sortish=False, fits=('nuts',))
+    dl = Dataloader(data_path, batch_size=8, sortish=False, fits=('nuts2',))
     model = _loadModel(cfg, device)
 
     full_batch = dl.fullBatch()

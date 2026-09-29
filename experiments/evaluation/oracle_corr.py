@@ -6,7 +6,7 @@ over fixed effects, scales, random effects and the residual scale, and exempt th
 parameters (paper: app:met). This script reports those exempted parameters on their own:
 r / NRMSE / ECE / EACE over the lower-triangle correlation pairs, restricted to the datasets
 whose ground-truth correlation matrix is not the identity (q >= 2 and eta_rfx > 0) and — as
-in the oracle tables — to the NUTS-converged subset.
+in the oracle tables — to the datasets on which the NUTS reference (``nuts2``) converged.
 
 Efficiency: reuses the cached MB samples and post-hoc refinements written by oracle_posterior.py
 (same cache keys), streams one reference method's fit tensors at a time, and computes only the
@@ -96,8 +96,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--decimals',   type=int, default=2)
     parser.add_argument('--rescale',    action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--warmup',     action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument('--convergence_mode', type=str, default='liberal',
-                        choices=['liberal', 'strict'])
     parser.add_argument('--methods',    type=str, nargs='*', default=None,
                         choices=list(SUPPORTED_METHODS),
                         help='Post-hoc refinements on top of raw MB (default: family preset).')
@@ -190,7 +188,6 @@ def evaluateRegime(
     seed: int,
     methods: list[str],
     rescale: bool = True,
-    convergence_mode: str = 'liberal',
     warmup: bool = True,
 ) -> tuple[list[dict], dict[str, int]]:
     """Returns (rows, counts); rows carry the per-pair metrics of every method on the
@@ -206,15 +203,11 @@ def evaluateRegime(
     # Selection: non-identity correlation matrix, and NUTS-converged where diagnostics exist.
     sel = correlatedMask(data_batch)
     n_corr = int(sel.sum())
-    conv_mask = nutsConvergeMaskFromNpz(data_path, cap_mask, convergence_mode)
+    conv_mask = nutsConvergeMaskFromNpz(data_path, cap_mask)
     if conv_mask is not None:
         sel &= conv_mask
         logger.info(
-            '  Correlated: %d / %d; NUTS-converged (%s) among them: %d',
-            n_corr,
-            n_kept,
-            convergence_mode,
-            int(sel.sum()),
+            '  Correlated: %d / %d; NUTS-converged among them: %d', n_corr, n_kept, int(sel.sum())
         )
     else:
         logger.info('  Correlated: %d / %d (no NUTS diagnostics)', n_corr, n_kept)
@@ -457,7 +450,6 @@ def main() -> None:
         seed=cfg.seed,
         methods=methods,
         rescale=cfg.rescale,
-        convergence_mode=cfg.convergence_mode,
         warmup=cfg.warmup,
     )
     if not rows:

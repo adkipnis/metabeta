@@ -173,7 +173,6 @@ def collectSizeRecords(
     batch_size: int,
     seed: int,
     prefix: str,
-    convergence_mode: str,
     summary_chunk_size: int,
     standardize: bool,
     methods: list[str],
@@ -186,26 +185,24 @@ def collectSizeRecords(
     data_id = f'{size}-{family}-real'
     ckpt_dir = CHECKPOINT_DIR / SIZE_MODELS[family][size]
     data_path = DATA_DIR / data_id / 'test.npz'
-    if not fitPath(data_path, 'nuts').exists() or not ckpt_dir.exists():
+    if not fitPath(data_path, 'nuts2').exists() or not ckpt_dir.exists():
         logger.warning('%s: data, NUTS fit or checkpoint missing — skipping', data_id)
         return None
 
     model, model_cfg = loadModel(ckpt_dir, prefix, device)
     max_d, max_q, lf = model_cfg.max_d, model_cfg.max_q, model_cfg.likelihood_family
 
-    col = Collection(data_path, permute=False, max_d=max_d, max_q=max_q, fits=('nuts',))
+    col = Collection(data_path, permute=False, max_d=max_d, max_q=max_q, fits=('nuts2',))
     B_total = len(col)
     batch = collateGrouped([col[i] for i in range(B_total)])
 
     kappa = conditionNumbers(batch, standardize=standardize)
-    conv_mask = nutsConvergeMask(batch, mode=convergence_mode)
+    conv_mask = nutsConvergeMask(batch, 'nuts2')
     if conv_mask is None:
         logger.warning('%s: no NUTS diagnostics; treating all as converged', data_id)
         conv_mask = np.ones(B_total, dtype=bool)
     n_conv = int(conv_mask.sum())
-    logger.info(
-        '%s: %d datasets, %d NUTS-converged (%s)', data_id, B_total, n_conv, convergence_mode
-    )
+    logger.info('%s: %d datasets, %d NUTS-converged', data_id, B_total, n_conv)
 
     active_methods = ['mb'] + validMethods(methods, lf)
     out: dict[str, np.ndarray] = {
@@ -223,7 +220,7 @@ def collectSizeRecords(
     proposal_mb, _ = loadOrSampleMB(
         model, batch_c, data_path, ckpt_dir, prefix, n_samples, batch_size, seed, device, conv_mask
     )
-    proposal_nuts = fit2proposal(batch_c, 'nuts')
+    proposal_nuts = fit2proposal(batch_c, 'nuts2')
     proposal_mb.rescale(batch_c['sd_y'])
     proposal_nuts.rescale(batch_c['sd_y'])
     batch_c = rescaleData(batch_c)
@@ -232,7 +229,7 @@ def collectSizeRecords(
         proposal_nuts,
         batch_c,
         data_path,
-        'nuts',
+        'nuts2',
         conv_mask,
         lf,
         True,
@@ -466,8 +463,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--summary_chunk_size', type=int, default=4)
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--convergence_mode', type=str, default='strict',
-                        choices=['liberal', 'strict'])
     parser.add_argument('--methods', type=str, nargs='*', default=None,
                         choices=[m for m in METHOD_LABELS if m != 'mb'],
                         help='Refinements added as extra rows (default: family preset); MB always included.')
@@ -534,7 +529,6 @@ def main() -> None:
                 cfg.batch_size,
                 cfg.seed,
                 cfg.prefix,
-                cfg.convergence_mode,
                 cfg.summary_chunk_size,
                 cfg.standardize,
                 methods,
@@ -572,7 +566,7 @@ def main() -> None:
     stem = f'condition_number_agreement_{tag}'
     (outdir / f'{stem}.md').write_text(
         f'# MB↔NUTS agreement vs κ₂(X) ({tag})\n\n'
-        f'Sizes: {", ".join(cfg.sizes)} (real-{family}). Reference: NUTS ({cfg.convergence_mode}).\n\n'
+        f'Sizes: {", ".join(cfg.sizes)} (real-{family}). Reference: NUTS.\n\n'
         f'{binned_md}\n\n'
         f'## Bins-free robustness: Spearman ρ(κ, metric)\n\n'
         f'Rank correlation over all converged datasets (no binning). '

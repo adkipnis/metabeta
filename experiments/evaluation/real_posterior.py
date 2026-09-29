@@ -3,9 +3,10 @@ experiments/evaluation/real_posterior.py — Posterior comparison on real data: 
 
 Evaluates a model checkpoint on the pre-generated real-data test batch at
 outputs/data/{size}-{fam}-real/test.npz (NUTS and ADVI fits in its sibling
-test.nuts.npz / test.advi1.npz), comparing MB and ADVI posteriors
-against NUTS as reference.  Since there are no ground-truth parameters, all
-metrics are relative to NUTS; only NUTS-converged datasets are included.
+test.nuts2.npz / test.advi1.npz), comparing MB and ADVI posteriors
+against the NUTS reference (``nuts2``, the top of the budget ladder).  Since there
+are no ground-truth parameters, all metrics are relative to NUTS; only the datasets
+on which the reference converged are included.
 
 Optionally layers post-hoc refinements on the raw MB flow posterior (extra
 ``MB+<method>`` rows), using the same samplers as experiments/posthoc/ablation.py.
@@ -59,6 +60,7 @@ from metabeta.utils.posterior_eval import (
 )
 
 OUT_DIR = RESULTS_DIR
+REFERENCE_TAG = 'nuts2'
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +82,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--batch_size',       type=int, default=8)
     parser.add_argument('--summary_chunk_size', type=int, default=4,
                         help='Datasets per predictive/LOO summary chunk; lower to bound peak '
-                             'memory (NUTS s=4000 tensors are large). Try 1-2 for large/huge.')
+                             'memory (NUTS s=8000 tensors are large). Try 1-2 for large/huge.')
     parser.add_argument('--seed',             type=int, default=0)
     parser.add_argument('--outdir',           type=str, default=str(OUT_DIR))
     parser.add_argument('--verbosity',        type=int, default=1)
@@ -91,8 +93,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--rescale',          action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--warmup',           action=argparse.BooleanOptionalAction, default=True,
                         help='Untimed 1-sample MB warm-up before timed sampling (default: true)')
-    parser.add_argument('--convergence_mode', type=str, default='strict',
-                        choices=['liberal', 'strict'])
     parser.add_argument('--methods',          type=str, nargs='*', default=None,
                         choices=list(SUPPORTED_METHODS),
                         help='Post-hoc refinement methods to run on top of raw MB, evaluated '
@@ -428,7 +428,6 @@ def evaluateReal(
     batch_size: int,
     device: torch.device,
     rescale: bool,
-    convergence_mode: str,
     ckpt_dir: Path,
     prefix: str,
     seed: int,
@@ -436,7 +435,9 @@ def evaluateReal(
     summary_chunk_size: int = 4,
     warmup: bool = True,
 ) -> list[dict]:
-    col = Collection(data_path, permute=False, max_d=max_d, max_q=max_q, fits=('nuts', 'advi1'))
+    col = Collection(
+        data_path, permute=False, max_d=max_d, max_q=max_q, fits=(REFERENCE_TAG, 'advi1')
+    )
     B_total = len(col)
     batch = collateGrouped([col[i] for i in range(B_total)])
     # precomputed analytical stats (beta_est/BLUPs from precompute.py) let MB sampling reuse
@@ -448,23 +449,20 @@ def evaluateReal(
             data_path.parent.name,
         )
 
-    # Restrict to NUTS-converged datasets
-    conv_mask = nutsConvergeMask(batch, mode=convergence_mode)
-    if conv_mask is not None:
-        n_conv = int(conv_mask.sum())
-        logger.info('NUTS convergence (%s): %d / %d', convergence_mode, n_conv, B_total)
-        if n_conv == 0:
-            logger.warning('No converged datasets; aborting.')
-            return []
-        batch = subsetBatch(batch, conv_mask)
-    else:
-        logger.warning('No NUTS convergence diagnostics found; using all %d datasets', B_total)
+    # Restrict to the datasets on which the NUTS reference converged
+    conv_mask = nutsConvergeMask(batch, REFERENCE_TAG)
+    n_conv = int(conv_mask.sum())
+    logger.info('%s converged: %d / %d', REFERENCE_TAG, n_conv, B_total)
+    if n_conv == 0:
+        logger.warning('No converged datasets; aborting.')
+        return []
+    batch = subsetBatch(batch, conv_mask)
 
     B = batch['X'].shape[0]
 
     # Full-test-file masks used to key the per-method summary caches:
     #   MB/NUTS cover the converged subset; ADVI additionally requires a successful fit.
-    conv_full = conv_mask if conv_mask is not None else np.ones(B_total, dtype=bool)
+    conv_full = conv_mask
 
     # ADVI subset (some fits may have failed)
     advi_mask = fitBatchMask(batch, 'advi1')
@@ -488,7 +486,7 @@ def evaluateReal(
         conv_mask,
         warmup=warmup,
     )
-    proposal_nuts = fit2proposal(batch, 'nuts')
+    proposal_nuts = fit2proposal(batch, REFERENCE_TAG)
     proposal_advi = fit2proposal(advi_batch, 'advi1') if advi_batch is not None else None
 
     # Rescale all to original data space before metric computation
@@ -520,7 +518,7 @@ def evaluateReal(
         proposal_nuts,
         batch,
         data_path,
-        'nuts',
+        REFERENCE_TAG,
         conv_full,
         lf,
         rescale,
@@ -579,7 +577,7 @@ def evaluateReal(
         tpd_ref = mb_tpd_arr + refine_s / B
         refined_specs.append((f'MB+{method}', p_ref, batch, tpd_ref, summary_ref))
 
-    nuts_tpd_arr = batch.get('nuts_duration')            # (B,) tensor or None
+    nuts_tpd_arr = batch.get(f'{REFERENCE_TAG}_duration')   # (B,) tensor or None
     advi_mask_t = torch.from_numpy(advi_mask)           # bool tensor for indexing
 
     rows: list[dict] = []
@@ -780,7 +778,6 @@ def main() -> None:
             batch_size=cfg.batch_size,
             device=device,
             rescale=cfg.rescale,
-            convergence_mode=cfg.convergence_mode,
             ckpt_dir=ckpt_dir,
             prefix=cfg.prefix,
             seed=cfg.seed,

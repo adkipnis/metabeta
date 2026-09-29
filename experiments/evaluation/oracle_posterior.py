@@ -10,6 +10,8 @@ Loads NUTS/ADVI/Laplace fits from the per-method test.{tag}.npz files and produc
 Markdown table with mean ± std over parameter dimensions (for NRMSE/ECE/EACE/R) and over
 datasets (for LOO-NLL). Unlike real_posterior.py, the sampled test sets carry ground-truth
 parameters, so the metrics are absolute (vs the true values) rather than relative to NUTS.
+The ``_conv`` tables restrict to the datasets on which the NUTS reference (``nuts2``)
+converged; the NUTS row is the composite ``nuts`` competitor.
 
 MB posterior samples, per-method summaries, and post-hoc refinements are cached next to the
 data (siblings of test.npz), keyed by checkpoint/prefix/n_samples/seed and by the
@@ -37,7 +39,7 @@ from tabulate import tabulate
 
 from metabeta.models.approximator import Approximator
 from metabeta.utils.dataloader import Collection, collateGrouped, subsetBatch
-from metabeta.utils.evaluation import nutsConvergeMask, subsetProposal
+from metabeta.utils.evaluation import nutsConverged, subsetProposal
 from metabeta.utils.results import Proposal
 from metabeta.utils.device import setDevice
 from metabeta.utils.logger import setupLogging
@@ -91,8 +93,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--rescale',          action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--warmup',           action=argparse.BooleanOptionalAction, default=True,
                         help='Untimed 1-sample MB warm-up before timed sampling (default: true)')
-    parser.add_argument('--convergence_mode', type=str, default='liberal',
-                        choices=['liberal', 'strict'])
     parser.add_argument('--methods',          type=str, nargs='*', default=None,
                         choices=list(SUPPORTED_METHODS),
                         help='Post-hoc refinement methods to run on top of raw MB, evaluated '
@@ -160,11 +160,14 @@ def trimBatch(batch: dict[str, torch.Tensor], max_d: int, max_q: int) -> dict[st
     return out
 
 
-# Reference methods as (table label, fit tag). The multi-GB ``{tag}_rfx`` sample tensors live
-# in one test.{tag}.npz per method, so the data-only batch and each single-method fit batch
-# are loaded separately and at most one method's fit tensors are ever materialized at a time
-# (see evaluateRegime). The tag also keys the summary caches.
+# Reference methods as (table label, fit tag); NUTS is the composite ``nuts`` competitor. The
+# multi-GB ``{tag}_rfx`` sample tensors live in one test.{tag}.npz per method, so the data-only
+# batch and each single-method fit batch are loaded separately and at most one method's fit
+# tensors are ever materialized at a time (see evaluateRegime). The tag also keys the summary
+# caches.
 REFERENCE_METHODS = (('NUTS', 'nuts'), ('ADVI', 'advi1'), ('LA', 'laplace'))
+# NUTS reference whose convergence mask defines the ``_conv`` tables.
+REFERENCE_TAG = 'nuts2'
 
 
 def methodFitBatch(batch: dict[str, torch.Tensor], prefix: str) -> dict[str, torch.Tensor]:
@@ -218,38 +221,19 @@ def loadRegimeBatch(
     return batch, n_total, n_kept, cap_mask
 
 
-def nutsConvergeMaskFromNpz(
-    data_path: Path,
-    cap_mask: np.ndarray,
-    mode: str,
-) -> np.ndarray | None:
-    """NUTS convergence mask over the capacity-kept datasets, read from the small nuts_* diagnostics.
+def nutsConvergeMaskFromNpz(data_path: Path, cap_mask: np.ndarray) -> np.ndarray | None:
+    """Convergence mask of the NUTS reference (REFERENCE_TAG) over the capacity-kept datasets.
 
     Loads only the tiny diagnostic arrays (divergences/rhat/ess/…) — never the multi-GB
-    nuts_rfx samples — so it can run before any fit proposal is materialized.
+    sample tensors — so it can run before any fit proposal is materialized. None without a
+    reference fit file.
     """
-    diag_keys = (
-        'nuts_divergences',
-        'nuts_draws',
-        'nuts_rhat',
-        'nuts_ess',
-        'nuts_ess_tail',
-        'nuts_max_treedepth',
+    if not fitPath(data_path, REFERENCE_TAG).exists():
+        return None
+    keys = tuple(
+        f'{REFERENCE_TAG}_{k}' for k in ('rhat', 'ess', 'ess_tail', 'divergences', 'draws', 'level')
     )
-    if not fitPath(data_path, 'nuts').exists():
-        return None
-    diag = {k: torch.as_tensor(v) for k, v in loadFits(data_path, 'nuts', keys=diag_keys).items()}
-    if 'nuts_divergences' not in diag:
-        return None
-    idx = torch.from_numpy(cap_mask)
-    diag = {
-        k: (v[idx] if torch.is_tensor(v) and v.shape[:1] == (cap_mask.shape[0],) else v)
-        for k, v in diag.items()
-    }
-    # nuts_draws is stored per-dataset (uniform); nutsConvergeMask wants a scalar draw count.
-    if 'nuts_draws' in diag:
-        diag['nuts_draws'] = torch.as_tensor(int(diag['nuts_draws'].reshape(-1)[0].item()))
-    return nutsConvergeMask(diag, mode=mode)
+    return nutsConverged(loadFits(data_path, REFERENCE_TAG, keys=keys), REFERENCE_TAG)[cap_mask]
 
 
 def _capFull(cap_mask: np.ndarray, sub: np.ndarray) -> np.ndarray:
@@ -426,7 +410,6 @@ def evaluateRegime(
     seed: int,
     methods: list[str],
     rescale: bool = True,
-    convergence_mode: str = 'liberal',
     summary_chunk_size: int = 1,
     warmup: bool = True,
 ) -> tuple[list[dict], list[dict] | None]:
@@ -458,13 +441,13 @@ def evaluateRegime(
         logger.warning('  No datasets pass capacity filter — skipping.')
         return [], None
 
-    # NUTS convergence from the small diagnostic arrays (no fit samples materialized).
-    conv_mask = nutsConvergeMaskFromNpz(data_path, cap_mask, convergence_mode)
+    # NUTS reference convergence from the small diagnostic arrays (no fit samples materialized).
+    conv_mask = nutsConvergeMaskFromNpz(data_path, cap_mask)
     have_conv = False
     conv_idx = conv_batch = conv_full = None
     if conv_mask is not None:
         n_conv = int(conv_mask.sum())
-        logger.info('  NUTS convergence (%s): %d / %d', convergence_mode, n_conv, n_kept)
+        logger.info('  %s converged: %d / %d', REFERENCE_TAG, n_conv, n_kept)
         have_conv = 0 < n_conv < n_kept
 
     # MB samples over the capacity-kept batch (cached, keyed by cap_mask).
@@ -740,7 +723,6 @@ def main() -> None:
         seed=cfg.seed,
         methods=methods,
         rescale=cfg.rescale,
-        convergence_mode=cfg.convergence_mode,
         summary_chunk_size=cfg.summary_chunk_size,
         warmup=getattr(cfg, 'warmup', True),
     )

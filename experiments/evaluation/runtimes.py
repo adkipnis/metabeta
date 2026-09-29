@@ -1,4 +1,4 @@
-"""Runtime comparison: metabeta vs NUTS, ADVI and Laplace, per size regime.
+"""Runtime comparison: metabeta vs NUTS, ADVI, Pathfinder and Laplace, per size regime.
 
 Every size uses its regime-matched checkpoint (BEST_SEEDS from scripts/build_ckpt.py) on its
 own test set, the same arrangement as the misspecification studies.  The cross-product of the
@@ -49,8 +49,12 @@ Timings are cached next to test.npz, keyed by checkpoint/prefix/samples/seed/dev
 invalidated when the data or the checkpoint is newer.  A cached timing is only as good as the
 machine state that produced it: pass ``--refresh_cache`` for a clean campaign.
 
-ADVI rows exclude datasets whose fit failed (``advi1_failed``, up to 50/512 for bernoulli);
-their stored durations time a run that produced nothing.
+NUTS appears twice: ``NUTS0`` is the PyMC-default budget (level 0 of the ladder) and ``NUTS``
+the composite competitor, per dataset the cheapest level that converged with the cumulative
+wall time of the escalation.  Convergence is the single ``nutsConverged`` criterion of the
+``nuts2`` reference.  ADVI/Pathfinder rows exclude datasets whose fit failed
+(``{tag}_failed``, up to 50/512 for bernoulli ADVI); their stored durations time a run that
+produced nothing.
 
 Usage (from repo root):
     uv run python experiments/evaluation/runtimes.py --family n --device cuda
@@ -75,7 +79,7 @@ from metabeta.models.approximator import Approximator
 from metabeta.plotting.runtimes import plotRuntimeRecords
 from metabeta.utils.dataloader import Collection, collateGrouped, toDevice
 from metabeta.utils.device import setDevice, synchronizeDevice
-from metabeta.utils.evaluation import nutsConvergeMask
+from metabeta.utils.evaluation import nutsConverged
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR, REPO_ROOT
 from metabeta.utils.fits import fitPath, loadFits
 from metabeta.utils.logger import setupLogging
@@ -107,8 +111,15 @@ MB_GLOBAL = 'MBG'  # the global pass alone (local=False), the proposal handed to
 MB_HEAD = 'IMH'  # the IMH head on that proposal (MB minus MBG, per dataset)
 MB_DEFAULT = 'MB'  # the default pipeline, MBG + IMH timed as one region (the paper's MB)
 MB_METHODS = [MB_FLOW, MB_GLOBAL, MB_HEAD, MB_DEFAULT]
-FIT_METHODS = ['LAPLACE', 'ADVI', 'NUTS']
-FIT_TAG = {'LAPLACE': 'laplace', 'ADVI': 'advi1', 'NUTS': 'nuts'}  # test.{tag}.npz per method
+FIT_METHODS = ['LAPLACE', 'PATHFINDER', 'ADVI', 'NUTS0', 'NUTS']
+FIT_TAG = {  # test.{tag}.npz per method; NUTS0 = ladder level 0, NUTS = composite
+    'LAPLACE': 'laplace',
+    'PATHFINDER': 'pathfinder1',
+    'ADVI': 'advi1',
+    'NUTS0': 'nuts0',
+    'NUTS': 'nuts',
+}
+REFERENCE_TAG = 'nuts2'  # its convergence mask defines "converged" throughout
 METHOD_ORDER = MB_METHODS + FIT_METHODS
 METHOD_LABELS = {
     MB_FLOW: 'MB^0',
@@ -116,6 +127,7 @@ METHOD_LABELS = {
     MB_HEAD: 'IMH head',
     MB_DEFAULT: 'MB',
     'LAPLACE': 'Laplace',
+    'PATHFINDER': 'Pathfinder',
 }
 TEX_LABELS = {
     MB_FLOW: r'\MBz{}',
@@ -123,21 +135,17 @@ TEX_LABELS = {
     MB_HEAD: r'\texttt{IMH}',
     MB_DEFAULT: r'\texttt{MB}',
     'LAPLACE': r'\texttt{Laplace}',
+    'PATHFINDER': r'\texttt{Pathfinder}',
 }
 
 # fraction of the slowest runs summarised separately; 5% of 512 datasets is 26 datasets,
 # enough for a stable mean and small enough to still be a tail
 TAIL_FRAC = 0.05
 
-# diagnostics nutsConvergeMask reads; loaded on their own so the multi-GB posterior sample
-# arrays in test.nuts.npz stay on disk
-_DIAG_KEYS = (
-    'nuts_divergences',
-    'nuts_draws',
-    'nuts_rhat',
-    'nuts_ess',
-    'nuts_ess_tail',
-    'nuts_max_treedepth',
+# diagnostics nutsConverged reads; loaded on their own so the multi-GB posterior sample
+# arrays in test.nuts2.npz stay on disk
+_DIAG_KEYS = tuple(
+    f'{REFERENCE_TAG}_{k}' for k in ('rhat', 'ess', 'ess_tail', 'divergences', 'draws', 'level')
 )
 
 
@@ -152,7 +160,6 @@ def loadReferences(path: Path) -> tuple[dict[str, np.ndarray], dict[str, np.ndar
     """
     durations: dict[str, np.ndarray] = {}
     masks: dict[str, np.ndarray] = {}
-    diag: dict[str, torch.Tensor] = {}
     with np.load(path, allow_pickle=True) as raw:
         n = int(np.asarray(raw['d']).reshape(-1).shape[0])
     for method in FIT_METHODS:
@@ -166,14 +173,9 @@ def loadReferences(path: Path) -> tuple[dict[str, np.ndarray], dict[str, np.ndar
             if f'{tag}_failed' in fit
             else np.ones(n, dtype=bool)
         )
-    if fitPath(path, 'nuts').exists():
-        for key, value in loadFits(path, 'nuts', keys=_DIAG_KEYS).items():
-            # nuts_draws is stored per dataset but nutsConvergeMask wants the scalar chain
-            # length; the campaign uses one setting throughout, so collapse it here
-            diag[key] = torch.as_tensor(value.reshape(-1)[0] if key == 'nuts_draws' else value)
-
-    conv = nutsConvergeMask(diag, mode='strict')
-    conv = np.ones(n, dtype=bool) if conv is None else conv.astype(bool)
+    conv = np.ones(n, dtype=bool)
+    if fitPath(path, REFERENCE_TAG).exists():
+        conv = nutsConverged(loadFits(path, REFERENCE_TAG, keys=_DIAG_KEYS), REFERENCE_TAG)
     return durations, masks, conv
 
 
@@ -612,6 +614,8 @@ def cellRows(records: list[dict]) -> list[dict]:
 def reliabilityRows(records: list[dict]) -> list[dict]:
     """Per size: how NUTS' wall-clock cost concentrates where it also fails to converge.
 
+    NUTS is the composite competitor (its wall time is the cumulative cost of escalating the
+    ladder); "converged" is the ``nuts2`` reference criterion.
     ``t/conv`` is total NUTS wall time divided by the number of converged datasets — the cost
     of a *usable* posterior rather than of a run.  metabeta has no analogue because it does not
     fail, so its own median doubles as its cost per usable posterior.
@@ -774,7 +778,7 @@ def outputStem(cfg: argparse.Namespace, device: torch.device) -> str:
 def setup() -> argparse.Namespace:
     # fmt: off
     parser = argparse.ArgumentParser(
-        description='Runtime comparison: metabeta (raw flow and flow + IMH) vs NUTS, ADVI and Laplace, per size regime.',
+        description='Runtime comparison: metabeta (raw flow and flow + IMH) vs NUTS, ADVI, Pathfinder and Laplace, per size regime.',
     )
     parser.add_argument('--family', type=str, default='n', choices=list(FAMILY_NAMES))
     parser.add_argument('--sizes', type=str, nargs='+', default=DEFAULT_SIZES, choices=DEFAULT_SIZES)
@@ -836,15 +840,16 @@ def main() -> None:
         f'pass (latency). MB^0 is the raw flow (global + local posterior flow); MB is the '
         f'default pipeline, the global pass alone (local flow skipped) plus the default IMH '
         f'head ({", ".join(methods) or "none"}), whose two parts are the "global pass" and '
-        f'"IMH head" rows. ADVI excludes failed fits.\n',
+        f'"IMH head" rows. NUTS0 is the PyMC-default budget, NUTS the composite (cheapest '
+        f'converged level, cumulative wall time). ADVI/Pathfinder exclude failed fits.\n',
         '## Runtime distribution per regime\n',
-        'Wall time per dataset. NUTS/ADVI/Laplace times are those recorded at fit time; '
+        'Wall time per dataset. NUTS/ADVI/Pathfinder/Laplace times are those recorded at fit time; '
         'metabeta is timed here. The tail columns are the point: the raw flow is flat because '
         'its cost tracks the architecture; the samplers are not.\n',
         dist_md,
         '',
         '## NUTS tail vs reliability\n',
-        'Convergence is the strict `nutsConvergeMask` criterion. `% conv in slowest 5%` is the '
+        'Convergence is the `nutsConverged` criterion of the `nuts2` reference. `% conv in slowest 5%` is the '
         'convergence rate *within* the slowest 5% of NUTS runs: the reference spends its '
         'largest wall-clock budget where it is least likely to return a usable posterior. '
         '`t/conv` is total NUTS wall time per converged dataset, and the speedups are against '
