@@ -14,11 +14,10 @@ import argparse
 from pathlib import Path
 
 import numpy as np
-import torch
 
 from metabeta.simulation.fit import Fitter
 from metabeta.simulation.prior import bambiDefaultPriors
-from metabeta.utils.evaluation import nutsConvergeMask
+from metabeta.utils.evaluation import nutsConverged
 from metabeta.utils.experiments import DATA_DIR, PREPROCESSED_DATA_DIR
 from metabeta.utils.padding import aggregate
 
@@ -118,29 +117,13 @@ def _fitCfg(args: argparse.Namespace, idx: int) -> argparse.Namespace:
     )
 
 
-def _toTorchBatch(batch: dict[str, np.ndarray], tag: str) -> dict[str, torch.Tensor]:
-    """``{tag}_*`` diagnostics as the ``nuts_*`` tensors nutsConvergeMask reads."""
-    out = {}
-    for key, value in batch.items():
-        if key.startswith(f'{tag}_') and np.issubdtype(value.dtype, np.number):
-            name = 'nuts_' + key[len(tag) + 1 :]
-            if name == 'nuts_draws':
-                value = np.asarray(value).reshape(-1)[:1]
-            out[name] = torch.as_tensor(value)
-    return out
-
-
 def _summarizeConvergence(batch: dict[str, np.ndarray], tag: str) -> None:
-    torch_batch = _toTorchBatch(batch, tag)
+    mask = nutsConverged(batch, tag)
     names = batch.get('source', np.array([str(i) for i in range(len(batch['n']))]))
-    for mode in ('strict', 'liberal'):
-        mask = nutsConvergeMask(torch_batch, mode=mode)
-        if mask is None:
-            continue
-        print(f'NUTS convergence ({mode}): {int(mask.sum())} / {len(mask)}')
-        failed = np.asarray(names)[~mask]
-        if len(failed):
-            print('  failed:', ', '.join(str(x) for x in failed))
+    print(f'NUTS convergence: {int(mask.sum())} / {len(mask)}')
+    failed = np.asarray(names)[~mask]
+    if len(failed):
+        print('  failed:', ', '.join(str(x) for x in failed))
 
 
 def main() -> None:
