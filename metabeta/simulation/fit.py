@@ -101,17 +101,20 @@ def aggregateFits(fits: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
 
 
 def markNonFinite(fits: dict[str, np.ndarray], tag: str) -> dict[str, np.ndarray]:
-    """Count a fit whose posterior draws contain non-finite values as failed.
+    """Count a fit whose posterior draws are not finite float32 numbers as failed.
 
     ``pymc_extras.fit_laplace`` draws NaN without raising when the Hessian at the mode is
-    not positive definite; the draws of such a dataset are set to NaN like those of a fit
-    that raised, so every consumer sees one ``{tag}_failed`` flag.
+    not positive definite, and draws up to 1e154 when the mode of a log-scale lies far in
+    the tail; the evaluation stack runs in float32, where both are non-finite. The draws
+    of such a dataset are set to NaN like those of a fit that raised, so every consumer
+    sees one ``{tag}_failed`` flag.
     """
     keys = [f'{tag}_{k}' for k in POSTERIOR_KEYS if f'{tag}_{k}' in fits]
     failed = fits[f'{tag}_failed'].astype(bool)
     bad = np.zeros_like(failed)
     for key in keys:
-        bad |= ~np.isfinite(fits[key]).reshape(len(failed), -1).all(1)
+        finite = np.isfinite(fits[key]) & (np.abs(fits[key]) <= np.finfo(np.float32).max)
+        bad |= ~finite.reshape(len(failed), -1).all(1)
     bad &= ~failed
     for key in keys:
         fits[key][bad] = np.nan

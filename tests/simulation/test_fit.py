@@ -101,18 +101,18 @@ def test_aggregate_pads_and_fills_failed_fits():
 
 def test_mark_non_finite_counts_nan_draws_as_failed():
     fits = {
-        'laplace_ffx': np.array([[1.0, 2.0], [np.nan, 1.0], [3.0, 4.0]]),
-        'laplace_rfx': np.array([[[0.5]], [[0.1]], [[np.inf]]]),
-        'laplace_failed': np.array([False, False, False]),
-        'laplace_error': np.array(['', '', '']),
-        'laplace_duration': np.array([1.0, 2.0, 3.0]),
+        'laplace_ffx': np.array([[1.0, 2.0], [np.nan, 1.0], [3.0, 4.0], [1.0, 1.0]]),
+        'laplace_rfx': np.array([[[0.5]], [[0.1]], [[np.inf]], [[1e68]]]),  # 1e68 > float32
+        'laplace_failed': np.array([False, False, False, False]),
+        'laplace_error': np.array(['', '', '', '']),
+        'laplace_duration': np.array([1.0, 2.0, 3.0, 4.0]),
     }
     out = markNonFinite(fits, 'laplace')
-    np.testing.assert_array_equal(out['laplace_failed'], [False, True, True])
-    assert out['laplace_error'].tolist() == ['', 'non-finite draws', 'non-finite draws']
+    np.testing.assert_array_equal(out['laplace_failed'], [False, True, True, True])
+    assert out['laplace_error'].tolist() == ['', *['non-finite draws'] * 3]
     assert np.isnan(out['laplace_ffx'][1:]).all() and np.isnan(out['laplace_rfx'][1:]).all()
     assert out['laplace_ffx'][0].tolist() == [1.0, 2.0]
-    assert out['laplace_duration'].tolist() == [1.0, 2.0, 3.0]
+    assert out['laplace_duration'].tolist() == [1.0, 2.0, 3.0, 4.0]
 
 
 def test_reintegrate_writes_checksummed_fit_files(tmp_path):
