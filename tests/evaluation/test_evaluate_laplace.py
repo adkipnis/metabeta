@@ -6,6 +6,7 @@ import torch
 from metabeta.evaluation.evaluate import Evaluator
 from metabeta.plotting.comparison import _rightLegendHandles
 from metabeta.utils.evaluation import AggregatedMetrics, EvaluationSummary, PerDatasetMetrics
+from metabeta.utils.fits import fitPath, saveFits
 from metabeta.utils.posterior_cache import saveProposalCache
 from metabeta.utils.results import Proposal
 
@@ -199,25 +200,31 @@ def test_fit_summary_mask_uses_native_cache_when_possible(src_mask, common_mask,
         np.testing.assert_array_equal(result, expected)
 
 
+def _data(tmp_path, n: int, name: str = 'test.npz'):
+    path = tmp_path / name
+    np.savez(path, m=np.full(n, 2), y=np.zeros((n, 4), dtype=np.float32))
+    return path
+
+
 def test_fit_mask_from_path_treats_all_success_as_unmasked(tmp_path):
-    path = tmp_path / 'test.fit.npz'
-    np.savez(path, y=np.zeros((3, 2)), advi_failed=np.array([False, False, False]))
+    path = _data(tmp_path, 3)
+    saveFits(path, 'advi1', {'advi1_failed': np.array([False, False, False])})
     evaluator = Evaluator.__new__(Evaluator)
 
-    assert evaluator._fitMaskFromPath(path, 'advi') is None
+    assert evaluator._fitMaskFromPath(path, 'ADVI') is None
 
 
 def test_fit_proposal_from_npz_matches_collated_orientation(tmp_path):
-    path = tmp_path / 'test.fit.npz'
-    np.savez(
-        path,
-        nuts_ffx=np.arange(2 * 3 * 5, dtype=np.float64).reshape(2, 3, 5),
-        nuts_sigma_rfx=np.arange(2 * 2 * 5, dtype=np.float64).reshape(2, 2, 5),
-        nuts_sigma_eps=np.arange(2 * 1 * 5, dtype=np.float64).reshape(2, 1, 5),
-        nuts_rfx=np.arange(2 * 2 * 4 * 5, dtype=np.float64).reshape(2, 2, 4, 5),
-        nuts_corr_rfx=np.zeros((2, 1, 5, 2, 2), dtype=np.float64),
-        nuts_duration=np.array([10.0, 20.0]),
-    )
+    path = _data(tmp_path, 2)
+    nuts = {
+        'nuts_ffx': np.arange(2 * 3 * 5, dtype=np.float64).reshape(2, 3, 5),
+        'nuts_sigma_rfx': np.arange(2 * 2 * 5, dtype=np.float64).reshape(2, 2, 5),
+        'nuts_sigma_eps': np.arange(2 * 1 * 5, dtype=np.float64).reshape(2, 1, 5),
+        'nuts_rfx': np.arange(2 * 2 * 4 * 5, dtype=np.float64).reshape(2, 2, 4, 5),
+        'nuts_corr_rfx': np.zeros((2, 1, 5, 2, 2), dtype=np.float64),
+        'nuts_duration': np.array([10.0, 20.0]),
+    }
+    saveFits(path, 'nuts', nuts)
     evaluator = Evaluator.__new__(Evaluator)
     evaluator.cfg = argparse.Namespace(rescale=False)
 
@@ -229,15 +236,16 @@ def test_fit_proposal_from_npz_matches_collated_orientation(tmp_path):
     assert proposal.tpd == pytest.approx(15.0)
     torch.testing.assert_close(
         proposal.ffx,
-        torch.as_tensor(np.load(path)['nuts_ffx'].astype(np.float32)).permute(0, 2, 1),
+        torch.as_tensor(nuts['nuts_ffx'].astype(np.float32)).permute(0, 2, 1),
     )
 
 
 def test_plot_with_fit_models_uses_light_path(monkeypatch, tmp_path):
     evaluator = Evaluator.__new__(Evaluator)
     evaluator.cfg = argparse.Namespace(plot=True, converged_subset=False)
-    evaluator.data_path_test = tmp_path / 'test.fit.npz'
+    evaluator.data_path_test = tmp_path / 'test.npz'
     evaluator.data_path_valid = evaluator.data_path_test
+    fitPath(evaluator.data_path_test, 'nuts').touch()
     calls = []
 
     monkeypatch.setattr(evaluator, '_evalPartitionLight', lambda *args: calls.append(args) or [])
@@ -269,7 +277,7 @@ def test_light_plot_uses_requested_display_order(monkeypatch, tmp_path):
         summary_chunk_size=2,
         likelihood_family=0,
     )
-    evaluator.data_path_test = tmp_path / 'test.fit.npz'
+    evaluator.data_path_test = tmp_path / 'test.npz'
     evaluator.data_path_valid = evaluator.data_path_test
     evaluator.plot_dir = tmp_path / 'plots'
     evaluator.results_dir = None
@@ -324,7 +332,7 @@ def test_mb_summary_cache_path_includes_run_options_and_mask(tmp_path):
     )
     evaluator.run_name = 'data=small-n-mixed_model=large_seed=13'
     evaluator.checkpoint_prefix = 'best'
-    evaluator.data_path_test = tmp_path / 'small-n-sampled' / 'test.fit.npz'
+    evaluator.data_path_test = tmp_path / 'small-n-sampled' / 'test.npz'
     evaluator.data_path_valid = evaluator.data_path_test
 
     path_all = evaluator._summaryCachePath('test', 'mb', mask=None)
@@ -352,7 +360,7 @@ def test_mb_summary_cache_candidates_include_legacy_checkpoint_name(tmp_path):
     evaluator.run_name = 'data=small-n-mixed_model=large_seed=13'
     evaluator.legacy_run_name = 'data=small-n-mixed_model=large_seed=0'
     evaluator.checkpoint_prefix = 'best'
-    evaluator.data_path_test = tmp_path / 'small-n-sampled' / 'test.fit.npz'
+    evaluator.data_path_test = tmp_path / 'small-n-sampled' / 'test.npz'
     evaluator.data_path_valid = evaluator.data_path_test
 
     candidates = evaluator._summaryCacheCandidates(
@@ -372,7 +380,7 @@ def test_mb_sample_cache_path_includes_checkpoint_name_and_seed(tmp_path):
     evaluator.cfg = argparse.Namespace(n_samples=1000, seed=7)
     evaluator.run_name = 'data=small-n-mixed_model=large_seed=13'
     evaluator.checkpoint_prefix = 'best'
-    evaluator.data_path_test = tmp_path / 'small-n-sampled' / 'test.fit.npz'
+    evaluator.data_path_test = tmp_path / 'small-n-sampled' / 'test.npz'
     evaluator.data_path_valid = evaluator.data_path_test
 
     path = evaluator._mbSampleCachePath('test')
@@ -522,14 +530,17 @@ def test_cached_rows_do_not_require_dataloader(tmp_path):
     evaluator.ckpt_dir = None
     evaluator.dl_test = None
     evaluator.dl_valid = None
-    evaluator.data_path_test = tmp_path / 'test.fit.npz'
+    evaluator.data_path_test = _data(tmp_path, 3)
     evaluator.data_path_valid = evaluator.data_path_test
 
-    np.savez(
+    saveFits(evaluator.data_path_test, 'nuts', {'nuts_duration': np.ones(3)})
+    saveFits(
         evaluator.data_path_test,
-        y=np.zeros((3, 4), dtype=np.float32),
-        laplace_failed=np.array([False, False, False]),
-        laplace_duration=np.array([0.1, 0.2, 0.3], dtype=np.float32),
+        'laplace',
+        {
+            'laplace_failed': np.array([False, False, False]),
+            'laplace_duration': np.array([0.1, 0.2, 0.3], dtype=np.float32),
+        },
     )
     _summary(tpd=1.0).save(evaluator._summaryCachePath('test', 'mb'))
     _summary(tpd=2.0).save(evaluator._summaryCachePath('test', 'nuts'))
@@ -582,8 +593,9 @@ def test_table_only_cache_miss_uses_light_path_before_full_evaluation(tmp_path):
         models='MB,NUTS',
         likelihood_family=0,
     )
-    evaluator.data_path_test = tmp_path / 'test.fit.npz'
-    evaluator.data_path_valid = tmp_path / 'valid.fit.npz'
+    evaluator.data_path_test = tmp_path / 'test.npz'
+    evaluator.data_path_valid = tmp_path / 'valid.npz'
+    fitPath(evaluator.data_path_test, 'nuts').touch()
     evaluator.results_dir = None
     evaluator._cachedRowsForPartition = lambda *args, **kwargs: None
     evaluator._directDataMode = lambda: False
@@ -610,8 +622,9 @@ def test_table_only_cache_miss_raises_when_light_path_unavailable(tmp_path):
         models='MB,NUTS',
         likelihood_family=0,
     )
-    evaluator.data_path_test = tmp_path / 'test.fit.npz'
-    evaluator.data_path_valid = tmp_path / 'valid.fit.npz'
+    evaluator.data_path_test = tmp_path / 'test.npz'
+    evaluator.data_path_valid = tmp_path / 'valid.npz'
+    fitPath(evaluator.data_path_test, 'nuts').touch()
     evaluator._cachedRowsForPartition = lambda *args, **kwargs: None
     evaluator._directDataMode = lambda: True
 
@@ -629,61 +642,45 @@ def test_table_only_cache_miss_can_fallback_for_mb_only():
         models='MB',
         likelihood_family=0,
     )
-    evaluator.data_path_test = 'test.fit.npz'
-    evaluator.data_path_valid = 'valid.fit.npz'
+    evaluator.data_path_test = 'test.npz'
+    evaluator.data_path_valid = 'valid.npz'
     evaluator.results_dir = None
     evaluator._cachedRowsForPartition = lambda *args, **kwargs: None
-    evaluator._hasFits = lambda partition: True
+    evaluator._hasFits = lambda partition, model: True
     evaluator._evalPartition = lambda *args, **kwargs: [{'method': 'MB'}]
 
     evaluator.go()
 
 
-def test_mb_only_partition_data_uses_base_file(monkeypatch):
-    class DummyLoader:
-        def fullBatch(self):
-            return {'X': torch.zeros(1, 2)}
+class _DummyLoader:
+    _sortish = False
 
+    def __init__(self, fits=()):
+        self.dataset = argparse.Namespace(fits=fits)
+
+    def fullBatch(self):
+        return {'X': torch.zeros(1, 2)}
+
+
+def test_partition_data_loads_file_ordered_with_requested_fits(monkeypatch):
     evaluator = Evaluator.__new__(Evaluator)
     evaluator.cfg = argparse.Namespace(batch_size=16)
     evaluator.dl_test = None
     evaluator.dl_valid = None
+    evaluator.data_path_test = 'test.npz'
     calls = []
 
-    def fake_loader(partition, batch_size=None, prefer_fit=True, sortish=None):
-        calls.append((partition, batch_size, prefer_fit, sortish))
-        suffix = 'fit.npz' if prefer_fit else 'npz'
-        return DummyLoader(), f'{partition}.{suffix}'
+    def fake_loader(partition, batch_size=None, sortish=None, fits=()):
+        calls.append((partition, batch_size, sortish, fits))
+        return _DummyLoader(fits), 'test.npz'
 
     monkeypatch.setattr(evaluator, '_getDataLoader', fake_loader)
 
-    _, _, path = evaluator._getPartitionData('test', need_fits=False)
-
+    _, _, path = evaluator._getPartitionData('test')
     assert path == 'test.npz'
-    assert calls == [('test', 16, False, False)]
+    _, _, path = evaluator._getPartitionData('test', fits=('nuts', 'laplace'))
+    assert path == 'test.npz'
+    # a loader that already carries the tags is reused
+    evaluator._getPartitionData('test', fits=('nuts',))
 
-
-def test_fit_partition_data_preserves_file_order(monkeypatch):
-    class DummyLoader:
-        _sortish = False
-
-        def fullBatch(self):
-            return {'X': torch.zeros(1, 2)}
-
-    evaluator = Evaluator.__new__(Evaluator)
-    evaluator.cfg = argparse.Namespace(batch_size=16)
-    evaluator.dl_test = None
-    evaluator.dl_valid = None
-    evaluator.data_path_test = 'test.fit.npz'
-    calls = []
-
-    def fake_loader(partition, batch_size=None, prefer_fit=True, sortish=None):
-        calls.append((partition, batch_size, prefer_fit, sortish))
-        return DummyLoader(), 'test.fit.npz'
-
-    monkeypatch.setattr(evaluator, '_getDataLoader', fake_loader)
-
-    _, _, path = evaluator._getPartitionData('test', need_fits=True)
-
-    assert path == 'test.fit.npz'
-    assert calls == [('test', 16, True, False)]
+    assert calls == [('test', 16, False, ()), ('test', 16, False, ('nuts', 'laplace'))]

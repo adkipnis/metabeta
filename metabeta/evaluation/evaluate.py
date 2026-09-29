@@ -29,6 +29,7 @@ from metabeta.utils.config import (
 )
 from metabeta.utils.templates import loadConfigFromCheckpoint
 from metabeta.utils.dataloader import Dataloader, toDevice, subsetBatch
+from metabeta.utils.fits import fitPath, loadFits
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.evaluation import (
     EvaluationSummary,
@@ -62,19 +63,21 @@ from metabeta.plotting import plotComparison
 logger = logging.getLogger('evaluate.py')
 
 _ALL_MODELS = ('MB', 'NUTS', 'ADVI', 'LAPLACE')
-_FIT_MODELS = frozenset(('NUTS', 'ADVI', 'LAPLACE'))
+# Fit models and the per-method fit file (tag) each one reads, see metabeta.utils.fits.
+_FIT_TAGS = {'NUTS': 'nuts', 'ADVI': 'advi1', 'LAPLACE': 'laplace'}
+_FIT_MODELS = frozenset(_FIT_TAGS)
 
 # Post-hoc IMH refinement layered on the raw MB flow posterior. Not part of "all": it costs a
 # refinement pass on top of MB sampling, so it is opt-in via --models MB+IMH.
 _MB_IMH = 'MB+IMH'
 _KNOWN_MODELS = _ALL_MODELS + (_MB_IMH,)
-# Models that come from the checkpoint rather than from cached fits in the *.fit.npz.
+# Models that come from the checkpoint rather than from the per-method fit files.
 _MB_MODELS = frozenset(('MB', _MB_IMH))
 # Figure labels follow the paper's naming: "MB" is the neural posterior plus IMH refinement,
 # "MB^0" the raw flow posterior alone. Tables keep the CLI names; the paper restyles them itself.
 _PLOT_LABELS = {'MB': 'MB$^0$', _MB_IMH: 'MB'}
 # Summary-cache methods keyed only by the data file (as opposed to checkpoint-derived ones).
-_FIT_METHODS = frozenset(m.lower() for m in _FIT_MODELS)
+_FIT_METHODS = frozenset(_FIT_TAGS.values())
 
 # Cache filenames used to carry the pseudo-MoE view count. That path is gone, but the tag
 # stays in the key so caches written before its removal (all k=0) still resolve.
@@ -88,8 +91,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--checkpoint', type=str, help='Path to checkpoint directory')
     parser.add_argument('--prefix', type=str, default='latest', help='Checkpoint prefix: best or latest')
     # Data-direct: evaluate fit-only models without a checkpoint
-    parser.add_argument('--data_path_test', type=str, help='Direct path to test.fit.npz (no checkpoint needed for fit models)')
-    parser.add_argument('--data_path_valid', type=str, help='Direct path to valid.fit.npz')
+    parser.add_argument('--data_path_test', type=str, help='Direct path to test.npz; fits are read from its test.{method}.npz siblings (no checkpoint needed for fit models)')
+    parser.add_argument('--data_path_valid', type=str, help='Direct path to valid.npz')
     parser.add_argument('--model_id', type=str)
     parser.add_argument('--r_tag', type=str)
     parser.add_argument('--data_id', type=str)
@@ -309,14 +312,11 @@ class Evaluator:
             if not hasattr(self.cfg, 'rescale'):
                 self.cfg.rescale = False
 
-    def _getDataPath(self, partition: str, prefer_fit: bool = True) -> Path:
+    def _getDataPath(self, partition: str) -> Path:
         data_cfg = self.data_cfg_test if partition == 'test' else self.data_cfg_valid
         data_fname = datasetFilename(partition)
         data_subdir = data_cfg['data_id']
         data_path = Path(self.dir, '..', 'outputs', 'data', data_subdir, data_fname)
-        fit_path = data_path.with_suffix('.fit.npz')
-        if prefer_fit and fit_path.exists():
-            data_path = fit_path
         assert data_path.exists(), f'data file not found: {data_path}'
         return data_path
 
@@ -324,19 +324,17 @@ class Evaluator:
         self,
         partition: str,
         batch_size: int | None = None,
-        prefer_fit: bool = True,
         sortish: bool | None = None,
+        fits: tuple[str, ...] = (),
     ) -> tuple[Dataloader, Path]:
-        if hasattr(self.cfg, 'data_path_test') or hasattr(self.cfg, 'data_path_valid'):
-            data_path = self._partitionDataPath(partition)
-        else:
-            data_path = self._getDataPath(partition, prefer_fit=prefer_fit)
+        data_path = self._partitionDataPath(partition)
         if sortish is None:
             sortish = batch_size is not None
         self._logMemory(
-            'Loading %s dataloader from %s; this loads the full npz collection',
+            'Loading %s dataloader from %s with fits %s; this loads the full npz collection',
             partition,
             data_path,
+            list(fits),
         )
         dl = Dataloader(
             data_path,
@@ -344,24 +342,9 @@ class Evaluator:
             sortish=sortish,
             max_d=getattr(self.cfg, 'max_d', None),
             max_q=getattr(self.cfg, 'max_q', None),
+            fits=fits,
         )
         return dl, data_path
-
-    def _baseDataLoader(self, partition: str) -> tuple[Dataloader, Path]:
-        return self._getDataLoader(
-            partition,
-            batch_size=self.cfg.batch_size,
-            prefer_fit=False,
-            sortish=False,
-        )
-
-    def _fitDataPath(self, partition: str) -> Path:
-        data_path = self._partitionDataPath(partition)
-        if data_path.name.endswith('.fit.npz'):
-            return data_path
-        fit_path = data_path.with_suffix('.fit.npz')
-        assert fit_path.exists(), f'fit data file not found: {fit_path}'
-        return fit_path
 
     def _ensureDataloader(self, partition: str) -> None:
         if partition == 'valid' and self.dl_valid is None:
@@ -386,14 +369,20 @@ class Evaluator:
             self.dl_valid = dl
             self.data_path_valid = path
 
-    def _ensureFitDataloader(self, partition: str) -> None:
+    def _ensureFitDataloader(self, partition: str, fits: tuple[str, ...]) -> None:
+        """A file-ordered dataloader carrying at least the ``fits`` tags."""
         current = self.dl_test if partition == 'test' else self.dl_valid
-        if current is not None and not getattr(current, '_sortish', True):
+        if (
+            current is not None
+            and not getattr(current, '_sortish', True)
+            and set(fits) <= set(getattr(current.dataset, 'fits', ()))
+        ):
             return
         dl, path = self._getDataLoader(
             partition,
             batch_size=self.cfg.batch_size,
             sortish=False,
+            fits=fits,
         )
         self._setDataloader(partition, dl, path)
 
@@ -444,7 +433,7 @@ class Evaluator:
 
     @staticmethod
     def _npzArray(
-        raw: np.lib.npyio.NpzFile,
+        raw: dict[str, np.ndarray],
         key: str,
         mask: np.ndarray | None = None,
         dtype=np.float32,
@@ -522,33 +511,42 @@ class Evaluator:
 
     def _fitProposalFromNpz(
         self,
-        fit_path: Path,
+        data_path: Path,
         method: str,
         mask: np.ndarray | None = None,
         scale: torch.Tensor | None = None,
     ) -> Proposal:
-        prefix = method.lower()
+        """Proposal from ``{partition}.{method}.npz`` without a Collection (``*_rfx`` streamed)."""
+        prefix = _FIT_TAGS[method]
+        fit_path = fitPath(data_path, prefix)
         self._logMemory('Loading %s samples directly from %s', prefix, fit_path)
-        with np.load(fit_path, allow_pickle=True) as raw:
-            ffx = torch.as_tensor(self._npzArray(raw, f'{prefix}_ffx', mask)).permute(0, 2, 1)
-            sigma_rfx = torch.as_tensor(self._npzArray(raw, f'{prefix}_sigma_rfx', mask)).permute(
-                0, 2, 1
-            )
-            samples_g = [ffx.contiguous(), sigma_rfx.contiguous()]
+        small = (
+            f'{prefix}_ffx',
+            f'{prefix}_sigma_rfx',
+            f'{prefix}_sigma_eps',
+            f'{prefix}_corr_rfx',
+            f'{prefix}_duration',
+        )
+        raw = loadFits(data_path, prefix, keys=small)
+        ffx = torch.as_tensor(self._npzArray(raw, f'{prefix}_ffx', mask)).permute(0, 2, 1)
+        sigma_rfx = torch.as_tensor(self._npzArray(raw, f'{prefix}_sigma_rfx', mask)).permute(
+            0, 2, 1
+        )
+        samples_g = [ffx.contiguous(), sigma_rfx.contiguous()]
 
-            has_sigma_eps = f'{prefix}_sigma_eps' in raw.files
-            if has_sigma_eps:
-                sigma_eps = self._npzArray(raw, f'{prefix}_sigma_eps', mask)
-                sigma_eps = np.squeeze(sigma_eps, axis=1) if sigma_eps.ndim == 3 else sigma_eps
-                samples_g.append(torch.as_tensor(sigma_eps).unsqueeze(-1).contiguous())
+        has_sigma_eps = f'{prefix}_sigma_eps' in raw
+        if has_sigma_eps:
+            sigma_eps = self._npzArray(raw, f'{prefix}_sigma_eps', mask)
+            sigma_eps = np.squeeze(sigma_eps, axis=1) if sigma_eps.ndim == 3 else sigma_eps
+            samples_g.append(torch.as_tensor(sigma_eps).unsqueeze(-1).contiguous())
 
-            corr_rfx = None
-            if f'{prefix}_corr_rfx' in raw.files:
-                corr = self._npzArray(raw, f'{prefix}_corr_rfx', mask)
-                corr = np.squeeze(corr, axis=1) if corr.ndim == 5 and corr.shape[1] == 1 else corr
-                corr_rfx = torch.as_tensor(corr).contiguous()
+        corr_rfx = None
+        if f'{prefix}_corr_rfx' in raw:
+            corr = self._npzArray(raw, f'{prefix}_corr_rfx', mask)
+            corr = np.squeeze(corr, axis=1) if corr.ndim == 5 and corr.shape[1] == 1 else corr
+            corr_rfx = torch.as_tensor(corr).contiguous()
 
-            duration = self._npzArray(raw, f'{prefix}_duration', mask, dtype=np.float64)
+        duration = self._npzArray(raw, f'{prefix}_duration', mask, dtype=np.float64)
 
         # (b, q, m, s) on disk -> (b, m, s, q); streamed because this array dominates the load
         rfx = torch.from_numpy(
@@ -707,11 +705,7 @@ class Evaluator:
         return list(dict.fromkeys(paths))
 
     def _mbSampleRefMtime(self, partition: str) -> float:
-        data_path = (
-            self._getDataPath(partition, prefer_fit=False)
-            if not self._directDataMode()
-            else self._partitionDataPath(partition)
-        )
+        data_path = self._partitionDataPath(partition)
         return cacheRefMtime(data_path, getattr(self, 'ckpt_dir', None), self.checkpoint_prefix)
 
     def _saveMbSampleCache(self, partition: str, proposal: Proposal) -> Path:
@@ -853,25 +847,28 @@ class Evaluator:
         with np.load(path, allow_pickle=True) as raw:
             return int(raw['y'].shape[0])
 
-    def _fitMaskFromPath(self, path: Path, method: str) -> np.ndarray | None:
-        failed_key = f'{method.lower()}_failed'
-        with np.load(path, allow_pickle=True) as raw:
-            if failed_key not in raw.files:
-                return None
-            mask = ~raw[failed_key].astype(bool)
-            return None if mask.all() else mask
+    def _fitMaskFromPath(self, data_path: Path, method: str) -> np.ndarray | None:
+        """Success mask of a method from its fit file; None when every dataset succeeded."""
+        tag = _FIT_TAGS[method]
+        failed_key = f'{tag}_failed'
+        raw = loadFits(data_path, tag, keys=(failed_key,))
+        if failed_key not in raw:
+            return None
+        mask = ~raw[failed_key].astype(bool)
+        return None if mask.all() else mask
 
     def _durationMeanFromPath(
         self,
-        path: Path,
+        data_path: Path,
         method: str,
         mask: np.ndarray | None = None,
     ) -> float | None:
-        duration_key = f'{method.lower()}_duration'
-        with np.load(path, allow_pickle=True) as raw:
-            if duration_key not in raw.files:
-                return None
-            durations = np.asarray(raw[duration_key], dtype=np.float64).reshape(-1)
+        tag = _FIT_TAGS[method]
+        duration_key = f'{tag}_duration'
+        raw = loadFits(data_path, tag, keys=(duration_key,))
+        if duration_key not in raw:
+            return None
+        durations = np.asarray(raw[duration_key], dtype=np.float64).reshape(-1)
         if mask is not None:
             durations = durations[mask]
         durations = durations[np.isfinite(durations)]
@@ -899,7 +896,9 @@ class Evaluator:
 
     def _methodName(self, model: str) -> str:
         """Summary-cache method key for a model (MB+IMH resolves to its IMH variant)."""
-        return self._imhMethod() if model == _MB_IMH else model.lower()
+        if model == _MB_IMH:
+            return self._imhMethod()
+        return _FIT_TAGS.get(model, model.lower())
 
     def _refineMb(
         self,
@@ -932,8 +931,7 @@ class Evaluator:
         return proposal
 
     def _activeModels(self, partition: str, models: list[str]) -> list[str]:
-        has_fits = self._hasFits(partition)
-        active = [m for m in models if m in _MB_MODELS or (has_fits and m in _FIT_MODELS)]
+        active = [m for m in models if m in _MB_MODELS or self._hasFits(partition, m)]
         if not active:
             logger.warning('No active models for partition=%s (no fit file found)', partition)
         return active
@@ -986,7 +984,7 @@ class Evaluator:
                 missing.append(f'{model}({self._summaryCachePath(partition, method, mask=mask)})')
                 continue
             if model in _FIT_MODELS and summary.tpd is None:
-                duration = self._durationMeanFromPath(data_path, method, common_mask)
+                duration = self._durationMeanFromPath(data_path, model, common_mask)
                 if duration is not None:
                     summary.tpd = duration
                     summary.save(self._summaryCachePath(partition, method, mask=mask))
@@ -1244,22 +1242,24 @@ class Evaluator:
             raise ValueError(f'unknown model(s): {unknown}; valid: {_KNOWN_MODELS}')
         return models
 
-    def _hasFits(self, partition: str) -> bool:
-        path = self._partitionDataPath(partition)
-        return path.name.endswith('.fit.npz')
+    def _hasFits(self, partition: str, model: str) -> bool:
+        """Whether the fit model's ``{partition}.{method}.npz`` exists next to the data."""
+        return (
+            model in _FIT_MODELS
+            and fitPath(Path(self._partitionDataPath(partition)), _FIT_TAGS[model]).exists()
+        )
+
+    @staticmethod
+    def _fitTags(models: list[str]) -> tuple[str, ...]:
+        return tuple(_FIT_TAGS[m] for m in models if m in _FIT_MODELS)
 
     def _getPartitionData(
-        self, partition: str, need_fits: bool = True
+        self, partition: str, fits: tuple[str, ...] = ()
     ) -> tuple[Dataloader, dict, Path]:
-        if need_fits or hasattr(self.cfg, 'data_path_test') or hasattr(self.cfg, 'data_path_valid'):
-            self._ensureFitDataloader(partition)
-            dl = self.dl_test if partition == 'test' else self.dl_valid
-            path = self._partitionDataPath(partition)
-        else:
-            dl, path = self._baseDataLoader(partition)
-        if partition == 'test':
-            self._logMemory('Materializing full batch for partition=%s', partition)
-            return dl, dl.fullBatch(), path
+        """File-ordered dataloader with the ``fits`` tags merged in, plus its full batch."""
+        self._ensureFitDataloader(partition, fits)
+        dl = self.dl_test if partition == 'test' else self.dl_valid
+        path = self._partitionDataPath(partition)
         self._logMemory('Materializing full batch for partition=%s', partition)
         return dl, dl.fullBatch(), path
 
@@ -1273,13 +1273,11 @@ class Evaluator:
             base = self._loadOrSampleMb(partition, dl)
             return self._refineMb(partition, base, full_batch), None
         elif model == 'NUTS':
-            return self._fit2proposal(full_batch, prefix='nuts'), None
-        elif model == 'ADVI':
-            mask = fitBatchMask(full_batch, prefix='advi')
-            return self._fit2proposal(subsetBatch(full_batch, mask), prefix='advi'), mask
-        elif model == 'LAPLACE':
-            mask = fitBatchMask(full_batch, prefix='laplace')
-            return self._fit2proposal(subsetBatch(full_batch, mask), prefix='laplace'), mask
+            return self._fit2proposal(full_batch, prefix=_FIT_TAGS[model]), None
+        elif model in _FIT_MODELS:
+            tag = _FIT_TAGS[model]
+            mask = fitBatchMask(full_batch, prefix=tag)
+            return self._fit2proposal(subsetBatch(full_batch, mask), prefix=tag), mask
         raise ValueError(f'unknown model: {model}')
 
     @staticmethod
@@ -1317,13 +1315,13 @@ class Evaluator:
     def _evalPartitionLight(
         self, partition: str, active: list[str], fit_label: str, multi: bool
     ) -> list[dict]:
-        """Evaluate fit comparisons without loading all arrays in ``*.fit.npz`` via Collection."""
-        fit_path = self._fitDataPath(partition)
-        dl, full_batch, _ = self._getPartitionData(partition, need_fits=False)
+        """Evaluate fit comparisons without merging the fit arrays into the Collection."""
+        data_path = self._partitionDataPath(partition)
+        dl, full_batch, _ = self._getPartitionData(partition)
         n = full_batch['X'].shape[0]
 
         masks = {
-            model: self._fitMaskFromPath(fit_path, model)
+            model: self._fitMaskFromPath(data_path, model)
             for model in active
             if model in _FIT_MODELS
         }
@@ -1342,7 +1340,7 @@ class Evaluator:
                 continue
             src_mask = masks[model]
             scale = self._maskTensor(full_batch['sd_y'], src_mask) if self.cfg.rescale else None
-            proposal = self._fitProposalFromNpz(fit_path, model, mask=src_mask, scale=scale)
+            proposal = self._fitProposalFromNpz(data_path, model, mask=src_mask, scale=scale)
             raw[model] = (proposal, src_mask)
             aligned[model] = self._alignToCommon(proposal, src_mask, common_mask)
 
@@ -1352,7 +1350,7 @@ class Evaluator:
                     aligned[model],
                     common_batch,
                     partition,
-                    model.lower(),
+                    _FIT_TAGS[model],
                     mask=self._fitSummaryMask(raw[model][1], common_mask, n),
                 )
             elif model in _MB_MODELS:
@@ -1396,10 +1394,10 @@ class Evaluator:
         if not active:
             return []
 
-        need_fits = any(model in _FIT_MODELS for model in active)
+        fits = self._fitTags(active)
         if (
             (self.cfg.plot or self._tableOnlyMode())
-            and need_fits
+            and fits
             and not self.cfg.converged_subset
             and not self._directDataMode()
         ):
@@ -1410,7 +1408,7 @@ class Evaluator:
             )
             return self._evalPartitionLight(partition, active, fit_label, multi)
 
-        dl, full_batch, _ = self._getPartitionData(partition, need_fits=need_fits)
+        dl, full_batch, _ = self._getPartitionData(partition, fits=fits)
 
         # Collect fit-model proposals first. MB can be skipped entirely when its
         # summary cache is available and no plot/subset proposal is needed.
@@ -1432,7 +1430,7 @@ class Evaluator:
         }
         for model in active:
             if model in _FIT_MODELS:
-                aligned[model] = self._fit2proposal(common_batch, prefix=model.lower())
+                aligned[model] = self._fit2proposal(common_batch, prefix=_FIT_TAGS[model])
 
         # Compute summaries; cache data-derived methods when they are on their native batch
         summaries: dict[str, EvaluationSummary] = {}
@@ -1443,7 +1441,7 @@ class Evaluator:
                     aligned[model],
                     common_batch,
                     partition,
-                    model.lower(),
+                    _FIT_TAGS[model],
                     mask=self._fitSummaryMask(raw[model][1], common_mask, n),
                 )
             elif model in _MB_MODELS:
