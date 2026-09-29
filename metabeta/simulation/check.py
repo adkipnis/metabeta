@@ -6,6 +6,7 @@ import numpy as np
 from tqdm import tqdm
 
 from metabeta.simulation.nutsadvi import Fitter
+from metabeta.utils.fits import availableFits
 from metabeta.utils.names import datasetFilename
 
 # fmt: off
@@ -96,11 +97,11 @@ def _checkTrain(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
 
 def _checkTest(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
     fits_dir = srcdir / data_id / 'fits'
-    fit_path = srcdir / data_id / 'test.fit.npz'
-    if fit_path.exists() and not fits_dir.exists():
-        print('test.fit.npz present, fits/ absent — already reintegrated.')
+    data_path = srcdir / data_id / datasetFilename(partition='test')
+    if not fits_dir.exists() and availableFits(data_path):
+        print(f'{availableFits(data_path)} fit files present, fits/ absent — already reintegrated.')
         return True
-    stem = Path(datasetFilename(partition='test')).stem
+    stem = data_path.stem
 
     pymc_paths = [fits_dir / f'{stem}_nuts_{i:03d}.npz' for i in range(cfg.n_fits)]
     advi_paths = [fits_dir / f'{stem}_advi_{i:03d}.npz' for i in range(cfg.n_fits)]
@@ -126,17 +127,17 @@ def _checkTest(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
 
     fits_ok = not any([pymc_missing, pymc_broken, advi_missing, advi_broken])
     if fits_ok and not cfg.no_reintegrate:
-        _reintegrate(data_id, srcdir, partition='test')
+        _reintegrate(data_id, srcdir, partition='test', methods=['nuts'])
     return fits_ok
 
 
 def _checkValid(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
     fits_dir = srcdir / data_id / 'fits'
-    fit_path = srcdir / data_id / 'valid.fit.npz'
-    if fit_path.exists() and not fits_dir.exists():
-        print('valid.fit.npz present, fits/ absent — already reintegrated.')
+    data_path = srcdir / data_id / datasetFilename(partition='valid')
+    if not fits_dir.exists() and availableFits(data_path):
+        print(f'{availableFits(data_path)} fit files present, fits/ absent — already reintegrated.')
         return True
-    stem = Path(datasetFilename(partition='valid')).stem
+    stem = data_path.stem
 
     nuts_paths = [fits_dir / f'{stem}_nuts_{i:03d}.npz' for i in range(cfg.n_fits)]
     nuts_missing, nuts_broken = _check(nuts_paths, 'nuts fits (valid)', inspect=cfg.inspect)

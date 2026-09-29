@@ -9,6 +9,7 @@ import pytensor
 
 from metabeta.utils.names import datasetFilename
 from metabeta.utils.constants import hasSigmaEps
+from metabeta.utils.fits import saveFits
 from metabeta.utils.padding import aggregate, unpad
 from metabeta.utils.pymc import buildPymc, extractAll, extractSingle
 from metabeta.utils.templates import setupConfigParser, generateSimulationConfig
@@ -27,7 +28,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--idx', type=int, default=0,
         help='Index of dataset in batch to fit (default=0)')
     parser.add_argument('--reintegrate', action='store_true',
-        help='Aggregate individual fit files back into the batch (default=False)')
+        help='Aggregate individual fit files into {partition}.{method}.npz (default=False)')
     parser.add_argument('--method', type=str, default='nuts',
         help='Inference method [nuts, advi] (default=nuts)')
     parser.add_argument('--seed', type=int, default=42, help='Random seed (default=42)')
@@ -266,15 +267,12 @@ class Fitter:
         return aggregate(fits)
 
     def reintegrate(self, methods: list[str] | None = None) -> None:
+        """Aggregate the per-dataset files of each method into ``{partition}.{method}.npz``."""
         if methods is None:
-            methods = ['nuts', 'advi']
+            methods = ['nuts']
         for method in methods:
-            self.batch.update(self._aggregate(method))
-        fit_suffix = '.fit' + self.batch_path.suffix
-        path = self.batch_path.with_suffix(fit_suffix)
-        np.savez_compressed(path, **self.batch, allow_pickle=True)
-        methods_str = ' and '.join(m.upper() for m in methods)
-        print(f'Reintegrated {methods_str} fits into {path}')
+            path = saveFits(self.batch_path, method, self._aggregate(method), force=True)
+            print(f'Reintegrated {method.upper()} fits into {path}')
 
 
 # -----------------------------------------------------------------------------
