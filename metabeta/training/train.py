@@ -32,6 +32,7 @@ from metabeta.utils.templates import (
     CLI_ONLY_PARAMS,
 )
 from metabeta.utils.dataloader import Dataloader, toDevice
+from metabeta.utils.fits import fitPath
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.evaluation import (
     EvaluationSummary,
@@ -335,7 +336,7 @@ class Trainer:
     def _logFitReference(self) -> None:
         """Load NUTS valid summary from cache; print it and optionally log to WandB."""
         data_dir = Path(self.dir, '..', 'outputs', 'data', self.cfg.data_id_valid)
-        fit_path = data_dir / 'valid.fit.npz'
+        fit_path = fitPath(data_dir / 'valid.npz', 'nuts')
         cache_path = data_dir / 'summary_valid_nuts.pt'
         cache_cmd = f'uv run python metabeta/evaluation/cache.py --data_id {self.cfg.data_id_valid} --partition valid'
 

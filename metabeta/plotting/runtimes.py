@@ -6,8 +6,8 @@ X-axis: n_params = d + q + m*q (effective model parameters per dataset)
 Line + band: equal-count bins → median + 5th/95th percentile
 
 Data sources:
-- NUTS (cold_std) and ADVI wall times: test.fit.npz (nuts_duration / advi_duration),
-  all 512 datasets per data_dir
+- NUTS (cold_std) and ADVI wall times: test.nuts.npz / test.advi1.npz (nuts_duration /
+  advi1_duration), all 512 datasets per data_dir
 - MB-NUTS wall times: fits_dir/{cond}__{idx:03d}.npz (wall_s), indexed against test.npz
 - MB wall times: fits_dir/mb__{idx:03d}.npz (wall_s), n_params inferred from sample shapes
 
@@ -26,6 +26,7 @@ from pathlib import Path
 import numpy as np
 from matplotlib import pyplot as plt
 
+from metabeta.utils.fits import availableFits, fitPath, loadFits
 from metabeta.utils.plot import DPI, PALETTE, legendProxy, savePlot
 from metabeta.utils.warmfit import (
     COND_STYLE,
@@ -101,13 +102,19 @@ def _collectRuntimeRecords(data_dir: Path, fits_tag: str, conds: list[str]) -> l
 
     fits_dir = data_dir / fits_tag
 
-    # cold_std (NUTS) and ADVI: load directly from test.fit.npz (all datasets)
-    test_fit = data_dir / 'test.fit.npz'
-    if test_fit.exists() and any(c in conds for c in ('cold_std', 'advi')):
-        with np.load(test_fit, allow_pickle=True) as raw:
+    # cold_std (NUTS) and ADVI: wall times from the per-method fit files (all datasets)
+    data_path = data_dir / 'test.npz'
+    wanted = {'cold_std': 'nuts', 'advi': 'advi1'}
+    durations = {
+        cond: loadFits(data_path, tag, keys=(f'{tag}_duration',))[f'{tag}_duration']
+        for cond, tag in wanted.items()
+        if cond in conds and fitPath(data_path, tag).exists()
+    }
+    if durations:
+        with np.load(data_path, allow_pickle=True) as raw:
             ds, qs, ms = raw['d'], raw['q'], raw['m']
-            nuts_dur = raw['nuts_duration'] if 'cold_std' in conds else None
-            advi_dur = raw['advi_duration'] if 'advi' in conds else None
+            nuts_dur = durations.get('cold_std')
+            advi_dur = durations.get('advi')
             for i in range(len(ds)):
                 n_p = nParams(int(ds[i]), int(qs[i]), int(ms[i]))
                 if nuts_dur is not None:
@@ -166,7 +173,7 @@ def plotRuntimes(
     records: list[dict] = []
     for d in dirs:
         has_fits = (d / fits_tag).exists()
-        has_test_fit = (d / 'test.fit.npz').exists()
+        has_test_fit = bool(availableFits(d / 'test.npz'))
         if not has_fits and not has_test_fit:
             print(f'[warn] no data found for {d} — skipping')
             continue
