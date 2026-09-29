@@ -207,3 +207,29 @@ sbatch scripts/fit-nuts.sh --data_id small-n-sampled   # after step 3 replaces t
 - Open after the refit: agreement_marginals' default example datasets were picked under the
   old criterion and may need re-picking; nuts_divergences' LOO column reads
   `summary_test_nuts.pt`, which evaluate.py now writes under a mask tag.
+
+## Step 6: time-accuracy curve (done locally)
+
+- `experiments/evaluation/ref_curve.py` (`CurveExperiment`): per test set it scores MB⁰, MB,
+  `nuts0`, `nuts1`, `nuts` (composite), `advi0`, `advi1`, `pathfinder0`, `pathfinder1` and
+  `laplace` against the true parameters on the `nuts2`-converged datasets (cached summaries,
+  one fit file resident at a time), pairs every method with its median wall time (metabeta:
+  runtimes.py latency, CPU timed here, GPU read from a pulled `*_cuda.json` cache), and
+  writes `ref_curve_{tag}.csv` (long format), `ref_curve_{tag}_agreement.md` and
+  `ref_curve_{tag}_latest.pdf` (panels NRMSE / EACE / LOO-NLL over log wall time; faint
+  per-set points, one large marker per method, lines along the NUTS, ADVI and Pathfinder
+  ladders). The agreement table is the false-convergence check: r, σ-ratio and rank-MAD of
+  each level against `nuts2`, NUTS levels split by their own convergence.
+- Smoke on the two-dataset slice: all methods scored, MB⁰/MB at 0.1 s versus NUTS 7–13 s;
+  Laplace far off in NRMSE and LOO-NLL (the scale overestimate), the ADVI/Pathfinder ladders
+  visible. Reference `nuts2` itself is not a point on the curve.
+- The SLURM script (step 5) was folded into step 3 (`scripts/fit-ref.sh`).
+
+## Cluster campaign (next)
+
+1. `git pull` on the cluster, `uv sync` in the container venv (see above).
+2. Per test set: `scripts/fit-ref.sh --method nuts --level {0,1,2}`, `--method advi`,
+   `--method pathfinder --level {0,1}`, `--method laplace`; valid partition: nuts level 2 only.
+3. `metabeta/simulation/check.py --partition test --data_id ...` reintegrates and composes.
+4. `metabeta/evaluation/cache.py`, then evaluate.py / oracle_posterior.py / runtimes.py /
+   ref_curve.py; `evaluate.py --all_datasets` once for the convergence-validation check.
