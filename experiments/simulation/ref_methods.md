@@ -171,3 +171,39 @@ sbatch scripts/fit-nuts.sh --data_id small-n-sampled   # after step 3 replaces t
   absolute `-install_name` (noted in memory).
 - `scripts/fit-nuts-prior-grid.sh` (E2 prior grid, out of scope) still calls `fit.py --config --idx --method`, which the new CLI accepts; it now fits NUTS level 0.
 - 627 tests pass (11 Laplace tests removed, 4 fitter tests added).
+
+## Step 4: convergence filter and composite `nuts` (done locally)
+
+- `metabeta/utils/evaluation.py`: `nutsConverged(diag, prefix)` (numpy, dataset axis
+  first) and `nutsConvergeMask(batch, prefix)` (collated batch) implement the single
+  criterion: R-hat ≤ 1.01, bulk and tail ESS ≥ 400 over all sampled variables, no
+  divergences at levels 0/1 and ≤ 0.1 % at level 2 (`DIVERGENCE_RATE_MAX`); the level is
+  read from `{prefix}_level`, which every NUTS fit now stores. `liberal`/`strict` and the
+  tree-depth criterion are gone.
+- `Fitter.composeNuts` (called by `check.py` once the level files are complete) walks the
+  per-dataset level files, keeps the first converged level (highest fitted level otherwise),
+  thins to 4000 draws and writes `nuts` with `nuts_level`, `nuts_converged` and the
+  cumulative `nuts_duration`. On the valid partition only level 2 exists, so `valid.nuts.npz`
+  is the thinned level 2.
+- evaluate.py: `--models all` = MB, NUTS (composite), ADVI (`advi1`), PATHFINDER
+  (`pathfinder1`, label `PF`), LAPLACE. Every table row is computed on the datasets where
+  `nuts2` converged (`_referenceMask`, folded into the common mask of the cached, light and
+  full paths; summary caches are keyed by that mask). `--all_datasets` disables the filter:
+  running with and without it is the convergence-validation check. The old
+  `--converged_subset`, `--convergence_mode`, `--pareto_k_thr`, the conv/loo subset rows and
+  the NUTS failure analysis are removed. cache.py defaults to the four competitors.
+- The collate step now carries `_draws`, `_level`, `_converged`, `_bfmi`, `_n_steps`,
+  `_sampling_time` per fit tag.
+- Experiments: every `--convergence_mode` flag, mode loop and strict/liberal caption is gone.
+  Agreement and oracle scripts use `nuts2` as the reference with its converged mask and the
+  composite `nuts` as the NUTS competitor row; the misspecification and data-poverty
+  scripts score their NUTS oracle row on `nuts2` draws and cache under `summary_test_nuts2*`
+  (old NUTS LOO caches are not reused). runtimes.py lists `nuts0`, `nuts` (composite),
+  `advi1`, `pathfinder1`, `laplace`; its runtime figure still maps only the composite.
+  real_posterior's Δtime is relative to `nuts2`. nuts_divergences.py audits each level file
+  under the single criterion with the share failing each check. loo_bias.py reports all
+  datasets, converged, and converged with Pareto k < 0.7. The E2 prior-sensitivity script
+  reads `nuts0`/`advi1` per-point files and needs a refit of its grid before it runs.
+- Open after the refit: agreement_marginals' default example datasets were picked under the
+  old criterion and may need re-picking; nuts_divergences' LOO column reads
+  `summary_test_nuts.pt`, which evaluate.py now writes under a mask tag.
