@@ -84,11 +84,7 @@ if __name__ == '__main__':
     if cfg.method == 'laplace':
         from metabeta.simulation.laplace import LaplaceFitter
 
-        fitter = LaplaceFitter(cfg)
-        if cfg.reintegrate:
-            fitter.reintegrate()
-        else:
-            fitter.go()
+        LaplaceFitter(cfg).go()
     else:
         from metabeta.simulation.nutsadvi import Fitter
 
