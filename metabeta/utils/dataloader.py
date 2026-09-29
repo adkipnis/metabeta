@@ -343,13 +343,19 @@ def collateFits(
     if f'{method}_failed' in batch[0]:
         out[f'{method}_failed'] = quickCollate(batch, f'{method}_failed', torch.bool)
 
-    # per-dataset diagnostics: shape (b, chains) or (b, n_params)
+    # per-dataset diagnostics: shape (b,), (b, chains) or (b, n_params)
     for diag_key in (
         f'{method}_divergences',
         f'{method}_max_treedepth',
         f'{method}_ess',
         f'{method}_ess_tail',
         f'{method}_rhat',
+        f'{method}_draws',
+        f'{method}_level',
+        f'{method}_converged',
+        f'{method}_bfmi',
+        f'{method}_n_steps',
+        f'{method}_sampling_time',
     ):
         if diag_key in batch[0]:
             out[diag_key] = quickCollate(batch, diag_key)
