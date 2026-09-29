@@ -22,6 +22,7 @@ import pymc as pm
 import pytensor
 from pymc_extras import fit_laplace, fit_pathfinder
 
+from metabeta.utils.evaluation import nutsConverged
 from metabeta.utils.fits import saveFits
 from metabeta.utils.names import datasetFilename
 from metabeta.utils.padding import unpad
@@ -95,6 +96,24 @@ def aggregateFits(fits: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
             elif dtype.kind != 'U':
                 arr[i] = np.nan
         out[key] = arr
+    return out
+
+
+def _composite(fit: dict[str, np.ndarray], tag: str, converged: bool, elapsed: float) -> dict:
+    """Rename ``{tag}_*`` to ``nuts_*``, thin the draws to N_DRAWS, add level bookkeeping."""
+    out = {}
+    for key, value in fit.items():
+        name = 'nuts_' + key[len(tag) + 1 :]
+        if name.endswith('_corr_rfx'):
+            step = value.shape[1] // N_DRAWS  # (1, s, q, q)
+            value = value[:, ::step]
+        elif name.endswith(('_ffx', '_sigma_rfx', '_rfx', '_sigma_eps')):
+            step = value.shape[-1] // N_DRAWS  # (..., s)
+            value = value[..., ::step]
+        out[name] = value
+    out['nuts_level'] = np.array(int(tag[len('nuts') :]))
+    out['nuts_converged'] = np.array(converged)
+    out['nuts_duration'] = np.array(elapsed)
     return out
 
 
@@ -193,6 +212,7 @@ class Fitter:
                 # E-BFMI (Betancourt 2016, arXiv:1604.00695): < 0.3 flags poor energy exploration
                 f'{tag}_bfmi': np.square(np.diff(energy, axis=1)).mean(1) / energy.var(1),
                 f'{tag}_sampling_time': np.array(trace.posterior.attrs['sampling_time']),
+                f'{tag}_level': np.array(self.cfg.level),
                 f'{tag}_draws': np.array(level['draws']),
                 f'{tag}_tune': np.array(level['tune']),
                 f'{tag}_target_accept': np.array(level['target_accept']),
@@ -321,6 +341,33 @@ class Fitter:
         for tag in self.tags if tags is None else tags:
             path = saveFits(self.batch_path, tag, self._aggregate(tag), force=True)
             print(f'Reintegrated {tag} fits into {path}')
+
+    def composeNuts(self) -> None:
+        """Write the composite ``nuts`` tag: per dataset the cheapest converged NUTS level.
+
+        The NUTS ladder is run on every dataset; the composite mimics a user who escalates
+        the budget until the diagnostics pass (the highest fitted level if none does), so
+        ``nuts_duration`` is the cumulative wall time up to the chosen level. Draws are
+        thinned to ``N_DRAWS`` so every competitor is evaluated on the same budget.
+        """
+        levels = [f'nuts{i}' for i in range(len(NUTS_LEVELS))]
+        levels = [t for t in levels if all(self.outPath(t, i).exists() for i in range(len(self)))]
+        if not levels:
+            raise FileNotFoundError(f'no complete NUTS level under {self.outdir}')
+        fits = []
+        for idx in range(len(self)):
+            elapsed = 0.0
+            for tag in levels:
+                with np.load(self.outPath(tag, idx), allow_pickle=True) as f:
+                    fit = dict(f)
+                elapsed += float(fit[f'{tag}_duration'])
+                converged = bool(nutsConverged({k: v[None] for k, v in fit.items()}, tag)[0])
+                if converged or tag == levels[-1]:
+                    break
+            fits.append(_composite(fit, tag, converged, elapsed))
+        path = saveFits(self.batch_path, 'nuts', aggregateFits(fits), force=True)
+        n_conv = sum(bool(fit['nuts_converged']) for fit in fits)
+        print(f'Composed nuts from {levels} into {path} ({n_conv}/{len(fits)} converged)')
 
 
 # =============================================================================

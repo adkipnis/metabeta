@@ -17,7 +17,7 @@ from metabeta.simulation.fit import Fitter, tagMethodLevel
 from metabeta.utils.fits import FIT_TAGS, availableFits
 from metabeta.utils.names import datasetFilename
 
-# tags a fit run writes; the composite `nuts` is derived from the level files, not fitted
+# tags a fit run writes; the composite `nuts` is composed from the level files, not fitted
 FITTED_TAGS = tuple(tag for tag in FIT_TAGS if tag != 'nuts')
 
 
@@ -119,6 +119,17 @@ def _checkFits(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
                 data_id=data_id, idx=0, method=method, level=level, partition=cfg.partition
             )
             Fitter(fit_cfg, srcdir=srcdir).reintegrate(tags=(tag,))
+    if (
+        ok
+        and not cfg.no_reintegrate
+        and any(t.startswith('nuts') for t in availableFits(data_path))
+    ):
+        Fitter(
+            argparse.Namespace(
+                data_id=data_id, idx=0, method='nuts', level=0, partition=cfg.partition
+            ),
+            srcdir=srcdir,
+        ).composeNuts()
     done = availableFits(data_path)
     if done:
         print(f'reintegrated: {" ".join(done)}')

@@ -132,3 +132,49 @@ def test_reintegrate_requires_every_dataset(tmp_path):
     np.savez(fitter.outPath('laplace', 0), laplace_failed=np.array(True))
     with pytest.raises(FileNotFoundError, match='1/2 laplace fits missing'):
         fitter.reintegrate()
+
+
+def _nutsFit(tag: str, level: int, s: int, rhat: float, duration: float) -> dict[str, np.ndarray]:
+    d, q, m = 2, 1, 2
+    return {
+        f'{tag}_ffx': np.arange(d * s, dtype=np.float64).reshape(d, s),
+        f'{tag}_sigma_rfx': np.ones((q, s)),
+        f'{tag}_sigma_eps': np.ones((1, s)),
+        f'{tag}_rfx': np.zeros((q, m, s)),
+        f'{tag}_corr_rfx': np.tile(np.eye(q)[None, None], (1, s, 1, 1)),
+        f'{tag}_rhat': np.array([1.0, rhat]),
+        f'{tag}_ess': np.full(2, 900.0),
+        f'{tag}_ess_tail': np.full(2, 900.0),
+        f'{tag}_divergences': np.zeros(4, dtype=np.int64),
+        f'{tag}_draws': np.array(s // 4),
+        f'{tag}_level': np.array(level),
+        f'{tag}_duration': np.array(duration),
+        f'{tag}_failed': np.array(False),
+        f'{tag}_error': np.array(''),
+    }
+
+
+def test_compose_nuts_picks_the_cheapest_converged_level(tmp_path):
+    path = _writeBatch(tmp_path)
+    fitter = Fitter(_cfg(method='nuts', level=0), srcdir=tmp_path)
+    draws = {0: 4000, 1: 4000, 2: 8000}
+    # dataset 0 converges at level 0; dataset 1 never converges and falls back to level 2
+    for level in range(3):
+        for idx in range(2):
+            r = 1.0 if idx == 0 else 1.5
+            np.savez(
+                fitter.outPath(f'nuts{level}', idx),
+                **_nutsFit(f'nuts{level}', level, draws[level], r, duration=10.0 * (level + 1)),
+            )
+    fitter.composeNuts()
+
+    nuts = loadFits(path, 'nuts')
+    np.testing.assert_array_equal(nuts['nuts_level'], [0, 2])
+    np.testing.assert_array_equal(nuts['nuts_converged'], [True, False])
+    np.testing.assert_array_equal(nuts['nuts_duration'], [10.0, 60.0])
+    assert nuts['nuts_ffx'].shape == (2, 2, 4000)  # level 2 thinned from 8000 draws
+    assert nuts['nuts_corr_rfx'].shape == (2, 1, 4000, 1, 1)
+    np.testing.assert_array_equal(nuts['nuts_ffx'][1, 0, :3], [0.0, 2.0, 4.0])
+    np.testing.assert_array_equal(nuts['nuts_draws'], [1000, 2000])
+    col = Collection(path, permute=False, fits=('nuts',))
+    assert 'nuts_level' in col.raw
