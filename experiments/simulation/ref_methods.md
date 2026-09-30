@@ -468,3 +468,6 @@ caches are deleted before recaching.
   the new rows and core counts; `fig:la` and the table numbers marked TODO until
   oracle_posterior.py / evaluate.py rerun. LA clause removed from app:corr. Main text still
   mentions LA (`sections/results.tex:42`) — Alex's call.
+- Laplace re-aggregated + recached under `DRAW_MAX` (2026-09-30): failed of 512 (all labelled
+  'degenerate draws'): small n/b/p 20/39/36, medium 22/50/28, large 34/53/34, huge 26/63/60
+  (4–12 %; before 17–56).
