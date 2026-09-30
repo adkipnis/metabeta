@@ -471,3 +471,32 @@ caches are deleted before recaching.
 - Laplace re-aggregated + recached under `DRAW_MAX` (2026-09-30): failed of 512 (all labelled
   'degenerate draws'): small n/b/p 20/39/36, medium 22/50/28, large 34/53/34, huge 26/63/60
   (4–12 %; before 17–56).
+
+### Real test sets: campaign result (2026-09-30)
+
+All 11 `*-real` sets: every tag 512/512, reintegrated and composed (`check.py`, 7–24 min per
+set). 1,630 of the 39,424 tasks first failed with a full `/tmp` on `cpusrv32`/`cpusrv25` and
+were refitted with those nodes excluded (`~/refit-real-gaps.sh`; `SBATCH_EXCLUDE` is ignored
+by this SLURM, `scontrol update … ExcNodeList` works). Validation (`~/validate_real.py`):
+
+| set | conv nuts0/1/2/comp | r nuts2 vs old NUTS (ffx, σ) | r advi1 vs old ADVI (ffx, σ) | failed advi1/pf1/la | median s nuts0/nuts2/comp/advi1/pf1/la |
+|---|---|---|---|---|---|
+| small-n | 272/396/505/507 | 0.9999 0.9994 | 0.9999 0.9594 | 0/0/11 | 42 79 76 34 18 15 |
+| small-b | 337/438/508/511 | 0.9999 0.9994 | 0.9996 0.9822 | 41/6/9 | 43 82 54 28 19 16 |
+| small-p | 119/168/390/395 | 1.0000 0.9992 | 0.4729 0.4213 | 0/1/2 | 51 147 225 26 19 13 |
+| medium-n | 297/376/485/494 | 0.9999 0.9995 | 0.9997 0.9833 | 0/0/10 | 70 158 79 33 33 24 |
+| medium-b | 320/406/499/508 | 0.9999 0.9991 | 0.9993 0.9737 | 67/0/12 | 68 163 78 47 65 47 |
+| medium-p | 153/304/501/503 | 1.0000 0.9996 | 0.7332 0.3918 | 0/1/8 | 72 165 170 47 65 45 |
+| large-n | 285/347/479/485 | 0.9982 0.9984 | 0.9993 0.9836 | 0/0/8 | 78 286 98 38 40 32 |
+| large-b | 316/386/496/505 | 0.9999 0.9981 | 0.9991 0.9487 | 55/8/12 | 78 255 85 55 73 55 |
+| large-p | 213/340/505/505 | 1.0000 0.9997 | 0.7604 0.2636 | 2/5/14 | 77 183 124 51 71 52 |
+| huge-n | 315/343/477/486 | 0.9999 0.9963 | 0.9992 0.9150 | 0/1/5 | 81 244 86 42 50 37 |
+| huge-b | 319/362/483/494 | 0.9998 0.9983 | 0.9987 0.9589 | 73/1/12 | 82 304 88 60 79 62 |
+
+nuts2 reproduces the old NUTS posterior means (r ≥ 0.998). ADVI agrees with the old ADVI
+except on real Poisson (r 0.26–0.76): the old run there was the early-stopping-exhausted one
+the paper flagged, the new 100k-iteration run is the trustworthy side. ADVI fails (NaN) on
+41–73 Bernoulli datasets, Pathfinder on 0–8 (all paths failed), Laplace on 2–14. Real Poisson
+is hard for NUTS at the default budget (119/512 converged on small-p at L0, 390 at L2). Old
+`test.fit.npz` of the real sets and the July `summary_test_{nuts,advi}_*` caches are still in
+place (deletion pending Alex's confirmation).
