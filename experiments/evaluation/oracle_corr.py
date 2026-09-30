@@ -102,7 +102,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--plot',       action=argparse.BooleanOptionalAction, default=False,
                         help='Also save a recovery scatter of the correlation pairs, one panel '
                              'per method in --plot_methods.')
-    parser.add_argument('--plot_methods', type=str, nargs='*', default=['MB', 'NUTS', 'ADVI'],
+    parser.add_argument('--plot_methods', type=str, nargs='*', default=['MB', 'NUTS', 'ADVI', 'PF'],
                         help='Row labels to plot; "MB" resolves to the refined row when a '
                              'refinement ran (the paper\'s MB), "MB0" to the raw flow.')
     # fmt: on
