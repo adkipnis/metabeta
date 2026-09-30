@@ -6,7 +6,7 @@ the checkpoint's capacity (datasets beyond max_d/max_q are dropped by the capaci
 a small-capacity model on a larger regime yields few or no rows). To sweep sizes, launch one
 process per (checkpoint, data_id) pair.
 
-Loads NUTS/ADVI/Laplace fits from the per-method test.{tag}.npz files and produces a LaTeX +
+Loads NUTS/ADVI/Pathfinder/Laplace fits from the per-method test.{tag}.npz files and produces a LaTeX +
 Markdown table with mean ± std over parameter dimensions (for NRMSE/ECE/EACE/R) and over
 datasets (for LOO-NLL). Unlike real_posterior.py, the sampled test sets carry ground-truth
 parameters, so the metrics are absolute (vs the true values) rather than relative to NUTS.
@@ -165,7 +165,7 @@ def trimBatch(batch: dict[str, torch.Tensor], max_d: int, max_q: int) -> dict[st
 # batch and each single-method fit batch are loaded separately and at most one method's fit
 # tensors are ever materialized at a time (see evaluateRegime). The tag also keys the summary
 # caches.
-REFERENCE_METHODS = (('NUTS', 'nuts'), ('ADVI', 'advi1'), ('LA', 'laplace'))
+REFERENCE_METHODS = (('NUTS', 'nuts'), ('ADVI', 'advi1'), ('PF', 'pathfinder1'), ('LA', 'laplace'))
 # NUTS reference whose convergence mask defines the ``_conv`` tables.
 REFERENCE_TAG = 'nuts2'
 
