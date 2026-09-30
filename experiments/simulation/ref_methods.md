@@ -414,3 +414,28 @@ caches are deleted before recaching.
   `old/test.laplace.npz` on all 12 sampled sets. Per-index `fits/test_inla*` and the
   `fits_warm_*` directories are untouched; the July `summary_test_advi.pt` caches are
   orphaned (no consumer) but left in place.
+
+### Real test sets and evaluation stage (2026-09-30)
+
+- Paper moved to `~/LaTeX/metabeta-iclr`. `appendices/protocol.tex` (app:tra) rewritten for
+  the ladder, the single criterion (retention 84–98 % at L2, 41–67 % at L0, 66–88 % at L1,
+  composite 87–99 % on the oracle sets), PyMC-default ADVI with two snapshots, Pathfinder,
+  pymc-extras Laplace, and the compute/wall-time paragraph (heterogeneous Xeon Gold nodes,
+  cold NUTS, warm compiled methods); agreement-metric sentence and the runtime Setup
+  paragraph of `result_details.tex` adjusted. Left for later (numbers depend on reruns, TODO
+  comments in the tex): `tables/nuts_convergence.tex` (nuts_divergences.py, per-level rows),
+  the old strict/liberal mentions in `robustness.tex`, the evidence and prior-grid sections
+  of `result_details.tex`, the ADVI early-stopping sentences in `results.tex:79` and the
+  `tab:real_p` caption, tab:rt_full / fig:rt. Cluster CPU nodes are heterogeneous
+  (Xeon 6126–6248R, EPYC), so "four Xeon Gold 6248R cores" is no longer accurate anywhere.
+- Real sets: `~/submit-real.sh` submitted the full ladder on the 11 `*-real` test sets
+  (nuts 2/0/1 cold on cpu_normal; advi, pathfinder 0/1, laplace warm on cpu_preemptible;
+  77 arrays, 39,424 tasks). Old `test.fit.npz` of the real sets stays until validated.
+  Afterwards: `check.py --partition test --data_id {id}` per set (cache.py is not used for
+  real data; real_posterior.py computes its own summaries).
+- Convergence check: `~/eval-conv-check.sh` submitted 24 GPU jobs (gpu_normal, H100):
+  evaluate.py on the 12 paper checkpoints (`--prefix latest --models all`), once with
+  `--all_datasets` → `metabeta/outputs/results-all_datasets/`, once converged-only →
+  `metabeta/outputs/results-converged/` (`--no-plot --save_tables`; the converged run is
+  the baseline of the comparison). Alex reviews the two before the remaining evaluation
+  items (oracle_posterior.py, runtimes.py, ref_curve.py, real_posterior.py).
