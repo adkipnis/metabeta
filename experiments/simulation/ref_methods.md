@@ -462,3 +462,9 @@ caches are deleted before recaching.
   prefix, which `Collection(fits=('nuts2', 'advi1', ...))` relied on. Laplace re-aggregated
   and recached on the 12 sampled sets (`~/reagg-laplace.sh`); real sets get the rule through
   check.py. Paper app:tra states the roles and the bound.
+- Paper `app:la` rewritten (2026-09-30) as the failure check against PF: why LA is not a GLMM
+  method, the medium-b campaign finding (σ-ratio 3.9, r ≈ 0; torch LA 4.5 / 0.18), BFGS
+  precision loss > 90 %, 3–13 % failed fits, PF σ-ratio 1.6–1.7; table caption updated to
+  the new rows and core counts; `fig:la` and the table numbers marked TODO until
+  oracle_posterior.py / evaluate.py rerun. LA clause removed from app:corr. Main text still
+  mentions LA (`sections/results.tex:42`) — Alex's call.
