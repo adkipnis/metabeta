@@ -439,3 +439,13 @@ caches are deleted before recaching.
   `metabeta/outputs/results-converged/` (`--no-plot --save_tables`; the converged run is
   the baseline of the comparison). Alex reviews the two before the remaining evaluation
   items (oracle_posterior.py, runtimes.py, ref_curve.py, real_posterior.py).
+- Convergence check done 2026-09-30 (GPU: 80 GB `gpu_priority` runner for small–large, 300 GB
+  for huge; 64 GB OOMs on large and huge). Tables in `metabeta/outputs/results-{all_datasets,
+  converged}/data=*/evaluate.{md,tex}` on the cluster, pulled to `~/Downloads/hpc-pull/conv-check/`.
+  Converged → all: MB and NUTS move by ≤ 0.02 in r and NRMSE and ≤ 0.015 in ECE/EACE on
+  every set (largest: huge-b NUTS r 0.726 → 0.706, MB 0.684 → 0.674); ADVI/PF/LA likewise,
+  PF r drops up to 0.04 on huge sets. The filter does not flatter any method. Caveats:
+  `--all_datasets` still applies the common fit-success mask (small-n: 495 of 512, Laplace
+  failures; more on Bernoulli sets via ADVI), and the `tpd` column is identical in both runs
+  (time is not masked). LA NRMSE is inf or ~1e5–1e16 on 8 of 12 sets: draws within float32
+  but astronomically large pass `markNonFinite`; needs a decision (see below).
