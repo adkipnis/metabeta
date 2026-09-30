@@ -383,7 +383,7 @@ def _summaryRow(
     active_d = batch['mask_d'].any(0)
     active_q = batch['mask_q'].any(0)
     has_eps = 'sigma_eps' in ag.nrmse
-    return buildRow(
+    row = buildRow(
         label,
         regime,
         corr_vals=flattenActiveParams(ag.corr, active_d, active_q, has_eps),
@@ -393,6 +393,25 @@ def _summaryRow(
         loo_nll=summary.per_dataset.loo_nll,
         tpd_arr=tpd,
     )
+    row['classes'] = classMeans(ag, active_d, active_q)
+    return row
+
+
+PARAM_CLASSES = {'ffx': 'beta', 'sigma_rfx': 'sigma', 'rfx': 'alpha'}  # key -> table symbol
+
+
+def classMeans(ag, active_d: torch.Tensor, active_q: torch.Tensor) -> dict[str, dict[str, float]]:
+    """Mean r and NRMSE over the active dimensions of each parameter class."""
+    out = {}
+    for key, name in PARAM_CLASSES.items():
+        if key not in ag.nrmse:
+            continue
+        active = active_d if key == 'ffx' else active_q
+        out[name] = {
+            'r': float(torch.nanmean(ag.corr[key][active].float())),
+            'NRMSE': float(torch.nanmean(ag.nrmse[key][active].float())),
+        }
+    return out
 
 
 def evaluateRegime(
@@ -673,6 +692,69 @@ def saveTables(
         tex_path = outdir / f'oracle_{run_name}{suffix}.tex'
         tex_path.write_text('\n'.join(lines))
         logger.info('Saved LaTeX → %s', tex_path)
+
+    saveClassTable(rows_by_regime, outdir, run_name, dp)
+
+
+def saveClassTable(
+    rows_by_regime: dict[str, list[dict]], outdir: Path, run_name: str, dp: int
+) -> None:
+    """Recovery by parameter class (mean NRMSE with mean r in parentheses over the class's
+    active dimensions), plus the median LOO-NLL and time: the layout of the paper's LA table."""
+    classes = list(PARAM_CLASSES.values())
+
+    def cells(row: dict, tex: bool) -> list[str]:
+        out = []
+        for name in classes:
+            c = row.get('classes', {}).get(name)
+            if c is None:
+                out.append('NA')
+            elif tex:
+                out.append(rf'${c["NRMSE"]:.{dp}f}$ (${c["r"]:.{dp}f}$)')
+            else:
+                out.append(f'{c["NRMSE"]:.{dp}f} ({c["r"]:.{dp}f})')
+        med = row['stats']['median ± MAD']
+        for metric in ('LOO-NLL', 'time'):
+            v = med[metric]
+            out.append(
+                'NA'
+                if v is None or v[0] != v[0]
+                else (rf'${v[0]:.{dp}f}$' if tex else f'{v[0]:.{dp}f}')
+            )
+        return out
+
+    md_rows = [
+        [regime, r['method']] + cells(r, tex=False)
+        for regime, rows in rows_by_regime.items()
+        for r in rows
+    ]
+    header = ['regime', 'method'] + [f'{c}: NRMSE (r)' for c in classes] + ['LOO-NLL', 'time']
+    md_path = outdir / f'oracle_{run_name}_class.md'
+    md_path.write_text(
+        f'# Oracle recovery by parameter class: {run_name}\n\n'
+        + tabulate(md_rows, headers=header, tablefmt='pipe', stralign='right')
+        + '\n'
+    )
+    lines = [
+        r'% entries: mean NRMSE (mean r) over the active dimensions of each parameter class; LOO-NLL and time are medians over datasets',
+        r'\begin{tabular}{cc|ccc|cc}',
+        r'    \toprule',
+        r'    $\mathrm{regime}$ & $\mathrm{model}$ & $\boldsymbol\beta$: NRMSE ($r$) & $\boldsymbol\sigma$: NRMSE ($r$) & '
+        r'$\boldsymbol\alpha$: NRMSE ($r$) & $\mathrm{LOO\text{-}NLL}$ & $\mathrm{time\ [s]}$ \\',
+    ]
+    for regime, rows in rows_by_regime.items():
+        lines.append(r'    \midrule')
+        for j, row in enumerate(rows):
+            regime_cell = rf'\texttt{{{regime}}}' if j == 0 else ''
+            lines.append(
+                rf'      {regime_cell} & \texttt{{{row["method"]}}} & '
+                + ' & '.join(cells(row, tex=True))
+                + r' \\'
+            )
+    lines += [r'    \bottomrule', r'\end{tabular}', '']
+    tex_path = outdir / f'oracle_{run_name}_class.tex'
+    tex_path.write_text('\n'.join(lines))
+    logger.info('Saved LaTeX → %s', tex_path)
 
 
 # ---------------------------------------------------------------------------
