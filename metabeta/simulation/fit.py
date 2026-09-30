@@ -49,6 +49,7 @@ ADVI_ELBO_AT = (1_000, 2_000, 5_000, 10_000, 20_000, 50_000, 100_000)
 ADVI_DRAWS_AT = {10_000: 'advi0', 100_000: 'advi1'}
 ELBO_WINDOW = 100  # one-sample ELBO estimates averaged into one logged value
 POSTERIOR_KEYS = ('ffx', 'rfx', 'sigma_rfx', 'sigma_eps', 'corr_rfx')  # draw arrays of a fit
+DRAW_MAX = 1e3  # |draw| bound in standardized units; beyond it a fit counts as failed
 
 _DEFAULT_SRCDIR = Path(__file__).resolve().parent / '..' / 'outputs' / 'data'
 
@@ -101,25 +102,25 @@ def aggregateFits(fits: list[dict[str, np.ndarray]]) -> dict[str, np.ndarray]:
 
 
 def markNonFinite(fits: dict[str, np.ndarray], tag: str) -> dict[str, np.ndarray]:
-    """Count a fit whose posterior draws are not finite float32 numbers as failed.
+    """Count a fit with non-finite or absurd posterior draws as failed.
 
     ``pymc_extras.fit_laplace`` draws NaN without raising when the Hessian at the mode is
-    not positive definite, and draws up to 1e154 when the mode of a log-scale lies far in
-    the tail; the evaluation stack runs in float32, where both are non-finite. The draws
-    of such a dataset are set to NaN like those of a fit that raised, so every consumer
-    sees one ``{tag}_failed`` flag.
+    not positive definite, and draws scales of 1e4-1e34 when the mode of a log-scale lies
+    far in the tail. Parameters live in standardized units, so any draw beyond DRAW_MAX is
+    a broken fit, not a posterior. The draws of such a dataset are set to NaN like those of
+    a fit that raised, so every consumer sees one ``{tag}_failed`` flag.
     """
     keys = [f'{tag}_{k}' for k in POSTERIOR_KEYS if f'{tag}_{k}' in fits]
     failed = fits[f'{tag}_failed'].astype(bool)
     bad = np.zeros_like(failed)
     for key in keys:
-        finite = np.isfinite(fits[key]) & (np.abs(fits[key]) <= np.finfo(np.float32).max)
-        bad |= ~finite.reshape(len(failed), -1).all(1)
+        sane = np.isfinite(fits[key]) & (np.abs(fits[key]) <= DRAW_MAX)
+        bad |= ~sane.reshape(len(failed), -1).all(1)
     bad &= ~failed
     for key in keys:
         fits[key][bad] = np.nan
     error = fits[f'{tag}_error'].astype(object)
-    error[bad] = 'non-finite draws'
+    error[bad] = 'degenerate draws'
     return {**fits, f'{tag}_failed': failed | bad, f'{tag}_error': error.astype(str)}
 
 
