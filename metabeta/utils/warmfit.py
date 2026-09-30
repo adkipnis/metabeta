@@ -34,6 +34,7 @@ COND_STYLE: dict[str, dict] = {
     'warm_500': {'color': PALETTE[4], 'label': 'MB-NUTS (500)'},
     'warm_250': {'color': PALETTE[4], 'label': 'MB-NUTS (250)'},
     'advi': {'color': PALETTE[1], 'label': 'ADVI'},
+    'pathfinder': {'color': PALETTE[5], 'label': 'PF'},
 }
 
 
