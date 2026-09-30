@@ -500,3 +500,26 @@ the paper flagged, the new 100k-iteration run is the trustworthy side. ADVI fail
 is hard for NUTS at the default budget (119/512 converged on small-p at L0, 390 at L2). Old
 `test.fit.npz` of the real sets and the July `summary_test_{nuts,advi}_*` caches are still in
 place (deletion pending Alex's confirmation).
+
+### Evaluation reruns (2026-09-30, evening)
+
+- Deleted: old real `test.fit.npz` + July summary caches on the cluster (30 GB), old local
+  `test.fit.npz`/`valid.fit.npz` (95 GB). Local clone: `test.{nuts,advi1,pathfinder1,laplace,
+  cold_durations}.npz` of all 23 sets rsynced into `metabeta/outputs/data/` (`--ignore-existing`,
+  ~126 GB); `nuts2` and the ladder levels (260 GB) stay on the cluster (disk).
+- Cluster: `~/eval-items.txt` + `~/eval-runner.sh` (two `gpu_priority` runners, 300 GB, done
+  markers in `logs/eval2/`): oracle_posterior ×12 (`--prefix latest --n_samples 4000
+  --batch_size 8`), real_posterior ×11 (same, `--data_ids {set}-real`), runtimes cuda ×3
+  (`--refresh_cache`), evaluate ×12 (`--models MB,MB+IMH,NUTS,ADVI,PATHFINDER --plot
+  --save_tables --plot_suffix imh`), oracle_corr ×12 (`--plot`), LA figure on medium-b
+  (`--models MB+IMH,LAPLACE --plot_suffix la`), ref_curve. CPU: runtimes cpu ×3 (4 cores,
+  `--refresh_cache --no_plot`), nuts_divergences (done; pulled to
+  `~/Downloads/hpc-pull/results-refmethods/`).
+- `oracle_posterior.py` writes `oracle_{run}_class.{md,tex}` (mean NRMSE (r) per parameter
+  class β/σ/α + median LOO-NLL/time): the source of the paper's `tab:la`, which had no
+  producer before.
+- Paper `tools/build_{oracle,real,corr}_tables.py` now point at the ICLR `tables/` dir and add
+  the PF row; `restyle_tables.py`/`build_ablation_tables.py` path fixed. Figure mapping:
+  `plots/{ckpt}/comparison_imh_latest.pdf` → `figures/{family}-{size}.pdf`,
+  `comparison_la_latest.pdf` (medium-b) → `figures/laplace-bernoulli-medium.pdf`,
+  runtimes.py → `figures/runtimes_{family}.pdf`, oracle_corr huge-n → `figures/corr-normal-huge.pdf`.
