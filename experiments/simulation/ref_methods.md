@@ -449,3 +449,16 @@ caches are deleted before recaching.
   failures; more on Bernoulli sets via ADVI), and the `tpd` column is identical in both runs
   (time is not masked). LA NRMSE is inf or ~1e5–1e16 on 8 of 12 sets: draws within float32
   but astronomically large pass `markNonFinite`; needs a decision (see below).
+- Decisions (Alex, 2026-09-30): NUTS is the main reference; ADVI and PF are the secondary
+  comparisons and appear together wherever a competitor is shown; LA is only a failure check
+  against PF in its own small appendix section (GLMMs should not use LA). Draws beyond 1e3
+  standardized units count as a failed fit (`DRAW_MAX` in fit.py, error 'degenerate draws';
+  0–10 extra Laplace failures per sampled set, optimizer `success` is False on > 90 % of fits
+  and useless as a filter). Done: real_posterior.py scores ADVI and PF (`SECONDARY`),
+  oracle_posterior.py/oracle_corr.py add the PF row, runtimes plotting gets a `pathfinder`
+  condition, npe_errors.py and gaussian_local.py moved to the current tags (`nuts`, `advi1`,
+  `pathfinder1`; both were still reading `advi_*` keys, untested since no local checkpoint
+  run). `padToModel` padded only `nuts_*`/`advi_*`/`laplace_*`; it now pads every `FIT_TAGS`
+  prefix, which `Collection(fits=('nuts2', 'advi1', ...))` relied on. Laplace re-aggregated
+  and recached on the 12 sampled sets (`~/reagg-laplace.sh`); real sets get the rule through
+  check.py. Paper app:tra states the roles and the bound.
