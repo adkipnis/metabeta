@@ -1,10 +1,11 @@
 """
-experiments/evaluation/real_posterior.py — Posterior comparison on real data: MB and ADVI vs NUTS.
+experiments/evaluation/real_posterior.py — Posterior comparison on real data: MB, ADVI and PF vs NUTS.
 
 Evaluates a model checkpoint on the pre-generated real-data test batch at
-outputs/data/{size}-{fam}-real/test.npz (NUTS and ADVI fits in its sibling
-test.nuts2.npz / test.advi1.npz), comparing MB and ADVI posteriors
-against the NUTS reference (``nuts2``, the top of the budget ladder).  Since there
+outputs/data/{size}-{fam}-real/test.npz (reference and competitor fits in its siblings
+test.nuts2.npz, test.advi1.npz and test.pathfinder1.npz), comparing the MB, ADVI and
+Pathfinder (PF) posteriors against the NUTS reference (``nuts2``, the top of the budget
+ladder).  Since there
 are no ground-truth parameters, all metrics are relative to NUTS; only the datasets
 on which the reference converged are included.
 
@@ -61,6 +62,7 @@ from metabeta.utils.posterior_eval import (
 
 OUT_DIR = RESULTS_DIR
 REFERENCE_TAG = 'nuts2'
+SECONDARY = (('ADVI', 'advi1'), ('PF', 'pathfinder1'))  # competitors scored against the reference
 
 logger = logging.getLogger(__name__)
 
@@ -436,7 +438,11 @@ def evaluateReal(
     warmup: bool = True,
 ) -> list[dict]:
     col = Collection(
-        data_path, permute=False, max_d=max_d, max_q=max_q, fits=(REFERENCE_TAG, 'advi1')
+        data_path,
+        permute=False,
+        max_d=max_d,
+        max_q=max_q,
+        fits=(REFERENCE_TAG, *dict(SECONDARY).values()),
     )
     B_total = len(col)
     batch = collateGrouped([col[i] for i in range(B_total)])
@@ -461,16 +467,18 @@ def evaluateReal(
     B = batch['X'].shape[0]
 
     # Full-test-file masks used to key the per-method summary caches:
-    #   MB/NUTS cover the converged subset; ADVI additionally requires a successful fit.
+    #   MB/NUTS cover the converged subset; ADVI and PF additionally require a successful fit.
     conv_full = conv_mask
 
-    # ADVI subset (some fits may have failed)
-    advi_mask = fitBatchMask(batch, 'advi1')
-    n_advi = int(advi_mask.sum())
-    logger.info('ADVI available: %d / %d', n_advi, B)
-    advi_batch: dict | None = subsetBatch(batch, advi_mask) if n_advi > 0 else None
-    advi_full = conv_full.copy()
-    advi_full[conv_full] = advi_mask
+    # competitor subsets (some fits may have failed): label -> (mask, batch, full mask)
+    secondary: dict[str, tuple[np.ndarray, dict | None, np.ndarray]] = {}
+    for label, tag in SECONDARY:
+        mask = fitBatchMask(batch, tag)
+        n_ok = int(mask.sum())
+        logger.info('%s available: %d / %d', label, n_ok, B)
+        full = conv_full.copy()
+        full[conv_full] = mask
+        secondary[label] = (mask, subsetBatch(batch, mask) if n_ok > 0 else None, full)
 
     # Inference
     proposal_mb, mb_tpd_arr = loadOrSampleMB(
@@ -487,17 +495,20 @@ def evaluateReal(
         warmup=warmup,
     )
     proposal_nuts = fit2proposal(batch, REFERENCE_TAG)
-    proposal_advi = fit2proposal(advi_batch, 'advi1') if advi_batch is not None else None
+    proposals_sec = {
+        label: fit2proposal(secondary[label][1], tag) if secondary[label][1] is not None else None
+        for label, tag in SECONDARY
+    }
 
     # Rescale all to original data space before metric computation
     if rescale:
         proposal_mb.rescale(batch['sd_y'])
         proposal_nuts.rescale(batch['sd_y'])
-        if proposal_advi is not None:
-            proposal_advi.rescale(advi_batch['sd_y'])
+        for label, (mask, sub, full) in secondary.items():
+            if sub is not None:
+                proposals_sec[label].rescale(sub['sd_y'])
+                secondary[label] = (mask, rescaleData(sub), full)
         batch = rescaleData(batch)
-        if advi_batch is not None:
-            advi_batch = rescaleData(advi_batch)
 
     # LOO-NLL via getSummary (cached); NRMSE/corr will be NaN since real data has no ground truth
     summary_mb = loadOrComputeSummary(
@@ -524,23 +535,24 @@ def evaluateReal(
         rescale,
         summary_chunk_size=summary_chunk_size,
     )
-    summary_advi = (
-        loadOrComputeSummary(
-            proposal_advi,
-            advi_batch,
+    summaries_sec = {
+        label: loadOrComputeSummary(
+            proposals_sec[label],
+            secondary[label][1],
             data_path,
-            'advi1',
-            advi_full,
+            tag,
+            secondary[label][2],
             lf,
             rescale,
             summary_chunk_size=summary_chunk_size,
         )
-        if proposal_advi is not None
+        if proposals_sec[label] is not None
         else None
-    )
+        for label, tag in SECONDARY
+    }
 
     # Post-hoc refinements layered on the raw MB posterior (evaluated vs the full NUTS ref).
-    # (label, proposal, batch, tpd_arr, summary) tuples appended between MB and ADVI.
+    # (label, proposal, batch, tpd_arr, summary) tuples appended between MB and the competitors.
     refined_specs: list[tuple] = []
     for method in validMethods(methods, lf):
         logger.info('Refining MB with %s', method)
@@ -578,7 +590,6 @@ def evaluateReal(
         refined_specs.append((f'MB+{method}', p_ref, batch, tpd_ref, summary_ref))
 
     nuts_tpd_arr = batch.get(f'{REFERENCE_TAG}_duration')   # (B,) tensor or None
-    advi_mask_t = torch.from_numpy(advi_mask)           # bool tensor for indexing
 
     rows: list[dict] = []
 
@@ -587,12 +598,15 @@ def evaluateReal(
         + refined_specs
         + [
             (
-                'ADVI',
-                proposal_advi,
-                advi_batch,
-                advi_batch.get('advi1_duration') if advi_batch is not None else None,
-                summary_advi,
+                label,
+                proposals_sec[label],
+                secondary[label][1],
+                secondary[label][1].get(f'{tag}_duration')
+                if secondary[label][1] is not None
+                else None,
+                summaries_sec[label],
             )
+            for label, tag in SECONDARY
         ]
     )
 
@@ -600,15 +614,16 @@ def evaluateReal(
         if p_method is None or summary is None:
             continue
 
-        is_advi = label == 'ADVI'
-
-        # NUTS references restricted to this method's subset
-        p_nuts_ref = subsetProposal(proposal_nuts, advi_mask) if is_advi else proposal_nuts
+        # NUTS references restricted to this method's subset (competitors may have failed fits)
+        sub_mask = secondary[label][0] if label in secondary else None
         nuts_loo = summary_nuts.per_dataset.loo_nll
-        nuts_nll = nuts_loo[advi_mask_t] if is_advi else nuts_loo
-        nuts_tpd = (
-            nuts_tpd_arr[advi_mask_t] if (nuts_tpd_arr is not None and is_advi) else nuts_tpd_arr
-        )
+        if sub_mask is None:
+            p_nuts_ref, nuts_nll, nuts_tpd = proposal_nuts, nuts_loo, nuts_tpd_arr
+        else:
+            mask_t = torch.from_numpy(sub_mask)
+            p_nuts_ref = subsetProposal(proposal_nuts, sub_mask)
+            nuts_nll = nuts_loo[mask_t]
+            nuts_tpd = nuts_tpd_arr[mask_t] if nuts_tpd_arr is not None else None
 
         delta_tpd: np.ndarray | None = None
         if tpd_arr is not None and nuts_tpd is not None:
