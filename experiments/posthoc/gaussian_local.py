@@ -12,6 +12,7 @@ then evaluates RFX recovery under three global-conditioning scenarios:
 Compared against the standard baselines:
   MB              — full MetaBeta posterior (learned global + local flow)
   NUTS            — NUTS reference posterior
+  ADVI, PF        — the ADVI and Pathfinder competitors
 
 Key questions:
   GaussLoc(true) vs NUTS / MB  — how much better can we do with perfect globals?
@@ -106,7 +107,9 @@ def _loadData(cfg: argparse.Namespace) -> tuple[Dataloader, Dataloader]:
     def _dl(partition: str) -> Dataloader:
         path = dataFilePath(data_id, partition)
         assert path.exists(), f'data not found: {path}'
-        return Dataloader(path, batch_size=cfg.batch_size, sortish=True)
+        return Dataloader(
+            path, batch_size=cfg.batch_size, sortish=True, fits=('nuts', 'advi1', 'pathfinder1')
+        )
 
     return _dl('valid'), _dl('test')
 
@@ -127,7 +130,7 @@ def _batchToProposal(
     prefix: str,
     rescale: bool,
 ) -> Proposal:
-    """Reconstruct a Proposal from stored NUTS/ADVI samples in the batch."""
+    """Reconstruct a Proposal from the stored draws of a fit tag in the batch."""
     ffx = batch[f'{prefix}_ffx']
     sigma_rfx = batch[f'{prefix}_sigma_rfx']
     parts_g = [ffx, sigma_rfx]
@@ -294,7 +297,8 @@ def main() -> None:
     # --- standard proposals
     proposal_mb = _sampleMB(model, dl_test, cfg.n_samples, device, cfg.rescale)
     proposal_nuts = _batchToProposal(full_batch, 'nuts', cfg.rescale)
-    proposal_advi = _batchToProposal(full_batch, 'advi', cfg.rescale)
+    proposal_advi = _batchToProposal(full_batch, 'advi1', cfg.rescale)
+    proposal_pf = _batchToProposal(full_batch, 'pathfinder1', cfg.rescale)
 
     # --- Gaussian analytical proposals (batched to avoid OOM on large datasets)
     logger.info('Computing Gaussian analytical proposals...')
@@ -313,6 +317,7 @@ def main() -> None:
         ('MB', proposal_mb),
         ('NUTS', proposal_nuts),
         ('ADVI', proposal_advi),
+        ('PF', proposal_pf),
         ('GaussLoc(true)', proposal_ceil),
         ('GaussLoc(NUTS)', proposal_gl_nuts),
         ('GaussLoc(MB)', proposal_gl_mb),
