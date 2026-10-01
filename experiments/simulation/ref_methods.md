@@ -523,3 +523,48 @@ place (deletion pending Alex's confirmation).
   `plots/{ckpt}/comparison_imh_latest.pdf` → `figures/{family}-{size}.pdf`,
   `comparison_la_latest.pdf` (medium-b) → `figures/laplace-bernoulli-medium.pdf`,
   runtimes.py → `figures/runtimes_{family}.pdf`, oracle_corr huge-n → `figures/corr-normal-huge.pdf`.
+
+### Evaluation reruns: result (2026-10-01)
+
+- Both 12 h runners timed out (`eval2-1` after `rt-p … ev-medium-n`, `eval2-2` during
+  `rc-all`): 50/52 items done. Resubmitted one runner (`eval2-3`, 40868585) for `ev-medium-b`
+  (killed after 1 min) and `rc-all` (ref_curve.py had finished 18 of 23 sets in 9 h; its
+  per-method summary caches make the rerun resume). The medium-b comparison figure in the
+  paper is therefore still the 2026-09-26 one until `ev-medium-b` lands.
+- Pulled 263 result files + 13 figures to `~/Downloads/hpc-pull/results-refmethods/`; the
+  superseded local versions (215 files) are in `~/Downloads/hpc-pull/results-pre-refmethods/`,
+  the new ones replace them in `experiments/results/` (untracked).
+- **MB re-timing discarded.** `--refresh_cache` on the cuda runtime items (my mistake: MB has
+  not changed) re-timed MB on `supergpu26`, +5–9 % at the median vs the 2026-09-23/26 records
+  (e.g. Gaussian large MB 0.095 → 0.101 s, Bernoulli huge 0.118 → 0.129 s). The committed
+  `runtimes_{fam}_sampled_cuda_s4000.{md,tex,_records.json}` are now a merge: MB0/MB/global
+  pass/IMH records from the old run, NUTS0/NUTS/ADVI/Pathfinder/Laplace records (fit-file
+  durations) from the new fits, `nuts_converged` from the new fits for all rows, tables and
+  figure regenerated from the merged records (`merge_runtimes.py`, kept with the pulled files
+  in `results-refmethods/merged-runtimes/`). The three `runtimes_*_cpu_*` reruns (7 h × 4 cores
+  each, also re-timed MB) are kept in hpc-pull only; the paper's CPU MB cells stay as before.
+- Baseline wall times (median s, small→huge): LA 12.6–42 (pymc-extras BFGS + dense Hessian;
+  was 0.13–0.62 with the torch LA), PF 18–46, ADVI 27–50 (fixed 1e5 iterations; was 44–101
+  with early stopping), NUTS0 45–79, NUTS composite 73–98 (p95 2.9–14× the median because the
+  escalation accumulates failed levels; max 7,556 s). MB/NUTS at the median 680–960× (GPU),
+  40–150× (CPU); per converged NUTS posterior 94–292 s.
+- Oracle tables (NUTS-converged subset): MB vs NUTS within 0.01 in r/NRMSE/LOO-NLL everywhere
+  (unchanged). ADVI ECE −0.12…−0.25, PF ECE −0.06…−0.16; PF r 0.78–0.91, NRMSE 0.52–0.85
+  (ADVI 0.31–0.49). Convergence check (all datasets vs converged): ≤ 0.02 in r/NRMSE, ≤ 0.015
+  in ECE/EACE, now stated in app:tra.
+- Per-class table (`tab:la`, new `tools/build_la_table.py`, regime-averaged): σ NRMSE NUTS
+  0.28/0.52/0.37 (n/b/p), ADVI 0.36/0.60/0.51, **PF 1.55/1.64/1.57 (r 0.81/0.64/0.77)**, LA
+  3.14/7.27/4.97 (r 0.68/0.28/0.48); α: PF 0.58–0.90, LA 0.81–1.93 vs NUTS 0.45–0.71; LOO-NLL
+  PF within 0.06 of NUTS, LA +0.4…+1.7. So PF is *not* within 1.6–1.7× of the reference on the
+  variance components as the campaign's medium-b σ-ratio suggested; app:la reworded ("removes
+  most but not all" of the LA failure). Correlations (`tab:corr`): PF is the weakest method
+  (r 0.19–0.54, NRMSE ≥ 0.85).
+- Real sets: MB r ≥ 0.99, σ-ratio 0.96–1.00, ΔLOO 0.00 (unchanged). ADVI σ-ratio 0.75–0.91 (n),
+  0.70–0.88 (b), 0.59–0.68 (p) with r ≥ 0.95 (the old "32–45 % exhausted budget, 1.6–4.7× too
+  wide" Poisson story is gone with the fixed budget); PF σ-ratio 0.72–0.95, r 0.90–0.99.
+- Paper: tables rebuilt (`build_{oracle,real,corr}_tables.py`, new `build_nuts_table.py` →
+  `tables/nuts_convergence.tex` with per-level rows, `build_la_table.py`), 17 figures replaced
+  and compressed (old copies in `figures/backup/pre-refmethods/`), numbers updated in
+  results.tex, discussion.tex, app:tra, app:corr, app:la, app:rt (`tab:rt_full` now has LA/PF/
+  ADVI/NUTS$_0$/NUTS rows), `tab:real_p` caption. Compiles cleanly. Remaining TODO(ref-methods):
+  PyTensor compile cost in app:rt. Alex's call: LA sentence in `sections/results.tex:42`.
