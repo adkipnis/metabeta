@@ -568,3 +568,26 @@ place (deletion pending Alex's confirmation).
   results.tex, discussion.tex, app:tra, app:corr, app:la, app:rt (`tab:rt_full` now has LA/PF/
   ADVI/NUTS$_0$/NUTS rows), `tab:real_p` caption. Compiles cleanly. Remaining TODO(ref-methods):
   PyTensor compile cost in app:rt. Alex's call: LA sentence in `sections/results.tex:42`.
+
+### PyTensor compile cost (2026-10-01)
+
+Paired per-dataset difference cold − warm (`test.cold_durations.npz` of the 2026-09-29
+campaign vs. the warm fit files), failed fits excluded, median [IQR] in s:
+
+| set | ADVI 100k | Pathfinder 20 | Laplace |
+|---|---|---|---|
+| small n/b/p | 22 [19,25] / 20 [18,22] / 21 [19,23] | 39 [34,54] / 38 [32,43] / 37 [31,43] | 18 [15,25] / 16 [13,19] / 17 [13,20] |
+| medium | 24 [21,39] / 23 [20,26] / 23 [20,26] | 41 [36,62] / 37 [32,43] / 38 [32,43] | 19 [16,40] / 18 [16,20] / 17 [15,19] |
+| large | 25 [21,40] / 22 [19,26] / 23 [19,26] | 42 [36,63] / 42 [36,46] / 40 [35,45] | 19 [16,41] / 18 [15,20] / 18 [15,21] |
+| huge | 26 [21,41] / 24 [21,28] / 22 [19,26] | 46 [39,65] / 42 [37,48] / 38 [31,42] | 20 [17,41] / 18 [15,21] / 17 [14,21] |
+
+The Gaussian upper quartiles (40–65 s) are the q = 2 datasets (LKJ/Cholesky kernels).
+Pathfinder's own `compile_time` (2–5 s cold, 2–5 s warm) does not capture this; the
+compilation sits in `compute_time`. NUTS (cold): `nuts_duration − nuts_sampling_time` on
+level-0-converged datasets is 14/14/14, 18/18/16, 22/22/20, 26/27/25 s median (small →
+huge, n/b/p) = model build + compile + chain spawn. MB one-off cost (`~/Downloads/hpc-pull/results-refmethods/
+merged-runtimes/mb_coldstart.py`, MacBook, 4 threads): checkpoint load 0.16–0.24 s; the first pipeline
+pass in a process costs ≈ 2.7 s extra (small-n 2.87 s vs 0.22 s on the second pass);
+later checkpoints in the same process pay nothing (huge-p 1.86/1.77 s, medium-b
+1.18/1.20 s). GPU cold start not measured (gpu_priority slot occupied by the runner).
+Paper: app:rt Setup paragraph, TODO replaced; no TODO(ref-methods) left in the paper.
