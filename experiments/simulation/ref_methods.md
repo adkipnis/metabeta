@@ -591,3 +591,14 @@ pass in a process costs ≈ 2.7 s extra (small-n 2.87 s vs 0.22 s on the second 
 later checkpoints in the same process pay nothing (huge-p 1.86/1.77 s, medium-b
 1.18/1.20 s). GPU cold start not measured (gpu_priority slot occupied by the runner).
 Paper: app:rt Setup paragraph, TODO replaced; no TODO(ref-methods) left in the paper.
+
+### ref_curve rerun (2026-10-02)
+
+`rc-all` in runner `eval2-3` (supergpu03) crashed at 04:03 on `huge-n-real`: the node
+handed the job a Tesla V100 (compute capability 7.0), for which the installed torch CUDA
+build has no kernels (`cudaErrorNoKernelImageForDevice`). The 18 cached sets passed because
+nothing had to run on the GPU; the crash came with the first uncached MB sampling. The
+runner reported the item as FAILED and exited (no done_ marker). Resubmitted as `eval2-4`
+(40874631) with `--gres=gpu:h100:1`, running on supergpu29 since 2026-10-02 morning; the
+earlier eval runners ran on supergpu19/26 (H100). Lesson: always request `gpu:h100:1`
+on `gpu_p`, plain `gpu:1` can land on supergpu02/03/05/08/09 with older cards.
