@@ -103,6 +103,14 @@ def _checkFits(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
         n = int(raw['m'].shape[0])
     stem = data_path.stem
 
+    # one Fitter serves every tag: reintegration only needs the partition, not a method
+    fitter = None
+    if not cfg.no_reintegrate:
+        fit_cfg = argparse.Namespace(
+            data_id=data_id, partition=cfg.partition, method='nuts', level=0, idx=0
+        )
+        fitter = Fitter(fit_cfg, srcdir=srcdir)
+
     ok = True
     for tag in FITTED_TAGS:
         paths = [fits_dir / f'{stem}_{tag}_{i:03d}.npz' for i in range(n)]
@@ -113,23 +121,10 @@ def _checkFits(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
         if missing or broken:
             _printRefitCommand(data_id, tag, _failedIndices(missing, broken), cfg.partition)
             ok = False
-        elif not cfg.no_reintegrate:
-            method, level = tagMethodLevel(tag)
-            fit_cfg = argparse.Namespace(
-                data_id=data_id, idx=0, method=method, level=level, partition=cfg.partition
-            )
-            Fitter(fit_cfg, srcdir=srcdir).reintegrate(tags=(tag,))
-    if (
-        ok
-        and not cfg.no_reintegrate
-        and any(t.startswith('nuts') for t in availableFits(data_path))
-    ):
-        Fitter(
-            argparse.Namespace(
-                data_id=data_id, idx=0, method='nuts', level=0, partition=cfg.partition
-            ),
-            srcdir=srcdir,
-        ).composeNuts()
+        elif fitter is not None:
+            fitter.reintegrate(tags=(tag,))
+    if ok and fitter is not None and any(t.startswith('nuts') for t in availableFits(data_path)):
+        fitter.composeNuts()
     done = availableFits(data_path)
     if done:
         print(f'reintegrated: {" ".join(done)}')
