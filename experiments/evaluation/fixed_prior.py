@@ -56,7 +56,7 @@ from metabeta.utils.constants import (
 )
 from metabeta.utils.dataloader import Collection, collateGrouped
 from metabeta.utils.device import setDevice
-from metabeta.utils.evaluation import nutsConvergeMask
+from metabeta.utils.evaluation import nutsConverged
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR, REPO_ROOT
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.posterior_eval import (
@@ -252,8 +252,10 @@ class FixedPriorStudy:
 
     def loadBatch(self, size: str) -> tuple[dict[str, torch.Tensor], np.ndarray, Path]:
         """Selected datasets of {size}-{family}-sampled with their NUTS fits and P1 stats."""
-        data_path = DATA_DIR / f'{size}-{self.family}-sampled' / 'test.fit.npz'
-        col = Collection(data_path, permute=False, max_d=self.max_d, max_q=self.max_q)
+        data_path = DATA_DIR / f'{size}-{self.family}-sampled' / 'test.npz'
+        col = Collection(
+            data_path, permute=False, max_d=self.max_d, max_q=self.max_q, fits=('nuts2',)
+        )
         B = len(col)
         if self.cfg.n_datasets > B:
             raise ValueError(f'n_datasets={self.cfg.n_datasets} exceeds test-set size {B}')
@@ -261,12 +263,8 @@ class FixedPriorStudy:
         idx = np.sort(np.random.default_rng(self.cfg.seed).permutation(B)[: self.cfg.n_datasets])
         mask = np.zeros(B, dtype=bool)
         mask[idx] = True
+        # carries the P1 analytical stats precomputed in test.npz (the paper-default context)
         batch = collateGrouped([col[i] for i in idx])
-        # P1 analytical stats precomputed in the sibling test.npz (the paper-default context)
-        base = Collection(
-            data_path.with_name('test.npz'), permute=False, max_d=self.max_d, max_q=self.max_q
-        )
-        batch['stats'] = collateGrouped([base[i] for i in idx])['stats']
         return batch, mask, data_path
 
     def nutsLoo(self, proposal, batch, data_path: Path, mask: np.ndarray) -> np.ndarray:
@@ -274,7 +272,7 @@ class FixedPriorStudy:
 
         Both names hold the same rescaled full-split summary (identical to 1e-6 on small-n).
         """
-        for name in (f'summary_test_nuts_lf{self.lf}_rs1_all.pt', 'summary_test_nuts.pt'):
+        for name in (f'summary_test_nuts2_lf{self.lf}_rs1_all.pt', 'summary_test_nuts2.pt'):
             full = data_path.parent / name
             if full.exists():
                 loo = EvaluationSummary.load(full).per_dataset.loo_nll.float().numpy()
@@ -284,7 +282,7 @@ class FixedPriorStudy:
             proposal,
             batch,
             data_path,
-            'nuts',
+            'nuts2',
             mask,
             self.lf,
             True,
@@ -380,10 +378,10 @@ class FixedPriorStudy:
         self.max_d, self.max_q = model_cfg.max_d, model_cfg.max_q
         batch, mask, data_path = self.loadBatch(size)
         B = batch['X'].shape[0]
-        conv = nutsConvergeMask(batch, mode=self.cfg.convergence_mode).astype(bool)
+        conv = nutsConverged(batch, 'nuts2').astype(bool)
         logger.info('%s-%s: %d datasets, %d NUTS-converged', size, self.family, B, conv.sum())
 
-        nuts = fit2proposal(batch, 'nuts')
+        nuts = fit2proposal(batch, 'nuts2')
         nuts.rescale(batch['sd_y'])
         batch_rs = rescaleData(batch)
         ctx = {
@@ -570,8 +568,8 @@ class FixedPriorStudy:
             f'# Fixed-prior emulation ({FAMILY_LABELS[self.family]})\n',
             FREEZE,
             '## Results\n',
-            f'Sizes: {", ".join(df["size"].unique())}. Reference NUTS(P1) '
-            f'({self.cfg.convergence_mode}), converged subset; median ± MAD per dataset, EACE '
+            f'Sizes: {", ".join(df["size"].unique())}. Reference NUTS(P1), '
+            'converged subset; median ± MAD per dataset, EACE '
             'pooled over entries vs the generating parameters.\n',
             tabulate(self.summaryRows(df), headers=headers, tablefmt='pipe', stralign='right'),
             '',
@@ -787,7 +785,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--summary_chunk_size', type=int, default=4)
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--convergence_mode', type=str, default='strict', choices=['liberal', 'strict'])
     parser.add_argument('--report_only', action='store_true', help='tabulate the existing CSVs')
     parser.add_argument('--paper', action='store_true', help='also write the cross-family table and figure')
     parser.add_argument('--outdir', type=str, default=str(RESULTS_DIR))

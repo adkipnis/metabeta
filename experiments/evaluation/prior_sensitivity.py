@@ -48,8 +48,8 @@ stated before the run: every other point with MB acceptance below the Api's warn
 (IMH_ACCEPT_WARN) is written to nuts_extra.txt for a second NUTS array; those points are selected
 by the outcome, so they are reported separately from the sub-grid.
 
-NUTS reliability = the paper's filter, utils/evaluation.nutsConvergeMask in 'liberal' mode as in
-oracle_posterior.py (strict counts reported alongside).  Primary medians and flag counts are over
+NUTS reliability = the paper's filter, utils/evaluation.nutsConverged (one criterion, as in
+oracle_posterior.py).  Primary medians and flag counts are over
 converged sub-grid points; all-point counts are reported too; unconverged NUTS points are drawn
 hollow grey.  Built-in diagnostics per point: IMH acceptance and the PSIS k-hat of the flow pool
 under the Api's IS correction; a point 'fires' at acceptance < 0.2 or k-hat > 0.7.
@@ -109,7 +109,7 @@ from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
 from metabeta.utils.api import coercePriors, parseFormula, resolveLikelihoodFamily
 from metabeta.utils.constants import FFX_FAMILIES, LIKELIHOOD_FAMILIES, SIGMA_FAMILIES
 from metabeta.utils.dataloader import sliceBatch, toDevice
-from metabeta.utils.evaluation import nutsConvergeMask
+from metabeta.utils.evaluation import nutsConverged
 from metabeta.utils.experiments import DATA_DIR, PREPROCESSED_DATA_DIR, REPO_ROOT, RESULTS_DIR
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.plot import PALETTE, VECTOR_RASTER_DPI
@@ -177,12 +177,11 @@ TRAIN_MAX_TAU_FFX = {0: 4.0, 1: 3.0, 2: 1.5}
 TRAIN_MAX_TAU_RFX = {0: 5.0, 1: 2.0, 2: 1.0}
 
 METHODS = {'MB0': False, 'MB': True}  # label -> Api.sample(refine=...)
-FIT_PREFIXES = {'NUTS': 'nuts', 'ADVI': 'advi'}
+FIT_PREFIXES = {'NUTS': 'nuts0', 'ADVI': 'advi1'}  # fit.py tags of the per-point files
 QUANTILES = {'q05': 0.05, 'q50': 0.5, 'q95': 0.95}
 NUTS_CHAINS = 4  # fit.py default; chains run in parallel, one core each
 
 KEY_Z_MAX = 0.25
-CONVERGENCE_MODE = 'liberal'  # nutsConvergeMask mode, as in oracle_posterior.py
 NEAR_ZERO = 0.2  # |key effect| below this counts as the prior's spike at zero
 FIRE_ACCEPT, FIRE_KHAT = 0.2, PSIS_K_THRESHOLD  # a built-in diagnostic fires beyond these
 WIDTH_RATIO_RANGE = (0.8, 1.25)
@@ -195,7 +194,7 @@ BAMBI_TAU = 2.5  # row 2 and the Bayes-factor reference use the grid tau_beta ne
 SD_MARKERS = {'halfnormal': 'o', 'exponential': 'D'}  # NUTS SD priors in figure row 2
 FIG_DIR = Path.home() / 'LaTeX' / 'metabeta-iclr' / 'figures'
 C_MB, C_NUTS = PALETTE[4], PALETTE[3]  # runtimes figure colours of MB and NUTS
-C_UNCONV = '0.6'  # NUTS points failing nutsConvergeMask
+C_UNCONV = '0.6'  # NUTS points failing nutsConverged
 # IMH acceptance of the MB markers: sequential in MB's hue, light end cut so low values stay visible
 ACCEPT_CMAP = mcolors.LinearSegmentedColormap.from_list(
     'accept', plt.get_cmap('Purples')(np.linspace(0.3, 1.0, 256))
@@ -249,12 +248,9 @@ def buildGrid(lf: int) -> pd.DataFrame:
     return grid
 
 
-def nutsConverged(fit: dict[str, np.ndarray], mode: str) -> bool:
-    """nutsConvergeMask on one per-point fit file."""
-    keys = ('nuts_divergences', 'nuts_rhat', 'nuts_ess', 'nuts_ess_tail', 'nuts_max_treedepth')
-    diag = {k: torch.as_tensor(fit[k])[None] for k in keys}
-    diag['nuts_draws'] = torch.as_tensor(int(fit['nuts_draws']))
-    return bool(nutsConvergeMask(diag, mode=mode)[0])
+def pointConverged(fit: dict[str, np.ndarray], prefix: str) -> bool:
+    """``nutsConverged`` on one per-point fit file (no dataset axis)."""
+    return bool(nutsConverged({k: np.asarray(v)[None] for k, v in fit.items()}, prefix)[0])
 
 
 def flagCount(g: pd.DataFrame) -> str:
@@ -668,14 +664,13 @@ class PriorSensitivity:
                 'local': {'samples': local[None]},
             }
             p = Proposal(proposed, has_sigma_eps=self.meta[name]['lf'] == 0, corr_rfx=corr[None])
-            if prefix == 'nuts':
+            if method == 'NUTS':
                 diag |= {
-                    'rhat_max': float(np.nanmax(fit['nuts_rhat'])),
-                    'ess_bulk_min': float(np.nanmin(fit['nuts_ess'])),
-                    'divergences': int(fit['nuts_divergences'].sum()),
-                    'treedepth_frac': float(np.mean(fit['nuts_max_treedepth'])),
-                    'nuts_converged': nutsConverged(fit, CONVERGENCE_MODE),
-                    'nuts_converged_strict': nutsConverged(fit, 'strict'),
+                    'rhat_max': float(np.nanmax(fit[f'{prefix}_rhat'])),
+                    'ess_bulk_min': float(np.nanmin(fit[f'{prefix}_ess'])),
+                    'divergences': int(fit[f'{prefix}_divergences'].sum()),
+                    'treedepth_frac': float(np.mean(fit[f'{prefix}_max_treedepth'])),
+                    'nuts_converged': pointConverged(fit, prefix),
                 }
             out[method] = (p, diag)
         return out
@@ -810,7 +805,7 @@ class PriorSensitivity:
         converged = nuts_rows[nuts_rows.nuts_converged.astype(bool)].point if len(nuts_rows) else []
         for label, mask in (
             (
-                f'converged sub-grid points (primary; nutsConvergeMask {CONVERGENCE_MODE})',
+                'converged sub-grid points (primary; nutsConverged)',
                 sub.point.isin(converged),
             ),
             ('all sub-grid points', sub.point >= 0),
@@ -881,8 +876,8 @@ class PriorSensitivity:
         if len(nuts):
             bad = nuts[~nuts.nuts_converged.astype(bool)]
             parts.append(
-                f'## NUTS diagnostics\n\nconverged ({CONVERGENCE_MODE}) at {len(nuts) - len(bad)}/{len(nuts)} '
-                f'sub-grid points (strict: {int(nuts.nuts_converged_strict.sum())}/{len(nuts)}); max R-hat '
+                f'## NUTS diagnostics\n\nconverged at {len(nuts) - len(bad)}/{len(nuts)} '
+                f'sub-grid points; max R-hat '
                 f'{nuts.rhat_max.max():.3f}, min bulk ESS {nuts.ess_bulk_min.min():.0f}; not converged: '
                 + (
                     str(
@@ -931,10 +926,7 @@ class PriorSensitivity:
         for name, df in frames.items():
             nuts = df[df.nuts_subgrid & (df.method == 'NUTS')]
             conv = set(nuts[nuts.nuts_converged.astype(bool)].point)
-            reliable.append(
-                f'- {name}: NUTS converged ({CONVERGENCE_MODE}) at {len(conv)}/{len(nuts)} sub-grid points '
-                f'(strict: {int(nuts.nuts_converged_strict.sum())})'
-            )
+            reliable.append(f'- {name}: NUTS converged at {len(conv)}/{len(nuts)} sub-grid points')
             sub = df[df.nuts_subgrid & (df.method != 'NUTS')]
             for method, g_all in sub.groupby('method', sort=False):
                 g = g_all[g_all.point.isin(conv)]
@@ -960,7 +952,7 @@ class PriorSensitivity:
         ]
         md = (
             '# E2 agreement with NUTS (median ± MAD over converged sub-grid points; '
-            f'nutsConvergeMask {CONVERGENCE_MODE})\n\n'
+            'nutsConverged)\n\n'
         )
         md += (
             tabulate(md_rows, headers=headers, tablefmt='pipe')
@@ -970,7 +962,7 @@ class PriorSensitivity:
         )
         self.resultPath('_agreement.md').write_text(md)
         tex = [
-            f'% entries: median ± MAD over converged NUTS sub-grid points (nutsConvergeMask {CONVERGENCE_MODE})',
+            '% entries: median ± MAD over converged NUTS sub-grid points (nutsConverged)',
             r'\begin{tabular}{ll|ccccccc}',
             r'    \toprule',
             r'    dataset & model & $r$ & $\sigma\text{-ratio}$ & $\mathrm{rank\text{-}MAD}$ & '
@@ -1017,24 +1009,20 @@ class PriorSensitivity:
                         'psis_k': ev[f'k_s{S}'],
                         'is_eff': ev[f'eff_s{S}'],
                     }
-                    path = self.dataDir(name) / 'fits' / f'test_nuts_{point:03d}.npz'
+                    prefix = FIT_PREFIXES['NUTS']
+                    path = self.dataDir(name) / 'fits' / f'test_{prefix}_{point:03d}.npz'
                     if path.exists():
                         with np.load(path, allow_pickle=True) as f:
                             fit = {
-                                k: torch.as_tensor(f[k])
-                                for k in (
-                                    'nuts_ffx',
-                                    'nuts_sigma_rfx',
-                                    'nuts_sigma_eps',
-                                    'nuts_corr_rfx',
-                                )
+                                k: torch.as_tensor(f[f'{prefix}_{k}'])
+                                for k in ('ffx', 'sigma_rfx', 'sigma_eps', 'corr_rfx')
                             }
                         target = Target(batch64, block['MB0']['d_corr'])
                         u = target.fromConstrained(
-                            fit['nuts_ffx'].T,
-                            fit['nuts_sigma_rfx'].T,
-                            fit['nuts_sigma_eps'][0],
-                            fit['nuts_corr_rfx'][0],
+                            fit['ffx'].T,
+                            fit['sigma_rfx'].T,
+                            fit['sigma_eps'][0],
+                            fit['corr_rfx'][0],
                         )
                         br = bridge(target.logProb, u, self.cfg.n_bridge, gen)
                         row |= {
@@ -1112,7 +1100,7 @@ class PriorSensitivity:
 
     @staticmethod
     def _nutsDots(ax, nu: pd.DataFrame, x: pd.Series, key: str, marker: str, mfc: str) -> None:
-        """NUTS median and 90% interval; points failing nutsConvergeMask hollow grey."""
+        """NUTS median and 90% interval; points failing nutsConverged hollow grey."""
         for conv, color, face in ((True, C_NUTS, mfc), (False, C_UNCONV, 'white')):
             sel = nu.nuts_converged.astype(bool) == conv
             n = nu[sel]

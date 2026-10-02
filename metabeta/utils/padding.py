@@ -1,5 +1,7 @@
 import numpy as np
 
+from metabeta.utils.fits import FIT_TAGS
+
 
 def maxShapes(batch: list[dict[str, np.ndarray]]) -> dict[str, tuple[int, ...]]:
     """for each array in dataset, get the maximal shape over the whole batch"""
@@ -52,7 +54,7 @@ def padToModel(
     architecture was built for ``max_d`` / ``max_q``.  Also creates ``Z``
     from the (now padded) ``X``.
 
-    Fit-sample arrays (``nuts_*`` / ``advi_*``) are padded consistently.
+    Fit-sample arrays (``{tag}_*`` for every tag in ``FIT_TAGS``) are padded consistently.
     """
     d = int(ds['d'])
     q = int(ds['q'])
@@ -108,10 +110,10 @@ def padToModel(
             padded[:q, :q] = ds['Psi']
             ds['Psi'] = padded
 
-    # --- pad fit samples (nuts_* / advi_* / laplace_*) ---
+    # --- pad fit samples ({tag}_*) ---
     # Fit arrays may be stored at the file-wide max d/q (larger than this
     # dataset's actual d/q), so we trim first, then re-pad to model dims.
-    for method in ('nuts', 'advi', 'laplace'):
+    for method in FIT_TAGS:
         ffx_key = f'{method}_ffx'
         if ffx_key not in ds:
             continue

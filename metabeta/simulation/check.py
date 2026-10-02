@@ -1,3 +1,11 @@
+"""Check generated data files and per-dataset reference fits; reintegrate complete fit tags.
+
+For the test and valid partitions every fit tag with at least one per-dataset file under
+``fits/`` is checked for completeness; complete tags are aggregated into
+``{partition}.{tag}.npz`` unless ``--no_reintegrate``. Missing or broken fits print the
+``scripts/fit-ref.sh`` command that refits exactly those datasets.
+"""
+
 import argparse
 import sys
 from pathlib import Path
@@ -5,8 +13,13 @@ from pathlib import Path
 import numpy as np
 from tqdm import tqdm
 
-from metabeta.simulation.nutsadvi import Fitter
+from metabeta.simulation.fit import Fitter, tagMethodLevel
+from metabeta.utils.fits import FIT_TAGS, availableFits
 from metabeta.utils.names import datasetFilename
+
+# tags a fit run writes; the composite `nuts` is composed from the level files, not fitted
+FITTED_TAGS = tuple(tag for tag in FIT_TAGS if tag != 'nuts')
+
 
 # fmt: off
 def setup() -> argparse.Namespace:
@@ -16,16 +29,14 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--data_id', type=str, nargs='+', required=True,
                         help='one or more data config tags')
     parser.add_argument('--partition', choices=['train', 'test', 'valid'], required=True,
-                        help='check training epochs (train), test fits (test), or valid fits (valid)')
+                        help='check training epochs (train) or reference fits (test, valid)')
     parser.add_argument('-b', type=int, default=12000,
                         help='batch size: expected number of train epochs (default: 12000)')
-    parser.add_argument('--n_fits', type=int, default=512,
-                        help='expected fit files per method (default: 512)')
     parser.add_argument('--srcdir', type=str,
                         default=str(Path(__file__).resolve().parent / '..' / 'outputs' / 'data'),
                         help='root data directory')
     parser.add_argument('--no_reintegrate', action='store_true',
-                        help='skip reintegration even when all fits are present (test partition only)')
+                        help='skip reintegration of complete fit tags')
     parser.add_argument('--inspect', action='store_true',
                         help='load each npz file to verify readability')
     return parser.parse_args()
@@ -58,28 +69,18 @@ def _report(
         print(f'  broken   {p}: {err}')
 
 
-def _failedFitIndices(missing: list[Path], broken: list[tuple[Path, str]]) -> list[int]:
-    failed_paths = [*missing, *(p for p, _ in broken)]
-    indices = []
-    for path in failed_paths:
-        try:
-            indices.append(int(path.stem.rsplit('_', maxsplit=1)[-1]))
-        except ValueError:
-            continue
-    return sorted(set(indices))
+def _failedIndices(missing: list[Path], broken: list[tuple[Path, str]]) -> list[int]:
+    paths = [*missing, *(p for p, _ in broken)]
+    return sorted({int(p.stem.rsplit('_', maxsplit=1)[-1]) for p in paths})
 
 
-def _printRefitCommand(
-    data_id: str, method: str, failed_idx: list[int], partition: str = 'test'
-) -> None:
-    if not failed_idx:
-        return
+def _printRefitCommand(data_id: str, tag: str, failed_idx: list[int], partition: str) -> None:
+    method, level = tagMethodLevel(tag)
     idx_args = ' '.join(str(idx) for idx in failed_idx)
-    partition_flag = f' --partition {partition}' if partition != 'test' else ''
     print('  rerun with:')
     print(
-        f'    scripts/fit-selected.sh --method {method} --data_id {data_id}'
-        f'{partition_flag} --idx {idx_args}'
+        f'    scripts/fit-ref.sh --method {method} --level {level} --data_id {data_id}'
+        f' --partition {partition} --idx {idx_args}'
     )
 
 
@@ -94,83 +95,46 @@ def _checkTrain(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
     return not missing and not broken
 
 
-def _checkTest(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
-    fits_dir = srcdir / data_id / 'fits'
-    fit_path = srcdir / data_id / 'test.fit.npz'
-    if fit_path.exists() and not fits_dir.exists():
-        print('test.fit.npz present, fits/ absent — already reintegrated.')
-        return True
-    stem = Path(datasetFilename(partition='test')).stem
+def _checkFits(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
+    """Check every started fit tag of the partition; reintegrate the complete ones."""
+    data_path = srcdir / data_id / datasetFilename(partition=cfg.partition)
+    fits_dir = data_path.parent / 'fits'
+    with np.load(data_path, allow_pickle=True) as raw:
+        n = int(raw['m'].shape[0])
+    stem = data_path.stem
 
-    pymc_paths = [fits_dir / f'{stem}_nuts_{i:03d}.npz' for i in range(cfg.n_fits)]
-    advi_paths = [fits_dir / f'{stem}_advi_{i:03d}.npz' for i in range(cfg.n_fits)]
+    # one Fitter serves every tag: reintegration only needs the partition, not a method
+    fitter = None
+    if not cfg.no_reintegrate:
+        fit_cfg = argparse.Namespace(
+            data_id=data_id, partition=cfg.partition, method='nuts', level=0, idx=0
+        )
+        fitter = Fitter(fit_cfg, srcdir=srcdir)
 
-    pymc_missing, pymc_broken = _check(pymc_paths, 'nuts fits', inspect=cfg.inspect)
-    advi_missing, advi_broken = _check(advi_paths, 'advi fits', inspect=cfg.inspect)
-    _report(
-        'nuts fits',
-        len(pymc_paths) - len(pymc_missing) - len(pymc_broken),
-        len(pymc_paths),
-        pymc_missing,
-        pymc_broken,
-    )
-    _report(
-        'advi fits',
-        len(advi_paths) - len(advi_missing) - len(advi_broken),
-        len(advi_paths),
-        advi_missing,
-        advi_broken,
-    )
-    _printRefitCommand(data_id, 'nuts', _failedFitIndices(pymc_missing, pymc_broken))
-    _printRefitCommand(data_id, 'advi', _failedFitIndices(advi_missing, advi_broken))
-
-    fits_ok = not any([pymc_missing, pymc_broken, advi_missing, advi_broken])
-    if fits_ok and not cfg.no_reintegrate:
-        _reintegrate(data_id, srcdir, partition='test')
-    return fits_ok
-
-
-def _checkValid(data_id: str, cfg: argparse.Namespace, srcdir: Path) -> bool:
-    fits_dir = srcdir / data_id / 'fits'
-    fit_path = srcdir / data_id / 'valid.fit.npz'
-    if fit_path.exists() and not fits_dir.exists():
-        print('valid.fit.npz present, fits/ absent — already reintegrated.')
-        return True
-    stem = Path(datasetFilename(partition='valid')).stem
-
-    nuts_paths = [fits_dir / f'{stem}_nuts_{i:03d}.npz' for i in range(cfg.n_fits)]
-    nuts_missing, nuts_broken = _check(nuts_paths, 'nuts fits (valid)', inspect=cfg.inspect)
-    _report(
-        'nuts fits (valid)',
-        len(nuts_paths) - len(nuts_missing) - len(nuts_broken),
-        len(nuts_paths),
-        nuts_missing,
-        nuts_broken,
-    )
-    _printRefitCommand(
-        data_id, 'nuts', _failedFitIndices(nuts_missing, nuts_broken), partition='valid'
-    )
-
-    fits_ok = not any([nuts_missing, nuts_broken])
-    if fits_ok and not cfg.no_reintegrate:
-        _reintegrate(data_id, srcdir, partition='valid', methods=['nuts'])
-    return fits_ok
-
-
-def _reintegrate(
-    data_id: str, srcdir: Path, partition: str = 'test', methods: list[str] | None = None
-) -> None:
-    fit_cfg = argparse.Namespace(data_id=data_id, idx=0, method='nuts', partition=partition)
-    try:
-        Fitter(fit_cfg, srcdir=srcdir).reintegrate(methods=methods)
-    except Exception as exc:
-        print(f'reintegration failed: {exc}')
+    ok = True
+    for tag in FITTED_TAGS:
+        paths = [fits_dir / f'{stem}_{tag}_{i:03d}.npz' for i in range(n)]
+        if not any(p.exists() for p in paths):
+            continue
+        missing, broken = _check(paths, f'{tag} fits', inspect=cfg.inspect)
+        _report(f'{tag} fits', n - len(missing) - len(broken), n, missing, broken)
+        if missing or broken:
+            _printRefitCommand(data_id, tag, _failedIndices(missing, broken), cfg.partition)
+            ok = False
+        elif fitter is not None:
+            fitter.reintegrate(tags=(tag,))
+    if ok and fitter is not None and any(t.startswith('nuts') for t in availableFits(data_path)):
+        fitter.composeNuts()
+    done = availableFits(data_path)
+    if done:
+        print(f'reintegrated: {" ".join(done)}')
+    return ok
 
 
 def main() -> int:
     cfg = setup()
     srcdir = Path(cfg.srcdir).resolve()
-    check_fn = {'train': _checkTrain, 'test': _checkTest, 'valid': _checkValid}[cfg.partition]
+    check_fn = _checkTrain if cfg.partition == 'train' else _checkFits
 
     results = {}
     for i, data_id in enumerate(cfg.data_id):

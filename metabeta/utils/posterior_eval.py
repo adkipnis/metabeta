@@ -10,7 +10,7 @@ proposals, and summarise each. This module holds the parts that are identical be
   * MB sampling and the on-disk caches (posterior samples, refinements, summaries)
 
 The per-script pieces (CLI, metric computation, table layout) stay in the scripts, since
-their metrics and outputs differ. Caches live next to the data as siblings of test.fit.npz
+their metrics and outputs differ. Caches live next to the data as siblings of test.npz
 and are keyed by checkpoint/prefix/n_samples/seed and by a hash of the dataset subset mask.
 
 Cache freshness is mtime-based (vs the data file and checkpoint), so a code change to a
@@ -209,7 +209,7 @@ def sampleMB(
 
 
 # ---------------------------------------------------------------------------
-# Caching (posterior samples, refinements, summaries) — siblings of test.fit.npz.
+# Caching (posterior samples, refinements, summaries) — siblings of test.npz.
 
 
 def _forceRefresh(method: str) -> bool:
@@ -265,7 +265,7 @@ def loadOrSampleMB(
     warmup: bool = True,
     variant: str = '',
 ) -> tuple[Proposal, torch.Tensor]:
-    """Cached wrapper around sampleMB; cache lives next to the data as test.fit.npz's sibling.
+    """Cached wrapper around sampleMB; cache lives next to the data as test.npz's sibling.
 
     ``mask`` identifies which datasets of the full test file are in ``batch`` (e.g. the
     capacity-kept or NUTS-converged subset); it is folded into the cache key since it changes
@@ -601,7 +601,7 @@ def loadOrComputeSummary(
     summary_chunk_size: int = 4,
     variant: str = '',
 ) -> EvaluationSummary:
-    """Cached wrapper around getSummary; cache lives next to the data (sibling of test.fit.npz).
+    """Cached wrapper around getSummary; cache lives next to the data (sibling of test.npz).
 
     ``mask`` identifies which datasets of the full test file this summary covers (capacity,
     convergence, and/or fit-success subset), so distinct subsets get distinct caches.

@@ -7,10 +7,12 @@ import pytest
 import torch
 
 from metabeta.utils.dataloader import Collection, Dataloader
+from metabeta.utils.fits import saveFits
 
 
 @pytest.fixture(scope='session')
 def dataset_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """``test.npz`` with a ``test.laplace.npz`` fit file next to it."""
     path = tmp_path_factory.mktemp('dataloader-data') / 'test.npz'
     rng = np.random.default_rng(42)
 
@@ -65,18 +67,21 @@ def dataset_path(tmp_path_factory: pytest.TempPathFactory) -> Path:
         d=d_vals,
         q=q_vals,
         sd_y=np.ones(n_datasets, dtype=np.float32),
-        laplace_ffx=np.zeros((n_datasets, max_d, s_fit), dtype=np.float32),
-        laplace_sigma_rfx=np.ones((n_datasets, max_q, s_fit), dtype=np.float32),
-        laplace_sigma_eps=np.ones((n_datasets, 1, s_fit), dtype=np.float32),
-        laplace_rfx=np.zeros((n_datasets, max_q, max_m, s_fit), dtype=np.float32),
-        laplace_corr_rfx=np.repeat(
+    )
+    laplace = {
+        'laplace_ffx': np.zeros((n_datasets, max_d, s_fit), dtype=np.float32),
+        'laplace_sigma_rfx': np.ones((n_datasets, max_q, s_fit), dtype=np.float32),
+        'laplace_sigma_eps': np.ones((n_datasets, 1, s_fit), dtype=np.float32),
+        'laplace_rfx': np.zeros((n_datasets, max_q, max_m, s_fit), dtype=np.float32),
+        'laplace_corr_rfx': np.repeat(
             np.eye(max_q, dtype=np.float32)[None, None, None, :, :],
             n_datasets,
             axis=0,
         ).repeat(s_fit, axis=2),
-        laplace_duration=np.ones(n_datasets, dtype=np.float32),
-        laplace_failed=np.zeros(n_datasets, dtype=bool),
-    )
+        'laplace_duration': np.ones(n_datasets, dtype=np.float32),
+        'laplace_failed': np.zeros(n_datasets, dtype=bool),
+    }
+    saveFits(path, 'laplace', laplace)
     return path
 
 
@@ -166,9 +171,20 @@ def test_full_batch_exposes_original_dataset_indices(dataset_path: Path):
     torch.testing.assert_close(batch['_idx'], torch.arange(len(dl.dataset)))
 
 
+def test_collection_merges_only_requested_fits(dataset_path: Path):
+    plain = Collection(dataset_path, permute=False)
+    assert plain.fits == ()
+    assert not any(k.startswith('laplace_') for k in plain.raw)
+
+    col = Collection(dataset_path, permute=False, fits=('laplace',))
+    assert col.fits == ('laplace',)
+    assert col.raw['laplace_ffx'].shape[0] == len(col)
+    assert "fits=['laplace']" in repr(col)
+
+
 def test_dataloader_collates_laplace_fit_samples(dataset_path: Path):
     bs = 4
-    dl = Dataloader(dataset_path, batch_size=bs, sortish=False)
+    dl = Dataloader(dataset_path, batch_size=bs, sortish=False, fits=('laplace',))
     batch = next(iter(dl))
 
     assert batch['laplace_ffx'].shape == (bs, 3, 4)

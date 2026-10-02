@@ -11,7 +11,7 @@ the stored hyperparameters that define the fitted model are rewritten:
 
 Because metabeta reads those fields as posterior context and ``utils/pymc.buildPymc`` reads
 them to construct the PyMC model, writing them into a data dir is enough to make *both*
-inference paths fit the same misspecified prior — no changes to fit.py or fit-nuts.sh.  That
+inference paths fit the same misspecified prior — no changes to fit.py or fit-ref.sh.  That
 is the whole point of doing this at generation time rather than perturbing in memory: without
 a matching NUTS refit there is no gold standard to compare the degradation against.
 
@@ -21,7 +21,7 @@ genuine modelling error, and the question is whether metabeta degrades in step w
 Each (size, family) source produces standard-format data dirs under outputs/data/:
 
     {size}-{fam}-priorbase      unperturbed baseline: slice of the original test.npz AND its
-                                test.fit.npz (existing NUTS fits reused — zero refits)
+                                test.nuts.npz (existing NUTS fits reused — zero refits)
     {size}-{fam}-{tag}          one dir per condition (tau033, tau3, mu1, mu2, famrot),
                                 test.npz only — NUTS fits to be produced with fit.py
 
@@ -36,9 +36,9 @@ Usage (from repo root):
     uv run python experiments/simulation/prior_misspec.py --print_commands
 
 After generation, produce NUTS fits per condition dir (cluster):
-    sbatch --array=0-31 scripts/fit-nuts.sh --data_id small-n-tau3
-then reintegrate (from metabeta/simulation/):
-    uv run python fit.py --size small --family 0 --ds_type tau3 --reintegrate
+    scripts/fit-ref.sh --method nuts --level 2 --n_datasets 32 --data_id small-n-tau3
+then check and reintegrate:
+    uv run python metabeta/simulation/check.py --partition test --data_id small-n-tau3
 and optionally precompute analytical stats (from metabeta/analytical/):
     uv run python precompute.py --size small --family 0 --ds_type tau3 --partition test
 """
@@ -52,17 +52,17 @@ import yaml
 from metabeta.utils.constants import FFX_FAMILIES, SIGMA_FAMILIES
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.experiments import DATA_DIR
+from metabeta.utils.fits import REFERENCE_TAG, availableFits, fitPath
 
 # sibling experiment script (this directory is sys.path[0] at run time); the npz slicing,
 # index selection and stale-key lists are identical for both misspecification studies.
 from likelihood_misspec import (
     DEFAULT_FAMILIES,
     DEFAULT_SIZES,
-    FAMILY_IDS,
     FIT_PREFIXES,
     STAT_KEYS,
+    copyReferenceFit,
     selectIndices,
-    sliceNpzStreaming,
 )
 
 logger = logging.getLogger(__name__)
@@ -178,9 +178,8 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
     src_id = f'{size}-{family}-sampled'
     src_dir = DATA_DIR / src_id
     test_path = src_dir / 'test.npz'
-    fit_path = src_dir / 'test.fit.npz'
-    if not test_path.exists() or not fit_path.exists():
-        logger.warning('%s: test.npz or test.fit.npz missing — skipping', src_id)
+    if not test_path.exists() or not fitPath(test_path, REFERENCE_TAG).exists():
+        logger.warning('%s: test.npz or its %s fit missing — skipping', src_id, REFERENCE_TAG)
         return []
 
     with np.load(test_path, allow_pickle=True) as z:
@@ -198,9 +197,7 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
     else:
         base_dir.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(base_dir / 'test.npz', **_dropStaleKeys(source, idx))
-        # advi_/laplace_ fits are irrelevant here and dominate the file size — drop them.
-        sliced_fit = sliceNpzStreaming(fit_path, idx, drop_prefixes=('advi_', 'laplace_'))
-        np.savez_compressed(base_dir / 'test.fit.npz', **sliced_fit)
+        copyReferenceFit(test_path, base_dir / 'test.npz', idx)
         writeConfig(
             src_dir, base_dir, base_id, cfg.n_datasets, BASE_TAG, 1.0, 0.0, False, idx, cfg.seed
         )
@@ -219,7 +216,7 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
         if out_dir.exists():
             # a rewritten prior invalidates any fits of the previous data — remove them so
             # stale per-index fit files cannot be reintegrated against the new prior
-            stale = [p for p in [out_dir / 'test.fit.npz'] if p.exists()]
+            stale = [fitPath(out_dir / 'test.npz', t) for t in availableFits(out_dir / 'test.npz')]
             stale += sorted((out_dir / 'fits').glob('*.npz'))
             for p in stale:
                 p.unlink()
@@ -254,21 +251,21 @@ def printCommands(
     conditions: list[str],
     n_datasets: int,
 ) -> None:
-    """Print the NUTS fit campaign, one size at a time (baseline dirs need no fits)."""
+    """Print the NUTS ladder campaign, one size at a time (baseline dirs need no fits)."""
     for size in sizes:
         print(f'\n# --- {size} ---')
         for family in families:
             for tag in conditions:
                 print(
-                    f'sbatch --array=0-{n_datasets - 1} scripts/fit-nuts.sh '
-                    f'--data_id {size}-{family}-{tag}'
+                    f'scripts/fit-ref.sh --method nuts --level 2 '
+                    f'--n_datasets {n_datasets} --data_id {size}-{family}-{tag}'
                 )
-        print('# after all fits of this size finished (from metabeta/simulation/):')
+        print('# after all fits of this size finished (checks the fits, then reintegrates):')
         for family in families:
             for tag in conditions:
                 print(
-                    f'uv run python fit.py --size {size} --family {FAMILY_IDS[family]} '
-                    f'--ds_type {tag} --reintegrate'
+                    f'uv run python metabeta/simulation/check.py --partition test '
+                    f'--data_id {size}-{family}-{tag}'
                 )
 
 

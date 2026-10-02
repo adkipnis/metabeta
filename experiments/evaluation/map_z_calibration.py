@@ -80,9 +80,7 @@ def collectZ(
         logger.warning('%s: no BEST_SEEDS checkpoint — skipping', data_id)
         return None
     ckpt_dir = _ckpt_dir(FAMILY_NAMES[family], size, seed)
-    data_path = DATA_DIR / data_id / f'{cfg.partition}.fit.npz'
-    if not data_path.exists():
-        data_path = DATA_DIR / data_id / f'{cfg.partition}.npz'
+    data_path = DATA_DIR / data_id / f'{cfg.partition}.npz'
     if not data_path.exists() or not ckpt_dir.exists():
         logger.warning('%s: data or checkpoint missing — skipping', data_id)
         return None
@@ -90,17 +88,6 @@ def collectZ(
     model, model_cfg = loadModel(ckpt_dir, cfg.prefix, device)
     col = Collection(data_path, permute=False, max_d=model_cfg.max_d, max_q=model_cfg.max_q)
     batch = collateGrouped([col[i] for i in range(len(col))])
-    if 'stats' not in batch:
-        # fit files may lack the analytical stats; fall back to the sibling npz
-        base_path = data_path.with_name(f'{cfg.partition}.npz')
-        if base_path.exists():
-            base_col = Collection(
-                base_path, permute=False, max_d=model_cfg.max_d, max_q=model_cfg.max_q
-            )
-            if len(base_col) == len(col):
-                base_batch = collateGrouped([base_col[i] for i in range(len(base_col))])
-                if 'stats' in base_batch:
-                    batch['stats'] = base_batch['stats']
     if 'stats' not in batch:
         logger.warning(
             '%s: no analytical stats in %s — run metabeta/analytical/precompute.py first',

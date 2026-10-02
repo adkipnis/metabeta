@@ -36,18 +36,11 @@ def dataDir(data_id: str) -> Path:
     return DATA_DIR / data_id
 
 
-def dataFilePath(
-    data_id: str,
-    partition: str = 'test',
-    epoch: int = 0,
-    *,
-    fit: bool = False,
-) -> Path:
+def dataFilePath(data_id: str, partition: str = 'test', epoch: int = 0) -> Path:
     """Return a generated dataset file path."""
     from metabeta.utils.names import datasetFilename
 
-    path = dataDir(data_id) / datasetFilename(partition, epoch)
-    return path.with_suffix('.fit.npz') if fit else path
+    return dataDir(data_id) / datasetFilename(partition, epoch)
 
 
 def modelConfigPath(model_id: str) -> Path:

@@ -6,6 +6,7 @@ import torch
 
 from metabeta.evaluation.evaluate import _ALL_MODELS, Evaluator
 from metabeta.posthoc.importance import WEIGHTS_VERSION
+from metabeta.utils.fits import fitPath
 from metabeta.utils.results import Proposal
 
 
@@ -89,7 +90,7 @@ def test_imh_summary_cache_is_keyed_by_checkpoint(tmp_path):
     evaluator = _evaluator(n_samples=1000, seed=0, k=0, pred_coverage=False, likelihood_family=0)
     evaluator.run_name = 'data=small-n-mixed_model=large_seed=13'
     evaluator.checkpoint_prefix = 'latest'
-    evaluator.data_path_test = tmp_path / 'test.fit.npz'
+    evaluator.data_path_test = tmp_path / 'test.npz'
     evaluator.data_path_valid = evaluator.data_path_test
 
     imh_path = evaluator._summaryCachePath('test', 'imhMarginal', mask=None)
@@ -107,7 +108,7 @@ def test_mb_summary_cache_name_is_unchanged(tmp_path):
     evaluator = _evaluator(n_samples=1000, seed=7, k=0, pred_coverage=True)
     evaluator.run_name = 'run'
     evaluator.checkpoint_prefix = 'best'
-    evaluator.data_path_test = tmp_path / 'test.fit.npz'
+    evaluator.data_path_test = tmp_path / 'test.npz'
     evaluator.data_path_valid = evaluator.data_path_test
 
     path = evaluator._summaryCachePath('test', 'mb', mask=None)
@@ -126,7 +127,7 @@ def test_mb_imh_proposal_adds_refinement_time_per_dataset(monkeypatch, tmp_path)
     )
     evaluator.ckpt_dir = tmp_path / 'ckpt'
     evaluator.checkpoint_prefix = 'latest'
-    evaluator.data_path_test = tmp_path / 'test.fit.npz'
+    evaluator.data_path_test = tmp_path / 'test.npz'
     evaluator.data_path_valid = evaluator.data_path_test
 
     base = _proposal(tpd=0.5)
@@ -165,7 +166,7 @@ def test_mb_imh_refines_in_rescaled_space(monkeypatch, tmp_path):
     )
     evaluator.ckpt_dir = tmp_path / 'ckpt'
     evaluator.checkpoint_prefix = 'latest'
-    evaluator.data_path_test = tmp_path / 'test.fit.npz'
+    evaluator.data_path_test = tmp_path / 'test.npz'
     evaluator.data_path_valid = evaluator.data_path_test
     seen = {}
 
@@ -192,7 +193,7 @@ def test_mb_imh_refines_in_rescaled_space(monkeypatch, tmp_path):
 def test_mb_imh_appears_in_light_path_plot_labels(monkeypatch, tmp_path):
     evaluator = _evaluator(
         plot=True,
-        converged_subset=False,
+        all_datasets=False,
         rescale=False,
         n_samples=1000,
         seed=0,
@@ -202,7 +203,7 @@ def test_mb_imh_appears_in_light_path_plot_labels(monkeypatch, tmp_path):
         summary_chunk_size=2,
         likelihood_family=0,
     )
-    evaluator.data_path_test = tmp_path / 'test.fit.npz'
+    evaluator.data_path_test = tmp_path / 'test.npz'
     evaluator.data_path_valid = evaluator.data_path_test
     evaluator.plot_dir = tmp_path / 'plots'
     evaluator.results_dir = None
@@ -289,7 +290,7 @@ def test_mb_imh_rejected_without_checkpoint():
     argv = [
         'evaluate.py',
         '--data_path_test',
-        'test.fit.npz',
+        'test.npz',
         '--models',
         'MB+IMH,NUTS',
     ]
@@ -333,9 +334,10 @@ def test_plot_does_not_block_on_a_gui_window(monkeypatch):
 def test_mb_imh_is_usable_without_a_raw_mb_row(tmp_path):
     """The IMH comparison figure drops raw MB, so MB+IMH must stand on its own."""
     evaluator = _evaluator(models='MB+IMH,NUTS,ADVI', likelihood_family=0)
-    evaluator.data_path_test = tmp_path / 'test.fit.npz'
+    evaluator.data_path_test = tmp_path / 'test.npz'
     evaluator.data_path_valid = evaluator.data_path_test
-    evaluator.data_path_test.touch()
+    for tag in ('nuts', 'advi1'):
+        fitPath(evaluator.data_path_test, tag).touch()
 
     models = evaluator._resolveModels()
 

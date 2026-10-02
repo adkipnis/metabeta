@@ -6,7 +6,7 @@ over fixed effects, scales, random effects and the residual scale, and exempt th
 parameters (paper: app:met). This script reports those exempted parameters on their own:
 r / NRMSE / ECE / EACE over the lower-triangle correlation pairs, restricted to the datasets
 whose ground-truth correlation matrix is not the identity (q >= 2 and eta_rfx > 0) and — as
-in the oracle tables — to the NUTS-converged subset.
+in the oracle tables — to the datasets on which the NUTS reference (``nuts2``) converged.
 
 Efficiency: reuses the cached MB samples and post-hoc refinements written by oracle_posterior.py
 (same cache keys), streams one reference method's fit tensors at a time, and computes only the
@@ -30,14 +30,13 @@ from tabulate import tabulate
 
 # sibling experiment script (this directory is sys.path[0] at run time)
 from oracle_posterior import (
+    REFERENCE_METHODS,
     STATS,
     _capFull,
     _fmtMd,
     _fmtTex,
-    fitExcludePrefixes,
     loadRegimeBatch,
     methodFitBatch,
-    nutsConvergeMaskFromNpz,
 )
 from metabeta.evaluation.intervals import getCoverageErrors, getCoverages, getCredibleIntervals
 from metabeta.evaluation.point import getCorrelation, getPointEstimates, getRMSE
@@ -45,8 +44,9 @@ from metabeta.evaluation.summary import EST_TYPE, _averageOverAlpha
 from metabeta.plotting.recovery import _plotRecovery
 from metabeta.utils.dataloader import subsetBatch
 from metabeta.utils.device import setDevice
-from metabeta.utils.evaluation import subsetProposal
+from metabeta.utils.evaluation import referenceConverged, subsetProposal
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR
+from metabeta.utils.fits import fitPath
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.plot import DPI, legendProxy, paramColors, savePlot
 from metabeta.utils.posterior_eval import (
@@ -95,15 +95,13 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--decimals',   type=int, default=2)
     parser.add_argument('--rescale',    action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--warmup',     action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument('--convergence_mode', type=str, default='liberal',
-                        choices=['liberal', 'strict'])
     parser.add_argument('--methods',    type=str, nargs='*', default=None,
                         choices=list(SUPPORTED_METHODS),
                         help='Post-hoc refinements on top of raw MB (default: family preset).')
     parser.add_argument('--plot',       action=argparse.BooleanOptionalAction, default=False,
                         help='Also save a recovery scatter of the correlation pairs, one panel '
                              'per method in --plot_methods.')
-    parser.add_argument('--plot_methods', type=str, nargs='*', default=['MB', 'NUTS', 'ADVI'],
+    parser.add_argument('--plot_methods', type=str, nargs='*', default=['MB', 'NUTS', 'ADVI', 'PF'],
                         help='Row labels to plot; "MB" resolves to the refined row when a '
                              'refinement ran (the paper\'s MB), "MB0" to the raw flow.')
     # fmt: on
@@ -177,7 +175,6 @@ def buildRow(label: str, regime: str, metrics: dict[str, torch.Tensor]) -> dict:
 def evaluateRegime(
     model,
     data_path: Path,
-    base_path: Path,
     max_d: int,
     max_q: int,
     lf: int,
@@ -190,14 +187,13 @@ def evaluateRegime(
     seed: int,
     methods: list[str],
     rescale: bool = True,
-    convergence_mode: str = 'liberal',
     warmup: bool = True,
 ) -> tuple[list[dict], dict[str, int]]:
     """Returns (rows, counts); rows carry the per-pair metrics of every method on the
     correlated ∩ NUTS-converged subset, counts the subset sizes for the table caption."""
     logger.info('\n--- Regime: %s (correlation parameters) ---', regime)
 
-    data_batch, n_total, n_kept, cap_mask = loadRegimeBatch(base_path, max_d, max_q)
+    data_batch, n_total, n_kept, cap_mask = loadRegimeBatch(data_path, max_d, max_q)
     logger.info('  Capacity filter: %d / %d (d≤%d, q≤%d)', n_kept, n_total, max_d, max_q)
     if n_kept == 0 or max_q < 2:
         logger.warning('  No correlation parameters to evaluate — skipping.')
@@ -206,15 +202,12 @@ def evaluateRegime(
     # Selection: non-identity correlation matrix, and NUTS-converged where diagnostics exist.
     sel = correlatedMask(data_batch)
     n_corr = int(sel.sum())
-    conv_mask = nutsConvergeMaskFromNpz(data_path, cap_mask, convergence_mode)
+    conv = referenceConverged(data_path)
+    conv_mask = None if conv is None else conv[cap_mask]
     if conv_mask is not None:
         sel &= conv_mask
         logger.info(
-            '  Correlated: %d / %d; NUTS-converged (%s) among them: %d',
-            n_corr,
-            n_kept,
-            convergence_mode,
-            int(sel.sum()),
+            '  Correlated: %d / %d; NUTS-converged among them: %d', n_corr, n_kept, int(sel.sum())
         )
     else:
         logger.info('  Correlated: %d / %d (no NUTS diagnostics)', n_corr, n_kept)
@@ -273,24 +266,25 @@ def evaluateRegime(
     gc.collect()
 
     # Reference methods, streamed one at a time (only one fit-tensor set resident).
-    for label, method in (('NUTS', 'nuts'), ('ADVI', 'advi'), ('LA', 'laplace')):
-        fit_batch, _, _, _ = loadRegimeBatch(
-            data_path, max_d, max_q, exclude_prefixes=fitExcludePrefixes(method)
-        )
-        if f'{method}_corr_rfx' not in fit_batch:
+    for label, tag in REFERENCE_METHODS:
+        if not fitPath(data_path, tag).exists():
+            logger.info('  %s: no fit file — skipping.', label)
+            continue
+        fit_batch, _, _, _ = loadRegimeBatch(data_path, max_d, max_q, fits=(tag,))
+        if f'{tag}_corr_rfx' not in fit_batch:
             logger.info('  %s: no correlation fits in file — skipping.', label)
             del fit_batch
             gc.collect()
             continue
-        success = fitBatchMask(fit_batch, method) & sel
+        success = fitBatchMask(fit_batch, tag) & sel
         logger.info('  %s success within selection: %d / %d', label, int(success.sum()), n_sel)
         if not success.any():
             del fit_batch
             gc.collect()
             continue
-        method_batch = subsetBatch(methodFitBatch(fit_batch, method), success)
+        method_batch = subsetBatch(methodFitBatch(fit_batch, tag), success)
         del fit_batch
-        proposal = fit2proposal(method_batch, method)
+        proposal = fit2proposal(method_batch, tag)
         data_sub = subsetBatch(data_batch, success)
         if rescale:
             proposal.rescale(data_sub['sd_y'])
@@ -436,18 +430,14 @@ def main() -> None:
     stem = f'{ckpt_dir.name}_{data_id}'
     methods = cfg.methods if cfg.methods is not None else posthocDefaults(lf)
 
-    data_path = DATA_DIR / data_id / 'test.fit.npz'
-    base_path = DATA_DIR / data_id / 'test.npz'
+    data_path = DATA_DIR / data_id / 'test.npz'
     if not data_path.exists():
-        logger.error('%s: test.fit.npz not found', data_id)
+        logger.error('%s: test.npz not found', data_id)
         return
-    if not base_path.exists():
-        base_path = data_path
 
     rows, counts = evaluateRegime(
         model,
         data_path,
-        base_path,
         max_d,
         max_q,
         lf,
@@ -460,7 +450,6 @@ def main() -> None:
         seed=cfg.seed,
         methods=methods,
         rescale=cfg.rescale,
-        convergence_mode=cfg.convergence_mode,
         warmup=cfg.warmup,
     )
     if not rows:

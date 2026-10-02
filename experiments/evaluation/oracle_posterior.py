@@ -6,13 +6,15 @@ the checkpoint's capacity (datasets beyond max_d/max_q are dropped by the capaci
 a small-capacity model on a larger regime yields few or no rows). To sweep sizes, launch one
 process per (checkpoint, data_id) pair.
 
-Loads NUTS/ADVI/Laplace fits from the test.fit.npz batch and produces a LaTeX + Markdown table
-with mean ± std over parameter dimensions (for NRMSE/ECE/EACE/R) and over datasets (for
-LOO-NLL). Unlike real_posterior.py, the sampled test sets carry ground-truth parameters, so
-the metrics are absolute (vs the true values) rather than relative to NUTS.
+Loads NUTS/ADVI/Pathfinder/Laplace fits from the per-method test.{tag}.npz files and produces a LaTeX +
+Markdown table with mean ± std over parameter dimensions (for NRMSE/ECE/EACE/R) and over
+datasets (for LOO-NLL). Unlike real_posterior.py, the sampled test sets carry ground-truth
+parameters, so the metrics are absolute (vs the true values) rather than relative to NUTS.
+The ``_conv`` tables restrict to the datasets on which the NUTS reference (``nuts2``)
+converged; the NUTS row is the composite ``nuts`` competitor.
 
 MB posterior samples, per-method summaries, and post-hoc refinements are cached next to the
-data (siblings of test.fit.npz), keyed by checkpoint/prefix/n_samples/seed and by the
+data (siblings of test.npz), keyed by checkpoint/prefix/n_samples/seed and by the
 capacity/convergence subset, mirroring experiments/evaluation/real_posterior.py and
 metabeta/evaluation/evaluate.py.
 
@@ -37,13 +39,14 @@ from tabulate import tabulate
 
 from metabeta.models.approximator import Approximator
 from metabeta.utils.dataloader import Collection, collateGrouped, subsetBatch
-from metabeta.utils.evaluation import nutsConvergeMask, subsetProposal
+from metabeta.utils.evaluation import referenceConverged, subsetProposal
 from metabeta.utils.results import Proposal
 from metabeta.utils.device import setDevice
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.sampling import setSeed
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR
+from metabeta.utils.fits import FIT_TAGS, REFERENCE_TAG, fitPath
 from metabeta.utils.posterior_eval import (
     SUPPORTED_METHODS,
     fit2proposal,
@@ -90,8 +93,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--rescale',          action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--warmup',           action=argparse.BooleanOptionalAction, default=True,
                         help='Untimed 1-sample MB warm-up before timed sampling (default: true)')
-    parser.add_argument('--convergence_mode', type=str, default='liberal',
-                        choices=['liberal', 'strict'])
     parser.add_argument('--methods',          type=str, nargs='*', default=None,
                         choices=list(SUPPORTED_METHODS),
                         help='Post-hoc refinement methods to run on top of raw MB, evaluated '
@@ -133,7 +134,7 @@ def trimBatch(batch: dict[str, torch.Tensor], max_d: int, max_q: int) -> dict[st
     if 'corr_rfx' in out:
         out['corr_rfx'] = out['corr_rfx'][..., :max_q, :max_q]
 
-    for method in ('nuts', 'advi', 'laplace'):
+    for method in FIT_TAGS:
         if f'{method}_ffx' in out:
             out[f'{method}_ffx'] = out[f'{method}_ffx'][..., :max_d]
         if f'{method}_sigma_rfx' in out:
@@ -159,16 +160,12 @@ def trimBatch(batch: dict[str, torch.Tensor], max_d: int, max_q: int) -> dict[st
     return out
 
 
-# All cached-fit prefixes; the multi-GB ``*_rfx`` sample tensors live under these. The base
-# (data-only) batch and each single-method fit batch are loaded with the complementary set
-# excluded, so at most one method's fit tensors are ever materialized at a time (see
-# evaluateRegime). Collection.exclude_prefixes drops matching keys without decompressing them.
-FIT_PREFIXES = ('nuts_', 'advi_', 'laplace_')
-
-
-def fitExcludePrefixes(keep: str | None) -> tuple[str, ...]:
-    """Prefixes to exclude so a Collection loads only ``keep``'s fits (all fits if keep is None)."""
-    return tuple(p for p in FIT_PREFIXES if p != f'{keep}_')
+# Reference methods as (table label, fit tag); NUTS is the composite ``nuts`` competitor. The
+# multi-GB ``{tag}_rfx`` sample tensors live in one test.{tag}.npz per method, so the data-only
+# batch and each single-method fit batch are loaded separately and at most one method's fit
+# tensors are ever materialized at a time (see evaluateRegime). The tag also keys the summary
+# caches.
+REFERENCE_METHODS = (('NUTS', 'nuts'), ('ADVI', 'advi1'), ('PF', 'pathfinder1'), ('LA', 'laplace'))
 
 
 def methodFitBatch(batch: dict[str, torch.Tensor], prefix: str) -> dict[str, torch.Tensor]:
@@ -189,13 +186,13 @@ def loadRegimeBatch(
     data_path: Path,
     max_d: int,
     max_q: int,
-    exclude_prefixes: tuple[str, ...] = FIT_PREFIXES,
+    fits: tuple[str, ...] = (),
 ) -> tuple[dict[str, torch.Tensor], int, int, np.ndarray]:
     """Load a test batch, filtering/padding/trimming to model capacity.
 
-    ``exclude_prefixes`` is forwarded to Collection; it defaults to all fit prefixes so the
-    base batch stays data-only (the multi-GB fit tensors are never materialized). Pass
-    ``fitExcludePrefixes('nuts')`` etc. to load exactly one method's fits.
+    ``fits`` is forwarded to Collection; by default the batch stays data-only (the multi-GB
+    fit tensors are never materialized). Pass ``fits=('nuts',)`` etc. to load exactly one
+    method's fits.
 
     When the test set fits within the model (d_file ≤ max_d, q_file ≤ max_q), loads with
     max_d/max_q so the model receives correctly-padded inputs. Otherwise loads natively,
@@ -208,53 +205,18 @@ def loadRegimeBatch(
     d_file, q_file, n_total = _probeShapes(data_path)
 
     if d_file <= max_d and q_file <= max_q:
-        col = Collection(
-            data_path, permute=False, max_d=max_d, max_q=max_q, exclude_prefixes=exclude_prefixes
-        )
+        col = Collection(data_path, permute=False, max_d=max_d, max_q=max_q, fits=fits)
         batch = collateGrouped([col[i] for i in range(n_total)])
         return batch, n_total, n_total, np.ones(n_total, dtype=bool)
 
     # Some datasets exceed capacity: load natively, filter, trim
-    col = Collection(data_path, permute=False, exclude_prefixes=exclude_prefixes)
+    col = Collection(data_path, permute=False, fits=fits)
     batch = collateGrouped([col[i] for i in range(n_total)])
     cap_mask = capacityMask(batch, max_d, max_q)
     n_kept = int(cap_mask.sum())
     batch = subsetBatch(batch, cap_mask)
     batch = trimBatch(batch, max_d, max_q)
     return batch, n_total, n_kept, cap_mask
-
-
-def nutsConvergeMaskFromNpz(
-    data_path: Path,
-    cap_mask: np.ndarray,
-    mode: str,
-) -> np.ndarray | None:
-    """NUTS convergence mask over the capacity-kept datasets, read from the small nuts_* diagnostics.
-
-    Loads only the tiny diagnostic arrays (divergences/rhat/ess/…) — never the multi-GB
-    nuts_rfx samples — so it can run before any fit proposal is materialized.
-    """
-    diag_keys = (
-        'nuts_divergences',
-        'nuts_draws',
-        'nuts_rhat',
-        'nuts_ess',
-        'nuts_ess_tail',
-        'nuts_max_treedepth',
-    )
-    with np.load(data_path, allow_pickle=True) as raw:
-        diag = {k: torch.as_tensor(raw[k]) for k in diag_keys if k in raw.files}
-    if 'nuts_divergences' not in diag:
-        return None
-    idx = torch.from_numpy(cap_mask)
-    diag = {
-        k: (v[idx] if torch.is_tensor(v) and v.shape[:1] == (cap_mask.shape[0],) else v)
-        for k, v in diag.items()
-    }
-    # nuts_draws is stored per-dataset (uniform); nutsConvergeMask wants a scalar draw count.
-    if 'nuts_draws' in diag:
-        diag['nuts_draws'] = torch.as_tensor(int(diag['nuts_draws'].reshape(-1)[0].item()))
-    return nutsConvergeMask(diag, mode=mode)
 
 
 def _capFull(cap_mask: np.ndarray, sub: np.ndarray) -> np.ndarray:
@@ -404,7 +366,7 @@ def _summaryRow(
     active_d = batch['mask_d'].any(0)
     active_q = batch['mask_q'].any(0)
     has_eps = 'sigma_eps' in ag.nrmse
-    return buildRow(
+    row = buildRow(
         label,
         regime,
         corr_vals=flattenActiveParams(ag.corr, active_d, active_q, has_eps),
@@ -414,12 +376,30 @@ def _summaryRow(
         loo_nll=summary.per_dataset.loo_nll,
         tpd_arr=tpd,
     )
+    row['classes'] = classMeans(ag, active_d, active_q)
+    return row
+
+
+PARAM_CLASSES = {'ffx': 'beta', 'sigma_rfx': 'sigma', 'rfx': 'alpha'}  # key -> table symbol
+
+
+def classMeans(ag, active_d: torch.Tensor, active_q: torch.Tensor) -> dict[str, dict[str, float]]:
+    """Mean r and NRMSE over the active dimensions of each parameter class."""
+    out = {}
+    for key, name in PARAM_CLASSES.items():
+        if key not in ag.nrmse:
+            continue
+        active = active_d if key == 'ffx' else active_q
+        out[name] = {
+            'r': float(torch.nanmean(ag.corr[key][active].float())),
+            'NRMSE': float(torch.nanmean(ag.nrmse[key][active].float())),
+        }
+    return out
 
 
 def evaluateRegime(
     model: Approximator,
     data_path: Path,
-    base_path: Path,
     max_d: int,
     max_q: int,
     lf: int,
@@ -432,17 +412,16 @@ def evaluateRegime(
     seed: int,
     methods: list[str],
     rescale: bool = True,
-    convergence_mode: str = 'liberal',
     summary_chunk_size: int = 1,
     warmup: bool = True,
 ) -> tuple[list[dict], list[dict] | None]:
     """Returns (rows_full, rows_conv) — rows_conv is None if no convergence data.
 
-    ``base_path`` is the base ``{partition}.npz`` (data + precomputed analytical ``stats``);
-    ``data_path`` is the ``{partition}.fit.npz`` (NUTS/ADVI/Laplace fits + diagnostics).
-    Loading the base data from ``base_path`` populates ``data['stats']`` so MB sampling reuses
-    the precomputed MAP statistics instead of recomputing glmm() live (matching evaluate.py and
-    how the model was trained). Fits/diagnostics/caches use ``data_path``.
+    ``data_path`` is the ``{partition}.npz`` (data + precomputed analytical ``stats``); the
+    NUTS/ADVI/Laplace fits + diagnostics live in its sibling ``{partition}.{tag}.npz`` files.
+    Loading the data populates ``data['stats']`` so MB sampling reuses the precomputed MAP
+    statistics instead of recomputing glmm() live (matching evaluate.py and how the model was
+    trained). Caches are siblings of ``data_path``.
 
     Memory is bounded by streaming: the base batch carries no fit tensors, and each reference
     method (NUTS/ADVI/Laplace) is loaded, summarized, and freed one at a time, so at most one
@@ -450,27 +429,28 @@ def evaluateRegime(
     """
     logger.info('\n--- Regime: %s ---', regime)
 
-    # Base data batch from {partition}.npz — carries precomputed analytical stats (beta_est,
+    # Data batch from {partition}.npz — carries precomputed analytical stats (beta_est,
     # BLUPs), so collateGrouped populates data['stats'] and the model skips the live MAP fit.
-    data_batch, n_total, n_kept, cap_mask = loadRegimeBatch(base_path, max_d, max_q)
+    data_batch, n_total, n_kept, cap_mask = loadRegimeBatch(data_path, max_d, max_q)
     if 'stats' not in data_batch:
         logger.warning(
             '  No precomputed stats in %s — MB sampling will recompute glmm() live (slow). '
             'Run metabeta/analytical/precompute.py for this data_id/partition.',
-            base_path.name,
+            data_path.name,
         )
     logger.info('  Capacity filter: %d / %d (d≤%d, q≤%d)', n_kept, n_total, max_d, max_q)
     if n_kept == 0:
         logger.warning('  No datasets pass capacity filter — skipping.')
         return [], None
 
-    # NUTS convergence from the small diagnostic arrays (no fit samples materialized).
-    conv_mask = nutsConvergeMaskFromNpz(data_path, cap_mask, convergence_mode)
+    # NUTS reference convergence from the small diagnostic arrays (no fit samples materialized).
+    conv = referenceConverged(data_path)
+    conv_mask = None if conv is None else conv[cap_mask]
     have_conv = False
     conv_idx = conv_batch = conv_full = None
     if conv_mask is not None:
         n_conv = int(conv_mask.sum())
-        logger.info('  NUTS convergence (%s): %d / %d', convergence_mode, n_conv, n_kept)
+        logger.info('  %s converged: %d / %d', REFERENCE_TAG, n_conv, n_kept)
         have_conv = 0 < n_conv < n_kept
 
     # MB samples over the capacity-kept batch (cached, keyed by cap_mask).
@@ -564,33 +544,27 @@ def evaluateRegime(
     gc.collect()
 
     # ---- Reference methods, STREAMED one at a time (only one fit-tensor set resident) ----
-    for label, method in (('NUTS', 'nuts'), ('ADVI', 'advi'), ('LA', 'laplace')):
-        fit_batch, _, _, _ = loadRegimeBatch(
-            data_path, max_d, max_q, exclude_prefixes=fitExcludePrefixes(method)
-        )
-        if f'{method}_ffx' not in fit_batch:            # method absent from this test file
-            logger.info('  %s: no fits in file — skipping.', label)
-            del fit_batch
-            gc.collect()
+    for label, tag in REFERENCE_METHODS:
+        if not fitPath(data_path, tag).exists():         # method absent from this test set
+            logger.info('  %s: no fit file — skipping.', label)
             continue
-        success = fitBatchMask(fit_batch, method)        # (n_kept,)
+        fit_batch, _, _, _ = loadRegimeBatch(data_path, max_d, max_q, fits=(tag,))
+        success = fitBatchMask(fit_batch, tag)           # (n_kept,)
         logger.info('  %s success: %d / %d', label, int(success.sum()), n_kept)
         if not success.any():
             del fit_batch
             gc.collect()
             continue
 
-        method_batch = subsetBatch(methodFitBatch(fit_batch, method), success)
+        method_batch = subsetBatch(methodFitBatch(fit_batch, tag), success)
         del fit_batch
-        proposal = fit2proposal(method_batch, method)
-        tpd = method_batch.get(f'{method}_duration')     # (n_success,)
+        proposal = fit2proposal(method_batch, tag)
+        tpd = method_batch.get(f'{tag}_duration')        # (n_success,)
         data_sub = subsetBatch(data_batch, success)      # already rescaled
         if rescale:
             proposal.rescale(data_sub['sd_y'])
 
-        rows.append(
-            _mrow(label, method, proposal, data_sub, _capFull(cap_mask, success), tpd, False)
-        )
+        rows.append(_mrow(label, tag, proposal, data_sub, _capFull(cap_mask, success), tpd, False))
         if have_conv:
             sel = conv_mask[success]                     # conv status within the success subset
             if sel.any():
@@ -598,7 +572,7 @@ def evaluateRegime(
                 rows_conv.append(
                     _mrow(
                         label,
-                        method,
+                        tag,
                         subsetProposal(proposal, sel),
                         subsetBatch(data_sub, sel),
                         _capFull(cap_mask, success & conv_mask),
@@ -703,6 +677,69 @@ def saveTables(
         tex_path.write_text('\n'.join(lines))
         logger.info('Saved LaTeX → %s', tex_path)
 
+    saveClassTable(rows_by_regime, outdir, run_name, dp)
+
+
+def saveClassTable(
+    rows_by_regime: dict[str, list[dict]], outdir: Path, run_name: str, dp: int
+) -> None:
+    """Recovery by parameter class (mean NRMSE with mean r in parentheses over the class's
+    active dimensions), plus the median LOO-NLL and time: the layout of the paper's LA table."""
+    classes = list(PARAM_CLASSES.values())
+
+    def cells(row: dict, tex: bool) -> list[str]:
+        out = []
+        for name in classes:
+            c = row.get('classes', {}).get(name)
+            if c is None:
+                out.append('NA')
+            elif tex:
+                out.append(rf'${c["NRMSE"]:.{dp}f}$ (${c["r"]:.{dp}f}$)')
+            else:
+                out.append(f'{c["NRMSE"]:.{dp}f} ({c["r"]:.{dp}f})')
+        med = row['stats']['median ± MAD']
+        for metric in ('LOO-NLL', 'time'):
+            v = med[metric]
+            out.append(
+                'NA'
+                if v is None or v[0] != v[0]
+                else (rf'${v[0]:.{dp}f}$' if tex else f'{v[0]:.{dp}f}')
+            )
+        return out
+
+    md_rows = [
+        [regime, r['method']] + cells(r, tex=False)
+        for regime, rows in rows_by_regime.items()
+        for r in rows
+    ]
+    header = ['regime', 'method'] + [f'{c}: NRMSE (r)' for c in classes] + ['LOO-NLL', 'time']
+    md_path = outdir / f'oracle_{run_name}_class.md'
+    md_path.write_text(
+        f'# Oracle recovery by parameter class: {run_name}\n\n'
+        + tabulate(md_rows, headers=header, tablefmt='pipe', stralign='right')
+        + '\n'
+    )
+    lines = [
+        r'% entries: mean NRMSE (mean r) over the active dimensions of each parameter class; LOO-NLL and time are medians over datasets',
+        r'\begin{tabular}{cc|ccc|cc}',
+        r'    \toprule',
+        r'    $\mathrm{regime}$ & $\mathrm{model}$ & $\boldsymbol\beta$: NRMSE ($r$) & $\boldsymbol\sigma$: NRMSE ($r$) & '
+        r'$\boldsymbol\alpha$: NRMSE ($r$) & $\mathrm{LOO\text{-}NLL}$ & $\mathrm{time\ [s]}$ \\',
+    ]
+    for regime, rows in rows_by_regime.items():
+        lines.append(r'    \midrule')
+        for j, row in enumerate(rows):
+            regime_cell = rf'\texttt{{{regime}}}' if j == 0 else ''
+            lines.append(
+                rf'      {regime_cell} & \texttt{{{row["method"]}}} & '
+                + ' & '.join(cells(row, tex=True))
+                + r' \\'
+            )
+    lines += [r'    \bottomrule', r'\end{tabular}', '']
+    tex_path = outdir / f'oracle_{run_name}_class.tex'
+    tex_path.write_text('\n'.join(lines))
+    logger.info('Saved LaTeX → %s', tex_path)
+
 
 # ---------------------------------------------------------------------------
 # Main
@@ -732,25 +769,14 @@ def main() -> None:
     logger.info('Evaluating: %s', data_id)
     logger.info('Refinement methods: %s', methods or '(none — raw MB only)')
 
-    data_path = DATA_DIR / data_id / 'test.fit.npz'
+    data_path = DATA_DIR / data_id / 'test.npz'
     if not data_path.exists():
-        logger.error('%s: test.fit.npz not found', data_id)
+        logger.error('%s: test.npz not found', data_id)
         return
-
-    # Base data (+ precomputed analytical stats from precompute.py) lives in test.npz; the
-    # fits live in test.fit.npz. Fall back to the fit file if the base is absent (no stats →
-    # live glmm, slower).
-    base_path = DATA_DIR / data_id / 'test.npz'
-    if not base_path.exists():
-        logger.warning(
-            '%s: test.npz not found — using test.fit.npz for base data (no stats)', data_id
-        )
-        base_path = data_path
 
     rows, rows_conv = evaluateRegime(
         model,
         data_path,
-        base_path,
         max_d,
         max_q,
         lf,
@@ -763,7 +789,6 @@ def main() -> None:
         seed=cfg.seed,
         methods=methods,
         rescale=cfg.rescale,
-        convergence_mode=cfg.convergence_mode,
         summary_chunk_size=cfg.summary_chunk_size,
         warmup=getattr(cfg, 'warmup', True),
     )

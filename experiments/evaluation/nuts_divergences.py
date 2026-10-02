@@ -1,13 +1,15 @@
 """Audit NUTS convergence diagnostics of the pre-computed baseline fits.
 
 Produces the numbers cited in the paper appendix paragraph "NUTS convergence
-diagnostics" (metabeta-paper/appendices/pymc.tex): per-benchmark divergence
-prevalence, R-hat / ESS / tree-depth summaries, convergence rates under the
-strict and liberal criteria of ``nutsConvergeMask``, the sigma_eps driver
-analysis (Normal only, where the true generative sigma_eps is known), and
-Spearman correlations between sampler health and the NUTS LOO-NLL.
+diagnostics" (metabeta-paper/appendices/pymc.tex): per benchmark and budget
+level (``nuts0`` < ``nuts1`` < ``nuts2``) the divergence prevalence, R-hat /
+tree-depth summaries, the fraction converged under the single ``nutsConverged``
+criterion and the share failing each of its checks (R-hat, bulk ESS, tail ESS,
+divergence rate), the sigma_eps driver analysis (Normal only, where the true
+generative sigma_eps is known), and Spearman correlations between sampler health
+and the NUTS LOO-NLL.
 
-Only the small diagnostic arrays of each test.fit.npz are read (never the
+Only the small diagnostic arrays of each test.nuts{k}.npz are read (never the
 posterior sample tensors); per-dataset LOO-NLL comes from the cached
 full-split NUTS evaluation summary (summary_test_nuts.pt) written by
 evaluate.py / ablation.py, where available.
@@ -21,25 +23,25 @@ import argparse
 from pathlib import Path
 
 import numpy as np
-import torch
 from scipy.stats import fisher_exact, mannwhitneyu, spearmanr
 from tabulate import tabulate
 
-from metabeta.utils.evaluation import EvaluationSummary, nutsConvergeMask
+from metabeta.utils.evaluation import (
+    ESS_MIN,
+    NUTS_DIAG_KEYS,
+    RHAT_MAX,
+    EvaluationSummary,
+    nutsChecks,
+)
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR
+from metabeta.utils.fits import fitPath, loadFits
 
 FAMILIES = {'n': 'Normal', 'b': 'Bernoulli', 'p': 'Poisson'}
 SIZES = ['small', 'medium', 'large', 'huge']
 VARIANTS = ['sampled', 'real']
+LEVELS = ('nuts0', 'nuts1', 'nuts2')  # the NUTS budget ladder, one fit file each
 
-DIAG_KEYS = [
-    'nuts_divergences',
-    'nuts_rhat',
-    'nuts_ess',
-    'nuts_ess_tail',
-    'nuts_max_treedepth',
-    'nuts_draws',
-]
+DIAG_KEYS = (*NUTS_DIAG_KEYS, 'max_treedepth')
 EXTRA_KEYS = ['sigma_eps', 'sd_y', 'm', 'q']
 
 SIGMA_EPS_THRESHOLD = 0.10   # standardized sigma_eps below which NUTS struggles
@@ -60,14 +62,14 @@ def setup() -> argparse.Namespace:
 # fmt: on
 
 
-def loadDiagnostics(path: Path) -> dict[str, np.ndarray] | None:
-    """Read only the diagnostic members of a reintegrated test.fit.npz."""
-    if not path.exists():
+def loadDiagnostics(path: Path, tag: str) -> dict[str, np.ndarray] | None:
+    """Read only the diagnostic members of test.{tag}.npz (plus EXTRA_KEYS from test.npz)."""
+    if not (path.exists() and fitPath(path, tag).exists()):
         return None
+    diag = loadFits(path, tag, keys=[f'{tag}_{k}' for k in DIAG_KEYS])
     with np.load(path, allow_pickle=True) as f:
-        if 'nuts_divergences' not in f.files:
-            return None
-        return {k: f[k] for k in DIAG_KEYS + EXTRA_KEYS if k in f.files}
+        diag.update({k: f[k] for k in EXTRA_KEYS if k in f.files})
+    return diag
 
 
 def _paramStat(arr: np.ndarray, fn) -> np.ndarray:
@@ -77,37 +79,41 @@ def _paramStat(arr: np.ndarray, fn) -> np.ndarray:
     return fn(a, axis=-1)
 
 
-def perDataset(diag: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-    """Per-dataset diagnostic arrays shared by the table and the driver analysis."""
-    out = {
-        'total_div': diag['nuts_divergences'].sum(-1),
-        'max_rhat': _paramStat(diag['nuts_rhat'], np.nanmax),
-        'min_ess': _paramStat(diag['nuts_ess'], np.nanmin),
-        'td_sat': diag['nuts_max_treedepth'].mean(-1),
+def perDataset(diag: dict[str, np.ndarray], tag: str) -> dict[str, np.ndarray]:
+    """Per-dataset diagnostics, prefix-free, plus the four checks of ``nutsConverged``.
+
+    ``fail_*`` are the complements of the individual checks (a dataset converged iff none
+    fails), so the table can attribute every non-converged run to its reasons.
+    """
+    checks = nutsChecks(diag, tag)
+    return {
+        'total_div': diag[f'{tag}_divergences'].sum(-1),
+        'max_rhat': _paramStat(diag[f'{tag}_rhat'], np.nanmax),
+        'min_ess': _paramStat(diag[f'{tag}_ess'], np.nanmin),
+        'td_sat': diag[f'{tag}_max_treedepth'].mean(-1),
+        **{f'fail_{k}': ~ok for k, ok in checks.items()},
+        'conv': np.logical_and.reduce(list(checks.values())),
     }
-    torch_batch = {k: torch.as_tensor(v) for k, v in diag.items() if k in DIAG_KEYS}
-    # the reintegrated batch stores nuts_draws per dataset; the mask expects a scalar
-    torch_batch['nuts_draws'] = torch_batch['nuts_draws'].reshape(-1)[0]
-    for mode in ('strict', 'liberal'):
-        out[f'conv_{mode}'] = nutsConvergeMask(torch_batch, mode=mode)
-    return out
 
 
-def benchmarkRow(data_id: str, per: dict[str, np.ndarray]) -> dict:
+def benchmarkRow(data_id: str, tag: str, per: dict[str, np.ndarray]) -> dict:
     total_div, max_rhat, td_sat = per['total_div'], per['max_rhat'], per['td_sat']
     b = len(total_div)
     affected = total_div[total_div > 0]
     return {
         'benchmark': data_id,
+        'level': tag,
         'B': b,
         'pct_any_div': 100.0 * (total_div > 0).mean(),
         'total_div': int(total_div.sum()),
         'med_div_affected': float(np.median(affected)) if len(affected) else 0.0,
-        'pct_rhat': 100.0 * np.mean(max_rhat > 1.01),
         'max_rhat': float(np.nanmax(max_rhat)),
         'pct_tree': 100.0 * np.mean(td_sat > 0.05),
-        'pct_conv_strict': 100.0 * per['conv_strict'].mean(),
-        'pct_conv_liberal': 100.0 * per['conv_liberal'].mean(),
+        'pct_conv': 100.0 * per['conv'].mean(),
+        'pct_fail_rhat': 100.0 * per['fail_rhat'].mean(),
+        'pct_fail_ess': 100.0 * per['fail_ess'].mean(),
+        'pct_fail_ess_tail': 100.0 * per['fail_ess_tail'].mean(),
+        'pct_fail_div': 100.0 * per['fail_divergences'].mean(),
     }
 
 
@@ -136,19 +142,24 @@ def _rho(x: np.ndarray, y: np.ndarray) -> str:
 
 
 def driverRow(
-    data_id: str, diag: dict[str, np.ndarray], per: dict[str, np.ndarray], data_dir: Path
+    data_id: str,
+    tag: str,
+    diag: dict[str, np.ndarray],
+    per: dict[str, np.ndarray],
+    data_dir: Path,
 ) -> dict | None:
-    """sigma_eps / geometry driver analysis for one Normal sampled benchmark."""
+    """sigma_eps / geometry driver analysis for one Normal sampled benchmark and level."""
     if 'sigma_eps' not in diag:
         return None
-    total_div, max_rhat, min_ess = per['total_div'], per['max_rhat'], per['min_ess']
+    total_div, min_ess = per['total_div'], per['min_ess']
     sigma_std = diag['sigma_eps'] / diag['sd_y']
     low = sigma_std < SIGMA_EPS_THRESHOLD
     mq = diag['m'].astype(np.float64) * diag['q'].astype(np.float64)
-    bad_rhat = max_rhat > 1.01
+    bad_rhat = per['fail_rhat']
     loo = loadLooNll(data_dir, len(total_div))
     return {
         'benchmark': data_id,
+        'level': tag,
         'pct_low_sigma': 100.0 * low.mean(),
         'pct_div_low': 100.0 * (total_div[low] > 0).mean() if low.any() else np.nan,
         'pct_div_rest': 100.0 * (total_div[~low] > 0).mean(),
@@ -164,8 +175,8 @@ def _pStar(p: float) -> str:
     return '***' if p < 1e-3 else '**' if p < 1e-2 else '*' if p < 5e-2 else ''
 
 
-def variantRow(family: str, size: str, per_s: dict, per_r: dict) -> dict:
-    """Sampled-vs-real contrast for one (family, size) pair.
+def variantRow(family: str, size: str, tag: str, per_s: dict, per_r: dict) -> dict:
+    """Sampled-vs-real contrast for one (family, size) pair at one budget level.
 
     Divergence prevalence is compared with Fisher's exact test on the ≥1-divergence
     counts; the per-dataset divergence-count distributions with a two-sided
@@ -173,7 +184,7 @@ def variantRow(family: str, size: str, per_s: dict, per_r: dict) -> dict:
     """
     div_s, div_r = per_s['total_div'], per_r['total_div']
     any_s, any_r = div_s > 0, div_r > 0
-    bad_s, bad_r = per_s['max_rhat'] > 1.01, per_r['max_rhat'] > 1.01
+    bad_s, bad_r = per_s['fail_rhat'], per_r['fail_rhat']
 
     def fisher(a: np.ndarray, b: np.ndarray) -> float:
         table = [[a.sum(), (~a).sum()], [b.sum(), (~b).sum()]]
@@ -184,6 +195,7 @@ def variantRow(family: str, size: str, per_s: dict, per_r: dict) -> dict:
     p_rhat = fisher(bad_s, bad_r)
     return {
         'pair': f'{size}-{family}',
+        'level': tag,
         'pct_any_s': 100.0 * any_s.mean(),
         'pct_any_r': 100.0 * any_r.mean(),
         'p_any': f'{p_any:.3g}{_pStar(p_any)}',
@@ -200,35 +212,40 @@ def variantRow(family: str, size: str, per_s: dict, per_r: dict) -> dict:
 
 BENCH_COLS = [
     ('benchmark', 'benchmark', '{}'),
+    ('level', 'level', '{}'),
     ('B', 'B', '{}'),
     ('total_div', 'divg.', '{}'),
     ('pct_any_div', '% ≥1 divg.', '{:.0f}'),
     ('med_div_affected', 'med. divg.|>0', '{:.0f}'),
-    ('pct_rhat', '% R̂>1.01', '{:.1f}'),
     ('max_rhat', 'max R̂', '{:.2f}'),
     ('pct_tree', '% tree-sat', '{:.1f}'),
-    ('pct_conv_strict', '% conv (strict)', '{:.0f}'),
-    ('pct_conv_liberal', '% conv (liberal)', '{:.0f}'),
+    ('pct_conv', '% conv', '{:.0f}'),
+    ('pct_fail_rhat', f'% R̂>{RHAT_MAX}', '{:.1f}'),
+    ('pct_fail_ess', f'% ESS<{ESS_MIN}', '{:.1f}'),
+    ('pct_fail_ess_tail', f'% ESS-tail<{ESS_MIN}', '{:.1f}'),
+    ('pct_fail_div', '% divg. rate>cap', '{:.1f}'),
 ]
 
 VARIANT_COLS = [
     ('pair', 'benchmark pair', '{}'),
+    ('level', 'level', '{}'),
     ('pct_any_s', '% ≥1 divg. (sampled)', '{:.0f}'),
     ('pct_any_r', '% ≥1 divg. (real)', '{:.0f}'),
     ('p_any', 'p (Fisher)', '{}'),
     ('p_mw', 'p (MW, counts)', '{}'),
-    ('pct_rhat_s', '% R̂>1.01 (sampled)', '{:.1f}'),
-    ('pct_rhat_r', '% R̂>1.01 (real)', '{:.1f}'),
+    ('pct_rhat_s', f'% R̂>{RHAT_MAX} (sampled)', '{:.1f}'),
+    ('pct_rhat_r', f'% R̂>{RHAT_MAX} (real)', '{:.1f}'),
     ('p_rhat', 'p (Fisher)', '{}'),
 ]
 
 DRIVER_COLS = [
     ('benchmark', 'benchmark', '{}'),
+    ('level', 'level', '{}'),
     ('pct_low_sigma', f'% σ̃ε<{SIGMA_EPS_THRESHOLD}', '{:.0f}'),
     ('pct_div_low', '% divg.|σ̃ε low', '{:.0f}'),
     ('pct_div_rest', '% divg.|rest', '{:.0f}'),
     ('rho_sigma_div', 'ρ(σ̃ε, divg.)', '{}'),
-    ('med_mq_bad', 'med. m·q|R̂>1.01', '{:.0f}'),
+    ('med_mq_bad', f'med. m·q|R̂>{RHAT_MAX}', '{:.0f}'),
     ('med_mq_ok', 'med. m·q|rest', '{:.0f}'),
     ('rho_div_loo', 'ρ(divg., LOO-NLL)', '{}'),
     ('rho_ess_loo', 'ρ(min ESS, LOO-NLL)', '{}'),
@@ -255,12 +272,13 @@ def renderMd(rows: list[dict], cols: list[tuple[str, str, str]]) -> str:
 def renderBenchmarkTex(rows: list[dict]) -> str:
     """LaTeX table of the per-benchmark audit, styled like the other paper tables."""
     header = (
-        r'    $\mathrm{benchmark}$ & $B$ & $\mathrm{divg.}$ & $\%\,{\ge}1\,\mathrm{divg.}$ & '
-        r'$\%\,\hat{R}_\mathrm{max}{>}1.01$ & $\hat{R}_\mathrm{worst}$ & '
-        r'$\%\,\mathrm{tree\text{-}sat.}$ & $\%\,\mathrm{conv.\,(strict)}$ & '
-        r'$\%\,\mathrm{conv.\,(liberal)}$ \\'
+        r'    $\mathrm{benchmark}$ & $\mathrm{level}$ & $B$ & $\mathrm{divg.}$ & '
+        r'$\%\,{\ge}1\,\mathrm{divg.}$ & $\hat{R}_\mathrm{worst}$ & '
+        r'$\%\,\mathrm{tree\text{-}sat.}$ & $\%\,\mathrm{conv.}$ & '
+        rf'$\%\,\hat{{R}}{{>}}{RHAT_MAX}$ & $\%\,\mathrm{{ESS}}{{<}}{ESS_MIN}$ & '
+        rf'$\%\,\mathrm{{ESS_{{tail}}}}{{<}}{ESS_MIN}$ & $\%\,\mathrm{{divg.\,rate}}$ \\'
     )
-    lines = [r'\begin{tabular}{lrrrrrrrr}', r'    \toprule', header, r'    \midrule']
+    lines = [r'\begin{tabular}{llrrrrrrrrrr}', r'    \toprule', header, r'    \midrule']
     prev_family = None
     for r in rows:
         family = r['benchmark'].split('-')[1]
@@ -269,10 +287,10 @@ def renderBenchmarkTex(rows: list[dict]) -> str:
         prev_family = family
         div = f"{r['total_div']:,}".replace(',', r'{,}')
         lines.append(
-            rf"    \texttt{{{r['benchmark']}}} & ${r['B']}$ & ${div}$ & "
-            rf"${r['pct_any_div']:.0f}$ & ${r['pct_rhat']:.1f}$ & ${r['max_rhat']:.2f}$ & "
-            rf"${r['pct_tree']:.1f}$ & ${r['pct_conv_strict']:.0f}$ & "
-            rf"${r['pct_conv_liberal']:.0f}$ \\"
+            rf"    \texttt{{{r['benchmark']}}} & \texttt{{{r['level']}}} & ${r['B']}$ & ${div}$ & "
+            rf"${r['pct_any_div']:.0f}$ & ${r['max_rhat']:.2f}$ & ${r['pct_tree']:.1f}$ & "
+            rf"${r['pct_conv']:.0f}$ & ${r['pct_fail_rhat']:.1f}$ & ${r['pct_fail_ess']:.1f}$ & "
+            rf"${r['pct_fail_ess_tail']:.1f}$ & ${r['pct_fail_div']:.1f}$ \\"
         )
     lines += [r'    \bottomrule', r'\end{tabular}', '']
     return '\n'.join(lines)
@@ -286,29 +304,33 @@ def main() -> None:
     bench_rows, driver_rows, variant_rows = [], [], []
     for family in args.families:
         for size in args.sizes:
-            per_variant: dict[str, dict[str, np.ndarray]] = {}
+            per_variant: dict[tuple[str, str], dict[str, np.ndarray]] = {}
             for variant in args.variants:
                 data_id = f'{size}-{family}-{variant}'
-                diag = loadDiagnostics(DATA_DIR / data_id / 'test.fit.npz')
-                if diag is None:
-                    continue
-                per = perDataset(diag)
-                per_variant[variant] = per
-                bench_rows.append(benchmarkRow(data_id, per))
-                if family == 'n' and variant == 'sampled':
-                    row = driverRow(data_id, diag, per, DATA_DIR / data_id)
-                    if row is not None:
-                        driver_rows.append(row)
-            if 'sampled' in per_variant and 'real' in per_variant:
-                variant_rows.append(
-                    variantRow(family, size, per_variant['sampled'], per_variant['real'])
-                )
+                for tag in LEVELS:
+                    diag = loadDiagnostics(DATA_DIR / data_id / 'test.npz', tag)
+                    if diag is None:
+                        continue
+                    per = perDataset(diag, tag)
+                    per_variant[variant, tag] = per
+                    bench_rows.append(benchmarkRow(data_id, tag, per))
+                    if family == 'n' and variant == 'sampled':
+                        row = driverRow(data_id, tag, diag, per, DATA_DIR / data_id)
+                        if row is not None:
+                            driver_rows.append(row)
+            for tag in LEVELS:
+                if ('sampled', tag) in per_variant and ('real', tag) in per_variant:
+                    variant_rows.append(
+                        variantRow(
+                            family, size, tag, per_variant['sampled', tag], per_variant['real', tag]
+                        )
+                    )
 
     if not bench_rows:
-        raise ValueError('no reintegrated test.fit.npz with NUTS diagnostics found')
+        raise ValueError('no test.nuts{0,1,2}.npz fit files found')
 
     bench_md = renderMd(bench_rows, BENCH_COLS)
-    print('\n=== NUTS convergence audit (test.fit.npz, 4 chains x 1000 draws) ===\n')
+    print('\n=== NUTS convergence audit (test.nuts{0,1,2}.npz, per budget level) ===\n')
     print(bench_md)
 
     variant_md = ''
@@ -326,10 +348,12 @@ def main() -> None:
 
     md = (
         '# NUTS convergence audit\n\n'
-        'Diagnostics from the reintegrated `test.fit.npz` baselines '
-        '(4 chains, 2,000 tuning steps, 1,000 draws, target accept 0.8).\n'
+        'Diagnostics from the `test.nuts{0,1,2}.npz` fits, one row per budget level of the '
+        'NUTS ladder (4 chains each; budgets in `NUTS_LEVELS`, `metabeta/simulation/fit.py`).\n'
         'Tree-sat: fraction of datasets whose chains saturate max tree depth on >5% of draws.\n'
-        'Convergence criteria: see `nutsConvergeMask` in `metabeta/utils/evaluation.py`.\n\n'
+        'Convergence: the single `nutsConverged` criterion (`metabeta/utils/evaluation.py`); '
+        'the `% R̂`, `% ESS`, `% ESS-tail` and `% divg. rate` columns are the shares failing '
+        'each of its checks (a dataset can fail several).\n\n'
         f'{bench_md}\n'
     )
     if variant_md:
@@ -345,7 +369,7 @@ def main() -> None:
             '\n## Divergence drivers (Normal sampled)\n\n'
             f'σ̃ε is the generative noise scale in standardized space (σε/sd(y)); '
             f'"% divg." columns give the share of datasets with ≥1 divergent transition.\n'
-            'LOO-NLL is the NUTS posterior predictive LOO-NLL from `summary_test_nuts.pt`. '
+            'LOO-NLL is the composite-NUTS posterior predictive LOO-NLL from `summary_test_nuts.pt`. '
             'Spearman stars: *p<.05, **p<.01, ***p<.001.\n\n'
             f'{driver_md}\n'
         )

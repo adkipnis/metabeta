@@ -1,12 +1,12 @@
 """NPE failure mode analysis: detailed per-dataset error and failure characterization.
 
-Compares MB (amortized NPE), NUTS (gold-standard MCMC), and ADVI (variational)
+Compares MB (amortized NPE), NUTS (gold-standard MCMC), ADVI and Pathfinder (PF; variational)
 at the per-dataset level to identify and characterize failure modes specific to
 amortized posterior estimation.
 
 Unlike evaluate.py (which produces aggregate tables and plots), this reports:
   1. Distribution statistics for per-dataset NRMSE, coverage error, and LOO-NLL
-  2. Head-to-head error ratios: MB vs NUTS, MB vs ADVI (per dataset)
+  2. Head-to-head error ratios: MB vs NUTS, MB vs ADVI, MB vs PF (per dataset)
   3. Coverage calibration at each alpha level for all three methods
   4. Worst-K failure cases: MB datasets with highest combined error vs NUTS
   5. GLMM diagnostics (from glmm.py) correlated with NPE failure
@@ -477,23 +477,16 @@ def printHeadToHeadSection(
     nrmse_all: dict[str, dict[str, np.ndarray]],
     loo_nll_all: dict[str, np.ndarray],
 ) -> None:
-    _section('HEAD-TO-HEAD: MB vs NUTS and MB vs ADVI')
-    if 'NUTS' in nrmse_all:
-        printHeadToHead(
-            nrmse_all['MB'],
-            nrmse_all['NUTS'],
-            loo_nll_all['MB'],
-            loo_nll_all['NUTS'],
-            'NUTS',
-        )
-    if 'ADVI' in nrmse_all:
-        printHeadToHead(
-            nrmse_all['MB'],
-            nrmse_all['ADVI'],
-            loo_nll_all['MB'],
-            loo_nll_all['ADVI'],
-            'ADVI',
-        )
+    _section('HEAD-TO-HEAD: MB vs NUTS, ADVI and PF')
+    for other in ('NUTS', 'ADVI', 'PF'):
+        if other in nrmse_all:
+            printHeadToHead(
+                nrmse_all['MB'],
+                nrmse_all[other],
+                loo_nll_all['MB'],
+                loo_nll_all[other],
+                other,
+            )
 
 
 def printFailureAnalysis(
@@ -699,7 +692,8 @@ def main() -> None:
 
     ev = Evaluator(cfg)
     lf = cfg.likelihood_family
-    full_batch = ev.dl_test.fullBatch()
+    fits = ('nuts', 'advi1', 'pathfinder1')
+    full_batch = ev._getDataLoader('test', fits=fits)[0].fullBatch()
     B = full_batch['ffx'].shape[0]
 
     print(SEP)
@@ -711,11 +705,10 @@ def main() -> None:
     print('\nSampling MB proposals...')
     proposal_mb = ev.sampleMinibatched(ev.dl_test, 'MB')
 
-    print('Loading NUTS and ADVI proposals...')
-    proposal_nuts = ev._fit2proposal(full_batch, prefix='nuts')
-    proposal_advi = ev._fit2proposal(full_batch, prefix='advi')
-
-    proposals = {'MB': proposal_mb, 'NUTS': proposal_nuts, 'ADVI': proposal_advi}
+    print('Loading NUTS, ADVI and PF proposals...')
+    proposals = {'MB': proposal_mb}
+    for label, tag in zip(('NUTS', 'ADVI', 'PF'), fits):
+        proposals[label] = ev._fit2proposal(full_batch, prefix=tag)
 
     # CPU + optional rescaling
     data = toDevice(full_batch, 'cpu')

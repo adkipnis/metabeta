@@ -17,7 +17,7 @@ barely changed any metric relative to raw flow samples. Two compounding causes:
    them out (marginal=True). The resulting "correction" does not target the posterior of
    the global parameters — it reweights toward datasets' flow-conditional rfx fit instead.
 2. Dampening before PSIS. constrain=True applied dampen(log_w, p=0.5) — a signed sqrt of
-   the log-weights — *before* az.psislw, flattening the weights toward uniform, so PSIS
+   the log-weights — *before* psislw, flattening the weights toward uniform, so PSIS
    then smoothed already-neutered weights. PSIS is itself the principled regularizer;
    dampening on top mostly cancels whatever signal the weights carried.
 
@@ -78,18 +78,7 @@ from metabeta.utils.families import (
     sampleRfxConditionalNormal,
 )
 from metabeta.utils.preprocessing import rescaleData
-
-
-def _psislw(log_w):
-    """Pareto-smoothed IS log-weights via arviz, imported lazily.
-
-    Kept out of module scope so constructing/running the samplers (e.g. IMH, or a timing
-    harness) does not require arviz + its matplotlib/dateutil stack — only the PSIS-weighted
-    paths that actually call this do.
-    """
-    import arviz as az
-
-    return az.psislw(log_w)
+from metabeta.utils.psis import psislw
 
 
 # Bump when the definition of the IS/IMH weights changes; `weightsTag` folds it into the on-disk
@@ -323,7 +312,7 @@ class ImportanceSampler:
             # No dampening here: PSIS is the principled tail regularizer, and dampening
             # log-weights before smoothing flattens them toward uniform, cancelling the
             # correction (see module docstring Findings).
-            log_w_np, pareto_k_np = _psislw(log_w.detach().cpu().numpy())  # host-side PSIS
+            log_w_np, pareto_k_np = psislw(log_w.detach().cpu().numpy())  # host-side PSIS
             out['log_w'] = log_w.new_tensor(log_w_np)
             out['pareto_k'] = log_w.new_tensor(pareto_k_np)
         else:
@@ -426,7 +415,7 @@ class ResampleMoveSampler:
         # initial resample from the PSIS-smoothed weights (raw weights drive the
         # MH ratio below; smoothing only stabilises the resampling step)
         lw = self._logWeights(proposal)  # (b, s)
-        log_w_np, pareto_k_np = _psislw(lw)
+        log_w_np, pareto_k_np = psislw(lw)
         w = torch.softmax(lw.new_tensor(log_w_np), dim=-1)
         w = torch.where(torch.isfinite(w), w, 0)
         self._is.n_sir = s

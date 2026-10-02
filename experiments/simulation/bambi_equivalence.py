@@ -25,7 +25,7 @@ import bambi as bmb
 
 from metabeta.utils.constants import bambiFamilyName, FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF
 from metabeta.utils.padding import unpad
-from metabeta.simulation.fit import Fitter
+from metabeta.utils.pymc import buildPymc
 from metabeta.utils.experiments import DATA_DIR
 
 
@@ -110,12 +110,9 @@ def compare_logp(ds: dict, n_points: int = 50, seed: int = 0) -> np.ndarray:
     relative error of ~3e-11 regardless of model size.  Any genuine model
     mismatch would show up as a relative error orders of magnitude larger.
     """
-    fitter = Fitter.__new__(Fitter)
-    fitter.ds = ds
-
     bm = bambify(ds)
     pm_bm = bm.backend.model
-    pm_ours = fitter._buildPymc(ds)
+    pm_ours = buildPymc(ds)
 
     with pm_bm:
         logp_bm = pm_bm.compile_logp()

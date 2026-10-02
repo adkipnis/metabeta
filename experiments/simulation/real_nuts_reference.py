@@ -1,9 +1,10 @@
 """Run NUTS reference fits for preprocessed real grouped datasets.
 
 The script packages real datasets into the same batch schema used by
-``metabeta.simulation.fit.Fitter`` and then runs PyMC NUTS with that fitter's
-defaults.  It currently uses a random-intercept model (q=1), which is the only
-real-data random-effect structure available without extra formula metadata.
+``metabeta.simulation.fit.Fitter`` and then runs PyMC NUTS at one budget level of
+that fitter (default: level 2, the reference budget).  It currently uses a
+random-intercept model (q=1), which is the only real-data random-effect structure
+available without extra formula metadata.
 
 Usage from repo root:
     uv run python experiments/simulation/real_nuts_reference.py
@@ -13,11 +14,10 @@ import argparse
 from pathlib import Path
 
 import numpy as np
-import torch
 
 from metabeta.simulation.fit import Fitter
 from metabeta.simulation.prior import bambiDefaultPriors
-from metabeta.utils.evaluation import nutsConvergeMask
+from metabeta.utils.evaluation import nutsConverged
 from metabeta.utils.experiments import DATA_DIR, PREPROCESSED_DATA_DIR
 from metabeta.utils.padding import aggregate
 
@@ -37,12 +37,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--y-type', default='continuous', choices=['continuous', 'binary', 'count'])
     parser.add_argument('--q', type=int, default=1, help='Number of leading columns used as random effects.')
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--tune', type=int, default=2000)
-    parser.add_argument('--target_accept', type=float, default=0.8)
-    parser.add_argument('--max_treedepth', type=int, default=10)
-    parser.add_argument('--draws', type=int, default=1000)
-    parser.add_argument('--chains', type=int, default=4)
-    parser.add_argument('--loop', action='store_true')
+    parser.add_argument('--level', type=int, default=2, help='NUTS budget level of metabeta.simulation.fit (default=2)')
     parser.add_argument('--mp_ctx', type=str, default='forkserver')
     parser.add_argument('--diagonal', action='store_true')
     parser.add_argument('--force', action='store_true', help='Refit datasets even when an individual fit exists.')
@@ -114,41 +109,21 @@ def _fitCfg(args: argparse.Namespace, idx: int) -> argparse.Namespace:
         data_id=args.data_id,
         idx=idx,
         method='nuts',
+        level=args.level,
         seed=args.seed,
-        tune=args.tune,
-        target_accept=args.target_accept,
-        max_treedepth=args.max_treedepth,
-        draws=args.draws,
-        chains=args.chains,
-        loop=args.loop,
         mp_ctx=args.mp_ctx,
         diagonal=args.diagonal,
         partition='test',
     )
 
 
-def _toTorchBatch(batch: dict[str, np.ndarray]) -> dict[str, torch.Tensor]:
-    out = {}
-    for key, value in batch.items():
-        if key.startswith('nuts_') and np.issubdtype(value.dtype, np.number):
-            if key == 'nuts_draws':
-                value = np.asarray(value).reshape(-1)
-                value = value[:1]
-            out[key] = torch.as_tensor(value)
-    return out
-
-
-def _summarizeConvergence(batch: dict[str, np.ndarray]) -> None:
-    torch_batch = _toTorchBatch(batch)
+def _summarizeConvergence(batch: dict[str, np.ndarray], tag: str) -> None:
+    mask = nutsConverged(batch, tag)
     names = batch.get('source', np.array([str(i) for i in range(len(batch['n']))]))
-    for mode in ('strict', 'liberal'):
-        mask = nutsConvergeMask(torch_batch, mode=mode)
-        if mask is None:
-            continue
-        print(f'NUTS convergence ({mode}): {int(mask.sum())} / {len(mask)}')
-        failed = np.asarray(names)[~mask]
-        if len(failed):
-            print('  failed:', ', '.join(str(x) for x in failed))
+    print(f'NUTS convergence: {int(mask.sum())} / {len(mask)}')
+    failed = np.asarray(names)[~mask]
+    if len(failed):
+        print('  failed:', ', '.join(str(x) for x in failed))
 
 
 def main() -> None:
@@ -169,18 +144,16 @@ def main() -> None:
     for idx in range(len(batch['n'])):
         cfg = _fitCfg(args, idx=idx)
         fitter = Fitter(cfg, srcdir=DATA_DIR)
-        if fitter.outpath.exists() and not args.force:
-            print(f'Skipping existing fit {fitter.outpath}')
+        (tag,) = fitter.tags
+        if fitter.outPath(tag).exists() and not args.force:
+            print(f'Skipping existing fit {fitter.outPath(tag)}')
             continue
         fitter.go()
 
-    cfg0 = _fitCfg(args, idx=0)
-    fitter0 = Fitter(cfg0, srcdir=DATA_DIR)
-    batch.update(fitter0._aggregate('nuts'))
-    fit_path = batch_path.with_suffix('.fit.npz')
-    np.savez_compressed(fit_path, **batch, allow_pickle=True)
-    print(f'Wrote NUTS reference batch to {fit_path}')
-    _summarizeConvergence(batch)
+    fitter0 = Fitter(_fitCfg(args, idx=0), srcdir=DATA_DIR)
+    (tag,) = fitter0.tags
+    fitter0.reintegrate()
+    _summarizeConvergence({**batch, **fitter0._aggregate(tag)}, tag)
 
 
 if __name__ == '__main__':

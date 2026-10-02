@@ -2,6 +2,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from metabeta.utils.fits import FIT_TAGS, loadFits
 from metabeta.utils.sampling import sampleGroupedPermutation
 from metabeta.utils.padding import unpad, padToModel
 
@@ -37,17 +38,18 @@ class Collection(torch.utils.data.Dataset):
         permute_seed: int = 0,
         max_d: int | None = None,
         max_q: int | None = None,
-        exclude_prefixes: tuple[str, ...] = (),
+        fits: tuple[str, ...] = (),
     ):
         super().__init__()
 
-        # load data; exclude_prefixes skips keys entirely (never decompressed) —
-        # e.g. ('nuts_', 'advi_', 'laplace_') to keep a *.fit.npz's multi-GB
-        # posterior-sample arrays out of memory when only the datasets are needed
+        # load the datasets, then merge the requested reference fits ({partition}.{tag}.npz,
+        # see metabeta.utils.fits); each fit file is checked against this file's checksum
         assert path.exists(), f'{path} does not exist'
         with np.load(path, allow_pickle=True) as raw:
-            keys = [k for k in raw.files if not k.startswith(tuple(exclude_prefixes))]
-            self.raw = {k: raw[k] for k in keys}
+            self.raw = {k: raw[k] for k in raw.files}
+        self.fits = tuple(fits)
+        for tag in self.fits:
+            self.raw.update(loadFits(path, tag))
 
         # reduce host-memory footprint for training/validation collections
         # by storing floating arrays in float32 and large integers in int32.
@@ -67,8 +69,6 @@ class Collection(torch.utils.data.Dataset):
                     self.raw[key] = value.astype(np.int32)
 
         self.has_params = 'ffx' in self.raw
-        self.has_nuts = 'nuts_ffx' in self.raw
-        self.has_advi = 'advi_ffx' in self.raw
         self.has_stats = 'beta_est' in self.raw
 
         # quickly assert that group indices are ascending from 0 to m-1
@@ -118,15 +118,10 @@ class Collection(torch.utils.data.Dataset):
         assert checks.all(), 'group indices are not structured correctly'
 
     def __repr__(self) -> str:
-        return f'Collection({len(self)} datasets, max(fixed)={self.d}, max(random)={self.q}, fits={self.has_nuts or self.has_advi}, stats={self.has_stats})'
+        return f'Collection({len(self)} datasets, max(fixed)={self.d}, max(random)={self.q}, fits={list(self.fits)}, stats={self.has_stats})'
 
     def __getitem__(self, idx: int) -> dict[str, np.ndarray]:
-        # get dataset (without fit statistics)
-        ds = {
-            k: v[idx]
-            for k, v in self.raw.items()
-            # if not (k.startswith('nuts') or k.startswith('advi'))
-        }
+        ds = {k: v[idx] for k, v in self.raw.items()}
 
         # unpad to actual d/q, then pad to collection/model maxima
         sizes = {k: ds[k] for k in ('m', 'n')}
@@ -153,7 +148,7 @@ class Collection(torch.utils.data.Dataset):
             ds['qperm'] = qperm
 
             # permute fit samples consistently with ground truth
-            for method in ('nuts', 'advi', 'laplace'):
+            for method in FIT_TAGS:
                 if f'{method}_ffx' in ds:
                     ds[f'{method}_ffx'] = ds[f'{method}_ffx'][dperm]
                     ds[f'{method}_sigma_rfx'] = ds[f'{method}_sigma_rfx'][qperm]
@@ -285,7 +280,7 @@ def collateGrouped(
     )
 
     # collate fit samples if present
-    for method in ('nuts', 'advi', 'laplace'):
+    for method in FIT_TAGS:
         if f'{method}_ffx' in batch[0]:
             out.update(collateFits(batch, method, d, q, m, dtype))
 
@@ -348,13 +343,19 @@ def collateFits(
     if f'{method}_failed' in batch[0]:
         out[f'{method}_failed'] = quickCollate(batch, f'{method}_failed', torch.bool)
 
-    # per-dataset diagnostics: shape (b, chains) or (b, n_params)
+    # per-dataset diagnostics: shape (b,), (b, chains) or (b, n_params)
     for diag_key in (
         f'{method}_divergences',
         f'{method}_max_treedepth',
         f'{method}_ess',
         f'{method}_ess_tail',
         f'{method}_rhat',
+        f'{method}_draws',
+        f'{method}_level',
+        f'{method}_converged',
+        f'{method}_bfmi',
+        f'{method}_n_steps',
+        f'{method}_sampling_time',
     ):
         if diag_key in batch[0]:
             out[diag_key] = quickCollate(batch, diag_key)
@@ -535,8 +536,11 @@ class Dataloader(torch.utils.data.DataLoader):
         max_q: int | None = None,
         num_workers: int = 0,
         persistent_workers: bool = False,
+        fits: tuple[str, ...] = (),
     ):
-        col = Collection(path, permute=permute, permute_seed=permute_seed, max_d=max_d, max_q=max_q)
+        col = Collection(
+            path, permute=permute, permute_seed=permute_seed, max_d=max_d, max_q=max_q, fits=fits
+        )
         pin_memory = torch.cuda.is_available()
         self._sortish = sortish
         self._shuffle = shuffle

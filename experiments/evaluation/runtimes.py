@@ -1,4 +1,4 @@
-"""Runtime comparison: metabeta vs NUTS, ADVI and Laplace, per size regime.
+"""Runtime comparison: metabeta vs NUTS, ADVI, Pathfinder and Laplace, per size regime.
 
 Every size uses its regime-matched checkpoint (BEST_SEEDS from scripts/build_ckpt.py) on its
 own test set, the same arrangement as the misspecification studies.  The cross-product of the
@@ -45,12 +45,16 @@ the precomputed ones the batch carries.  Both are one-line appendix statements �
 data-only, so its cost is checkpoint-independent, and the batched cost of the default pipeline
 is what the oracle benchmark's time column reports.
 
-Timings are cached next to test.fit.npz, keyed by checkpoint/prefix/samples/seed/device, and
+Timings are cached next to test.npz, keyed by checkpoint/prefix/samples/seed/device, and
 invalidated when the data or the checkpoint is newer.  A cached timing is only as good as the
 machine state that produced it: pass ``--refresh_cache`` for a clean campaign.
 
-ADVI rows exclude datasets whose fit failed (``advi_failed``, up to 50/512 for bernoulli);
-their stored durations time a run that produced nothing.
+NUTS appears twice: ``NUTS0`` is the PyMC-default budget (level 0 of the ladder) and ``NUTS``
+the composite competitor, per dataset the cheapest level that converged with the cumulative
+wall time of the escalation.  Convergence is the single ``nutsConverged`` criterion of the
+``nuts2`` reference.  ADVI/Pathfinder rows exclude datasets whose fit failed
+(``{tag}_failed``, up to 50/512 for bernoulli ADVI); their stored durations time a run that
+produced nothing.
 
 Usage (from repo root):
     uv run python experiments/evaluation/runtimes.py --family n --device cuda
@@ -75,8 +79,9 @@ from metabeta.models.approximator import Approximator
 from metabeta.plotting.runtimes import plotRuntimeRecords
 from metabeta.utils.dataloader import Collection, collateGrouped, toDevice
 from metabeta.utils.device import setDevice, synchronizeDevice
-from metabeta.utils.evaluation import nutsConvergeMask
+from metabeta.utils.evaluation import referenceConverged
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR, REPO_ROOT
+from metabeta.utils.fits import fitPath, loadFits
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.posterior_eval import (
     IMH_METHODS,
@@ -106,7 +111,14 @@ MB_GLOBAL = 'MBG'  # the global pass alone (local=False), the proposal handed to
 MB_HEAD = 'IMH'  # the IMH head on that proposal (MB minus MBG, per dataset)
 MB_DEFAULT = 'MB'  # the default pipeline, MBG + IMH timed as one region (the paper's MB)
 MB_METHODS = [MB_FLOW, MB_GLOBAL, MB_HEAD, MB_DEFAULT]
-FIT_METHODS = ['LAPLACE', 'ADVI', 'NUTS']
+FIT_METHODS = ['LAPLACE', 'PATHFINDER', 'ADVI', 'NUTS0', 'NUTS']
+FIT_TAG = {  # test.{tag}.npz per method; NUTS0 = ladder level 0, NUTS = composite
+    'LAPLACE': 'laplace',
+    'PATHFINDER': 'pathfinder1',
+    'ADVI': 'advi1',
+    'NUTS0': 'nuts0',
+    'NUTS': 'nuts',
+}
 METHOD_ORDER = MB_METHODS + FIT_METHODS
 METHOD_LABELS = {
     MB_FLOW: 'MB^0',
@@ -114,6 +126,7 @@ METHOD_LABELS = {
     MB_HEAD: 'IMH head',
     MB_DEFAULT: 'MB',
     'LAPLACE': 'Laplace',
+    'PATHFINDER': 'Pathfinder',
 }
 TEX_LABELS = {
     MB_FLOW: r'\MBz{}',
@@ -121,61 +134,40 @@ TEX_LABELS = {
     MB_HEAD: r'\texttt{IMH}',
     MB_DEFAULT: r'\texttt{MB}',
     'LAPLACE': r'\texttt{Laplace}',
+    'PATHFINDER': r'\texttt{Pathfinder}',
 }
 
 # fraction of the slowest runs summarised separately; 5% of 512 datasets is 26 datasets,
 # enough for a stable mean and small enough to still be a tail
 TAIL_FRAC = 0.05
 
-# diagnostics nutsConvergeMask reads; kept out of the model batch to avoid decompressing the
-# multi-GB posterior sample arrays that share the nuts_ prefix
-_DIAG_KEYS = (
-    'nuts_divergences',
-    'nuts_draws',
-    'nuts_rhat',
-    'nuts_ess',
-    'nuts_ess_tail',
-    'nuts_max_treedepth',
-)
-
 
 # ---------------------------------------------------------------------------
-# Reference runtimes (already stored per dataset in test.fit.npz)
+# Reference runtimes (already stored per dataset in test.{tag}.npz)
 
 
 def loadReferences(path: Path) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray], np.ndarray]:
-    """Per-dataset (durations, success masks, NUTS-converged mask) from a fit file.
+    """Per-dataset (durations, success masks, NUTS-converged mask) from the fit files of ``path``.
 
     Only the small diagnostic arrays are read; the posterior samples stay on disk.
     """
     durations: dict[str, np.ndarray] = {}
     masks: dict[str, np.ndarray] = {}
-    diag: dict[str, torch.Tensor] = {}
     with np.load(path, allow_pickle=True) as raw:
         n = int(np.asarray(raw['d']).reshape(-1).shape[0])
-        for method in FIT_METHODS:
-            prefix = method.lower()
-            key = f'{prefix}_duration'
-            if key not in raw.files:
-                continue
-            durations[method] = np.asarray(raw[key], dtype=np.float64).reshape(-1)
-            failed_key = f'{prefix}_failed'
-            masks[method] = (
-                ~np.asarray(raw[failed_key]).reshape(-1).astype(bool)
-                if failed_key in raw.files
-                else np.ones(n, dtype=bool)
-            )
-        for key in _DIAG_KEYS:
-            if key not in raw.files:
-                continue
-            value = np.asarray(raw[key])
-            # nuts_draws is stored per dataset but nutsConvergeMask wants the scalar chain
-            # length; the campaign uses one setting throughout, so collapse it here
-            diag[key] = torch.as_tensor(value.reshape(-1)[0] if key == 'nuts_draws' else value)
-
-    conv = nutsConvergeMask(diag, mode='strict')
-    conv = np.ones(n, dtype=bool) if conv is None else conv.astype(bool)
-    return durations, masks, conv
+    for method in FIT_METHODS:
+        tag = FIT_TAG[method]
+        if not fitPath(path, tag).exists():
+            continue
+        fit = loadFits(path, tag, keys=(f'{tag}_duration', f'{tag}_failed'))
+        durations[method] = np.asarray(fit[f'{tag}_duration'], dtype=np.float64).reshape(-1)
+        masks[method] = (
+            ~np.asarray(fit[f'{tag}_failed']).reshape(-1).astype(bool)
+            if f'{tag}_failed' in fit
+            else np.ones(n, dtype=bool)
+        )
+    conv = referenceConverged(path)
+    return durations, masks, np.ones(n, dtype=bool) if conv is None else conv
 
 
 def nutsDrawCount(family: str, sizes: list[str], ds_type: str) -> int:
@@ -186,69 +178,13 @@ def nutsDrawCount(family: str, sizes: list[str], ds_type: str) -> int:
     without a magic constant that silently drifts from the fit campaign.
     """
     for size in sizes:
-        path = DATA_DIR / f'{size}-{family}-{ds_type}' / 'test.fit.npz'
-        if not path.exists():
+        path = DATA_DIR / f'{size}-{family}-{ds_type}' / 'test.npz'
+        if not (path.exists() and fitPath(path, 'nuts').exists()):
             continue
-        with np.load(path, allow_pickle=True) as raw:
-            if 'nuts_ffx' not in raw.files:
-                continue
-            return int(np.asarray(raw['nuts_ffx']).shape[-1])
+        return int(loadFits(path, 'nuts', keys=('nuts_ffx',))['nuts_ffx'].shape[-1])
     raise FileNotFoundError(
         f'no fit file with NUTS draws found for family {family!r}; pass --n_samples explicitly'
     )
-
-
-# ---------------------------------------------------------------------------
-# Model inputs
-
-
-def modelCollection(fit_path: Path, max_d: int, max_q: int) -> Collection:
-    """Collection for the timed model batches, preferring whichever file carries the stats.
-
-    ``Approximator.summarize`` uses precomputed analytical statistics when the batch has them
-    and otherwise calls ``_dataStatistics`` — a full MAP+EB fit — inline.  Whether a fit file
-    happens to carry those arrays therefore decides what the timed region contains, and the
-    campaign is inconsistent about it (normal has them in no ``test.fit.npz``, bernoulli lacks
-    them only at ``small``, poisson only at ``huge``).  Timing against a file without them
-    measures the analytical fit rather than amortized inference, and makes cells incomparable.
-
-    ``test.npz`` carries the stats for every generated dir and is row-aligned with its fit file,
-    so prefer it and fall back only when it cannot be used — loudly, since the resulting numbers
-    mean something different.  Mirrors the fallback in likelihood_misspec.collectCondition.
-    """
-    base_path = fit_path.with_name('test.npz')
-    fit_col = Collection(
-        fit_path,
-        permute=False,
-        max_d=max_d,
-        max_q=max_q,
-        exclude_prefixes=('nuts_', 'advi_', 'laplace_'),
-    )
-    if fit_col.has_stats:
-        return fit_col
-    if not base_path.exists():
-        logger.warning(
-            '%s: no precomputed stats and no sibling test.npz — timings will include the '
-            'analytical MAP fit and are NOT comparable to cells that have stats',
-            fit_path.parent.name,
-        )
-        return fit_col
-
-    base_col = Collection(base_path, permute=False, max_d=max_d, max_q=max_q)
-    aligned = len(base_col) == len(fit_col) and all(
-        np.array_equal(base_col.raw[key], fit_col.raw[key]) for key in ('d', 'q', 'm', 'n')
-    )
-    if not (base_col.has_stats and aligned):
-        logger.warning(
-            '%s: sibling test.npz has no stats or is not row-aligned — timings will include '
-            'the analytical MAP fit and are NOT comparable to cells that have stats',
-            fit_path.parent.name,
-        )
-        return fit_col
-    logger.info(
-        '%s: taking model inputs from test.npz (fit file has no stats)', fit_path.parent.name
-    )
-    return base_col
 
 
 # ---------------------------------------------------------------------------
@@ -389,7 +325,7 @@ def timeLatency(
 
 
 # ---------------------------------------------------------------------------
-# Timing cache — a sibling of test.fit.npz, like the posterior-sample caches
+# Timing cache — a sibling of test.npz, like the posterior-sample caches
 
 
 def cachePath(
@@ -476,9 +412,7 @@ def cachedLatencies(
                 cache[f'{glob_tag}:{idxs[i]}'] = float(g_val)
                 cache[f'{mb_tag}:{idxs[i]}'] = float(m_val)
     if not missing_all and not missing_pipe and len(idxs):
-        logger.info(
-            '%s: all %d timings cached', ' + '.join([flow_tag] + pipe_tags), len(idxs)
-        )
+        logger.info('%s: all %d timings cached', ' + '.join([flow_tag] + pipe_tags), len(idxs))
     return flow, glob, mb
 
 
@@ -516,14 +450,14 @@ def collectCell(
         )
         return None
     ckpt_dir = _ckpt_dir(FAMILY_NAMES[family], size, seed)
-    data_path = DATA_DIR / data_id / 'test.fit.npz'
+    data_path = DATA_DIR / data_id / 'test.npz'
     if not data_path.exists() or not ckpt_dir.exists():
         logger.warning('%s: data or checkpoint missing — skipping', data_id)
         return None
 
     model, model_cfg = loadModel(ckpt_dir, cfg.prefix, device)
     try:
-        col = modelCollection(data_path, model_cfg.max_d, model_cfg.max_q)
+        col = Collection(data_path, permute=False, max_d=model_cfg.max_d, max_q=model_cfg.max_q)
     except ValueError as exc:
         # regimes are matched by construction; a mismatch means the checkpoint map is wrong
         logger.warning('%s: checkpoint does not cover this regime (%s) — skipping', data_id, exc)
@@ -671,6 +605,8 @@ def cellRows(records: list[dict]) -> list[dict]:
 def reliabilityRows(records: list[dict]) -> list[dict]:
     """Per size: how NUTS' wall-clock cost concentrates where it also fails to converge.
 
+    NUTS is the composite competitor (its wall time is the cumulative cost of escalating the
+    ladder); "converged" is the ``nuts2`` reference criterion.
     ``t/conv`` is total NUTS wall time divided by the number of converged datasets — the cost
     of a *usable* posterior rather than of a run.  metabeta has no analogue because it does not
     fail, so its own median doubles as its cost per usable posterior.
@@ -833,7 +769,7 @@ def outputStem(cfg: argparse.Namespace, device: torch.device) -> str:
 def setup() -> argparse.Namespace:
     # fmt: off
     parser = argparse.ArgumentParser(
-        description='Runtime comparison: metabeta (raw flow and flow + IMH) vs NUTS, ADVI and Laplace, per size regime.',
+        description='Runtime comparison: metabeta (raw flow and flow + IMH) vs NUTS, ADVI, Pathfinder and Laplace, per size regime.',
     )
     parser.add_argument('--family', type=str, default='n', choices=list(FAMILY_NAMES))
     parser.add_argument('--sizes', type=str, nargs='+', default=DEFAULT_SIZES, choices=DEFAULT_SIZES)
@@ -895,15 +831,16 @@ def main() -> None:
         f'pass (latency). MB^0 is the raw flow (global + local posterior flow); MB is the '
         f'default pipeline, the global pass alone (local flow skipped) plus the default IMH '
         f'head ({", ".join(methods) or "none"}), whose two parts are the "global pass" and '
-        f'"IMH head" rows. ADVI excludes failed fits.\n',
+        f'"IMH head" rows. NUTS0 is the PyMC-default budget, NUTS the composite (cheapest '
+        f'converged level, cumulative wall time). ADVI/Pathfinder exclude failed fits.\n',
         '## Runtime distribution per regime\n',
-        'Wall time per dataset. NUTS/ADVI/Laplace times are those recorded at fit time; '
+        'Wall time per dataset. NUTS/ADVI/Pathfinder/Laplace times are those recorded at fit time; '
         'metabeta is timed here. The tail columns are the point: the raw flow is flat because '
         'its cost tracks the architecture; the samplers are not.\n',
         dist_md,
         '',
         '## NUTS tail vs reliability\n',
-        'Convergence is the strict `nutsConvergeMask` criterion. `% conv in slowest 5%` is the '
+        'Convergence is the `nutsConverged` criterion of the `nuts2` reference. `% conv in slowest 5%` is the '
         'convergence rate *within* the slowest 5% of NUTS runs: the reference spends its '
         'largest wall-clock budget where it is least likely to return a usable posterior. '
         '`t/conv` is total NUTS wall time per converged dataset, and the speedups are against '

@@ -17,11 +17,11 @@ parameters and prior context coherent, so the stressor is tail shape rather than
 Each (size, family) source produces standard-format data dirs under outputs/data/:
 
     {size}-{fam}-misbase        severity-0 baseline: slice of the original test.npz AND its
-                                test.fit.npz (existing NUTS fits reused — zero refits)
+                                test.nuts.npz (existing NUTS fits reused — zero refits)
     {size}-{fam}-{tag}          one dir per condition (student3, negbin1, latent20, ...),
                                 test.npz only — NUTS fits to be produced with fit.py
 
-The three-token data_id keeps the whole toolchain working unmodified (fit-nuts.sh, fit.py,
+The three-token data_id keeps the whole toolchain working unmodified (fit-ref.sh, fit.py,
 precompute.py).  Selected source indices are shared across conditions within a (size, family)
 and recorded in each config.yaml (``misspec_orig_indices``).
 
@@ -31,9 +31,9 @@ Usage (from repo root):
     uv run python experiments/simulation/likelihood_misspec.py --print_commands
 
 After generation, produce NUTS fits per condition dir (cluster):
-    sbatch --array=0-31 scripts/fit-nuts.sh --data_id small-n-student3
-then reintegrate (from metabeta/simulation/):
-    uv run python fit.py --size small --family 0 --ds_type student3 --reintegrate
+    scripts/fit-ref.sh --method nuts --level 2 --n_datasets 32 --data_id small-n-student3
+then check and reintegrate:
+    uv run python metabeta/simulation/check.py --partition test --data_id small-n-student3
 and optionally precompute analytical stats (from metabeta/analytical/):
     uv run python precompute.py --size small --family 0 --ds_type student3 --partition test
 """
@@ -51,6 +51,7 @@ from metabeta.simulation.simulator import SCALE_PARAMS, SCALE_HYPERPARAMS
 from metabeta.utils.families import POISSON_ETA_CLIP_MAX
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.experiments import DATA_DIR
+from metabeta.utils.fits import REFERENCE_TAG, availableFits, fitPath, saveFits
 
 logger = logging.getLogger(__name__)
 
@@ -107,16 +108,13 @@ def _readHeader(f) -> tuple[tuple[int, ...], bool, np.dtype]:
     raise ValueError(f'unsupported npy version: {version}')
 
 
-def sliceNpzStreaming(
-    path: Path,
-    idx: np.ndarray,
-    drop_prefixes: tuple[str, ...] = (),
-) -> dict[str, np.ndarray]:
+def sliceNpzStreaming(path: Path, idx: np.ndarray) -> dict[str, np.ndarray]:
     """Slice every array in an npz along axis 0 without decompressing full arrays.
 
     Fit files hold keys with tens of GB decompressed (e.g. huge nuts_rfx); this streams
     each entry row by row and keeps only the selected rows, bounding peak memory by the
     slice size.  ``idx`` holds unique positions in any order; rows are returned in that order.
+    0-d members (the fit file's ``source_sha``) have no dataset axis and are skipped.
     """
     want = {int(orig): new for new, orig in enumerate(idx)}
     out: dict[str, np.ndarray] = {}
@@ -125,10 +123,10 @@ def sliceNpzStreaming(
             if not name.endswith('.npy'):
                 continue
             key = name[:-4]
-            if key.startswith(drop_prefixes):
-                continue
             with zf.open(name) as f:
                 shape, fortran, dtype = _readHeader(f)
+                if not shape:
+                    continue
                 if fortran:
                     raise ValueError(f'{path}:{key} is Fortran-ordered; streaming assumes C order')
                 last = int(idx.max())
@@ -232,6 +230,16 @@ def writeConfig(
         yaml.safe_dump(cfg, f, sort_keys=False)
 
 
+def copyReferenceFit(src_path: Path, dst_path: Path, idx: np.ndarray) -> None:
+    """Slice the NUTS reference fit of ``src_path`` onto the baseline ``dst_path``.
+
+    Only the reference travels with a baseline (the other fits are not evaluated here);
+    saveFits stamps the checksum of the new ``dst_path``.
+    """
+    sliced = sliceNpzStreaming(fitPath(src_path, REFERENCE_TAG), idx)
+    saveFits(dst_path, REFERENCE_TAG, sliced, force=True)
+
+
 def selectIndices(B: int, n_datasets: int, seed: int) -> np.ndarray:
     """First ``n_datasets`` of a fixed permutation — deliberately NOT sorted, so smaller
     selections are prefixes of larger ones and their per-index NUTS fits stay valid."""
@@ -246,9 +254,8 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
     src_id = f'{size}-{family}-sampled'
     src_dir = DATA_DIR / src_id
     test_path = src_dir / 'test.npz'
-    fit_path = src_dir / 'test.fit.npz'
-    if not test_path.exists() or not fit_path.exists():
-        logger.warning('%s: test.npz or test.fit.npz missing — skipping', src_id)
+    if not test_path.exists() or not fitPath(test_path, REFERENCE_TAG).exists():
+        logger.warning('%s: test.npz or its %s fit missing — skipping', src_id, REFERENCE_TAG)
         return []
 
     with np.load(test_path, allow_pickle=True) as z:
@@ -266,9 +273,7 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
     else:
         base_dir.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(base_dir / 'test.npz', **{k: v[idx] for k, v in source.items()})
-        # advi_/laplace_ fits are irrelevant here and dominate the file size — drop them.
-        sliced_fit = sliceNpzStreaming(fit_path, idx, drop_prefixes=('advi_', 'laplace_'))
-        np.savez_compressed(base_dir / 'test.fit.npz', **sliced_fit)
+        copyReferenceFit(test_path, base_dir / 'test.npz', idx)
         writeConfig(src_dir, base_dir, base_id, cfg.n_datasets, kind, 0.0, idx, cfg.seed)
         logger.info('%s: baseline written (%d datasets)', base_id, cfg.n_datasets)
     created.append(base_id)
@@ -285,7 +290,7 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
         if out_dir.exists():
             # regenerated y invalidates any fits of the previous data — remove them so
             # stale per-index fit files cannot be reintegrated against the new datasets
-            stale = [p for p in [out_dir / 'test.fit.npz'] if p.exists()]
+            stale = [fitPath(out_dir / 'test.npz', t) for t in availableFits(out_dir / 'test.npz')]
             stale += sorted((out_dir / 'fits').glob('*.npz'))
             for p in stale:
                 p.unlink()
@@ -313,22 +318,23 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
 
 
 def printCommands(families: list[str], sizes: list[str], n_datasets: int) -> None:
-    """Print the NUTS fit campaign, one size at a time (baseline dirs need no fits)."""
+    """Print the NUTS ladder campaign, one size at a time (baseline dirs need no fits)."""
     for size in sizes:
         print(f'\n# --- {size} ---')
         for family in families:
             _, conditions = CONDITIONS[family]
             for tag, _ in conditions:
                 print(
-                    f'sbatch --array=0-{n_datasets - 1} scripts/fit-nuts.sh --data_id {size}-{family}-{tag}'
+                    f'scripts/fit-ref.sh --method nuts --level 2 '
+                    f'--n_datasets {n_datasets} --data_id {size}-{family}-{tag}'
                 )
-        print('# after all fits of this size finished (from metabeta/simulation/):')
+        print('# after all fits of this size finished (checks the fits, then reintegrates):')
         for family in families:
             _, conditions = CONDITIONS[family]
             for tag, _ in conditions:
                 print(
-                    f'uv run python fit.py --size {size} --family {FAMILY_IDS[family]} '
-                    f'--ds_type {tag} --reintegrate'
+                    f'uv run python metabeta/simulation/check.py --partition test '
+                    f'--data_id {size}-{family}-{tag}'
                 )
 
 

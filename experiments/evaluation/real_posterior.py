@@ -1,10 +1,13 @@
 """
-experiments/evaluation/real_posterior.py — Posterior comparison on real data: MB and ADVI vs NUTS.
+experiments/evaluation/real_posterior.py — Posterior comparison on real data: MB, ADVI and PF vs NUTS.
 
 Evaluates a model checkpoint on the pre-generated real-data test batch at
-outputs/data/{size}-{fam}-real/test.fit.npz, comparing MB and ADVI posteriors
-against NUTS as reference.  Since there are no ground-truth parameters, all
-metrics are relative to NUTS; only NUTS-converged datasets are included.
+outputs/data/{size}-{fam}-real/test.npz (reference and competitor fits in its siblings
+test.nuts2.npz, test.advi1.npz and test.pathfinder1.npz), comparing the MB, ADVI and
+Pathfinder (PF) posteriors against the NUTS reference (``nuts2``, the top of the budget
+ladder).  Since there
+are no ground-truth parameters, all metrics are relative to NUTS; only the datasets
+on which the reference converged are included.
 
 Optionally layers post-hoc refinements on the raw MB flow posterior (extra
 ``MB+<method>`` rows), using the same samplers as experiments/posthoc/ablation.py.
@@ -37,7 +40,8 @@ from tabulate import tabulate
 from metabeta.evaluation.point import pointEstimate
 from metabeta.models.approximator import Approximator
 from metabeta.utils.dataloader import Collection, collateGrouped, subsetBatch
-from metabeta.utils.evaluation import nutsConvergeMask, subsetProposal
+from metabeta.utils.evaluation import nutsConverged, subsetProposal
+from metabeta.utils.fits import REFERENCE_TAG
 from metabeta.utils.results import Proposal
 from metabeta.utils.device import setDevice
 from metabeta.utils.logger import setupLogging
@@ -58,6 +62,7 @@ from metabeta.utils.posterior_eval import (
 )
 
 OUT_DIR = RESULTS_DIR
+SECONDARY = (('ADVI', 'advi1'), ('PF', 'pathfinder1'))  # competitors scored against the reference
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +84,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--batch_size',       type=int, default=8)
     parser.add_argument('--summary_chunk_size', type=int, default=4,
                         help='Datasets per predictive/LOO summary chunk; lower to bound peak '
-                             'memory (NUTS s=4000 tensors are large). Try 1-2 for large/huge.')
+                             'memory (NUTS s=8000 tensors are large). Try 1-2 for large/huge.')
     parser.add_argument('--seed',             type=int, default=0)
     parser.add_argument('--outdir',           type=str, default=str(OUT_DIR))
     parser.add_argument('--verbosity',        type=int, default=1)
@@ -90,8 +95,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--rescale',          action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--warmup',           action=argparse.BooleanOptionalAction, default=True,
                         help='Untimed 1-sample MB warm-up before timed sampling (default: true)')
-    parser.add_argument('--convergence_mode', type=str, default='strict',
-                        choices=['liberal', 'strict'])
     parser.add_argument('--methods',          type=str, nargs='*', default=None,
                         choices=list(SUPPORTED_METHODS),
                         help='Post-hoc refinement methods to run on top of raw MB, evaluated '
@@ -427,7 +430,6 @@ def evaluateReal(
     batch_size: int,
     device: torch.device,
     rescale: bool,
-    convergence_mode: str,
     ckpt_dir: Path,
     prefix: str,
     seed: int,
@@ -435,55 +437,48 @@ def evaluateReal(
     summary_chunk_size: int = 4,
     warmup: bool = True,
 ) -> list[dict]:
-    col = Collection(data_path, permute=False, max_d=max_d, max_q=max_q)
+    col = Collection(
+        data_path,
+        permute=False,
+        max_d=max_d,
+        max_q=max_q,
+        fits=(REFERENCE_TAG, *dict(SECONDARY).values()),
+    )
     B_total = len(col)
     batch = collateGrouped([col[i] for i in range(B_total)])
-
-    # Precomputed analytical stats (beta_est/BLUPs from precompute.py) live in the sibling
-    # {partition}.npz, not the .fit.npz; inject them so MB sampling reuses the MAP statistics
-    # instead of recomputing glmm() live (matching evaluate.py / oracle_posterior.py).
+    # precomputed analytical stats (beta_est/BLUPs from precompute.py) let MB sampling reuse
+    # the MAP statistics instead of recomputing glmm() live (matching evaluate.py)
     if 'stats' not in batch:
-        base_path = data_path.with_name(data_path.name.replace('.fit.npz', '.npz'))
-        if base_path.exists() and base_path != data_path:
-            base_col = Collection(base_path, permute=False, max_d=max_d, max_q=max_q)
-            if len(base_col) == B_total:
-                base_batch = collateGrouped([base_col[i] for i in range(B_total)])
-                if 'stats' in base_batch:
-                    batch['stats'] = base_batch['stats']
-                del base_batch
-            del base_col
-        if 'stats' not in batch:
-            logger.warning(
-                'No precomputed stats for %s — MB sampling recomputes glmm() live (slower). '
-                'Run metabeta/analytical/precompute.py for this data_id/partition.',
-                data_path.parent.name,
-            )
+        logger.warning(
+            'No precomputed stats for %s — MB sampling recomputes glmm() live (slower). '
+            'Run metabeta/analytical/precompute.py for this data_id/partition.',
+            data_path.parent.name,
+        )
 
-    # Restrict to NUTS-converged datasets
-    conv_mask = nutsConvergeMask(batch, mode=convergence_mode)
-    if conv_mask is not None:
-        n_conv = int(conv_mask.sum())
-        logger.info('NUTS convergence (%s): %d / %d', convergence_mode, n_conv, B_total)
-        if n_conv == 0:
-            logger.warning('No converged datasets; aborting.')
-            return []
-        batch = subsetBatch(batch, conv_mask)
-    else:
-        logger.warning('No NUTS convergence diagnostics found; using all %d datasets', B_total)
+    # Restrict to the datasets on which the NUTS reference converged
+    conv_mask = nutsConverged(batch, REFERENCE_TAG)
+    n_conv = int(conv_mask.sum())
+    logger.info('%s converged: %d / %d', REFERENCE_TAG, n_conv, B_total)
+    if n_conv == 0:
+        logger.warning('No converged datasets; aborting.')
+        return []
+    batch = subsetBatch(batch, conv_mask)
 
     B = batch['X'].shape[0]
 
     # Full-test-file masks used to key the per-method summary caches:
-    #   MB/NUTS cover the converged subset; ADVI additionally requires a successful fit.
-    conv_full = conv_mask if conv_mask is not None else np.ones(B_total, dtype=bool)
+    #   MB/NUTS cover the converged subset; ADVI and PF additionally require a successful fit.
+    conv_full = conv_mask
 
-    # ADVI subset (some fits may have failed)
-    advi_mask = fitBatchMask(batch, 'advi')
-    n_advi = int(advi_mask.sum())
-    logger.info('ADVI available: %d / %d', n_advi, B)
-    advi_batch: dict | None = subsetBatch(batch, advi_mask) if n_advi > 0 else None
-    advi_full = conv_full.copy()
-    advi_full[conv_full] = advi_mask
+    # competitor subsets (some fits may have failed): label -> (mask, batch, full mask)
+    secondary: dict[str, tuple[np.ndarray, dict | None, np.ndarray]] = {}
+    for label, tag in SECONDARY:
+        mask = fitBatchMask(batch, tag)
+        n_ok = int(mask.sum())
+        logger.info('%s available: %d / %d', label, n_ok, B)
+        full = conv_full.copy()
+        full[conv_full] = mask
+        secondary[label] = (mask, subsetBatch(batch, mask) if n_ok > 0 else None, full)
 
     # Inference
     proposal_mb, mb_tpd_arr = loadOrSampleMB(
@@ -499,18 +494,21 @@ def evaluateReal(
         conv_mask,
         warmup=warmup,
     )
-    proposal_nuts = fit2proposal(batch, 'nuts')
-    proposal_advi = fit2proposal(advi_batch, 'advi') if advi_batch is not None else None
+    proposal_nuts = fit2proposal(batch, REFERENCE_TAG)
+    proposals_sec = {
+        label: fit2proposal(secondary[label][1], tag) if secondary[label][1] is not None else None
+        for label, tag in SECONDARY
+    }
 
     # Rescale all to original data space before metric computation
     if rescale:
         proposal_mb.rescale(batch['sd_y'])
         proposal_nuts.rescale(batch['sd_y'])
-        if proposal_advi is not None:
-            proposal_advi.rescale(advi_batch['sd_y'])
+        for label, (mask, sub, full) in secondary.items():
+            if sub is not None:
+                proposals_sec[label].rescale(sub['sd_y'])
+                secondary[label] = (mask, rescaleData(sub), full)
         batch = rescaleData(batch)
-        if advi_batch is not None:
-            advi_batch = rescaleData(advi_batch)
 
     # LOO-NLL via getSummary (cached); NRMSE/corr will be NaN since real data has no ground truth
     summary_mb = loadOrComputeSummary(
@@ -531,29 +529,30 @@ def evaluateReal(
         proposal_nuts,
         batch,
         data_path,
-        'nuts',
+        REFERENCE_TAG,
         conv_full,
         lf,
         rescale,
         summary_chunk_size=summary_chunk_size,
     )
-    summary_advi = (
-        loadOrComputeSummary(
-            proposal_advi,
-            advi_batch,
+    summaries_sec = {
+        label: loadOrComputeSummary(
+            proposals_sec[label],
+            secondary[label][1],
             data_path,
-            'advi',
-            advi_full,
+            tag,
+            secondary[label][2],
             lf,
             rescale,
             summary_chunk_size=summary_chunk_size,
         )
-        if proposal_advi is not None
+        if proposals_sec[label] is not None
         else None
-    )
+        for label, tag in SECONDARY
+    }
 
     # Post-hoc refinements layered on the raw MB posterior (evaluated vs the full NUTS ref).
-    # (label, proposal, batch, tpd_arr, summary) tuples appended between MB and ADVI.
+    # (label, proposal, batch, tpd_arr, summary) tuples appended between MB and the competitors.
     refined_specs: list[tuple] = []
     for method in validMethods(methods, lf):
         logger.info('Refining MB with %s', method)
@@ -590,8 +589,7 @@ def evaluateReal(
         tpd_ref = mb_tpd_arr + refine_s / B
         refined_specs.append((f'MB+{method}', p_ref, batch, tpd_ref, summary_ref))
 
-    nuts_tpd_arr = batch.get('nuts_duration')            # (B,) tensor or None
-    advi_mask_t = torch.from_numpy(advi_mask)           # bool tensor for indexing
+    nuts_tpd_arr = batch.get(f'{REFERENCE_TAG}_duration')   # (B,) tensor or None
 
     rows: list[dict] = []
 
@@ -600,12 +598,15 @@ def evaluateReal(
         + refined_specs
         + [
             (
-                'ADVI',
-                proposal_advi,
-                advi_batch,
-                advi_batch.get('advi_duration') if advi_batch is not None else None,
-                summary_advi,
+                label,
+                proposals_sec[label],
+                secondary[label][1],
+                secondary[label][1].get(f'{tag}_duration')
+                if secondary[label][1] is not None
+                else None,
+                summaries_sec[label],
             )
+            for label, tag in SECONDARY
         ]
     )
 
@@ -613,15 +614,16 @@ def evaluateReal(
         if p_method is None or summary is None:
             continue
 
-        is_advi = label == 'ADVI'
-
-        # NUTS references restricted to this method's subset
-        p_nuts_ref = subsetProposal(proposal_nuts, advi_mask) if is_advi else proposal_nuts
+        # NUTS references restricted to this method's subset (competitors may have failed fits)
+        sub_mask = secondary[label][0] if label in secondary else None
         nuts_loo = summary_nuts.per_dataset.loo_nll
-        nuts_nll = nuts_loo[advi_mask_t] if is_advi else nuts_loo
-        nuts_tpd = (
-            nuts_tpd_arr[advi_mask_t] if (nuts_tpd_arr is not None and is_advi) else nuts_tpd_arr
-        )
+        if sub_mask is None:
+            p_nuts_ref, nuts_nll, nuts_tpd = proposal_nuts, nuts_loo, nuts_tpd_arr
+        else:
+            mask_t = torch.from_numpy(sub_mask)
+            p_nuts_ref = subsetProposal(proposal_nuts, sub_mask)
+            nuts_nll = nuts_loo[mask_t]
+            nuts_tpd = nuts_tpd_arr[mask_t] if nuts_tpd_arr is not None else None
 
         delta_tpd: np.ndarray | None = None
         if tpd_arr is not None and nuts_tpd is not None:
@@ -775,9 +777,9 @@ def main() -> None:
 
     rows_by_regime: dict[str, list[dict]] = {}
     for data_id in data_ids:
-        data_path = DATA_DIR / data_id / 'test.fit.npz'
+        data_path = DATA_DIR / data_id / 'test.npz'
         if not data_path.exists():
-            logger.warning('Skipping %s: test.fit.npz not found', data_id)
+            logger.warning('Skipping %s: test.npz not found', data_id)
             continue
         regime = data_id.split('-')[0]
         logger.info('\n--- Regime: %s (%s) ---', regime, data_id)
@@ -791,7 +793,6 @@ def main() -> None:
             batch_size=cfg.batch_size,
             device=device,
             rescale=cfg.rescale,
-            convergence_mode=cfg.convergence_mode,
             ckpt_dir=ckpt_dir,
             prefix=cfg.prefix,
             seed=cfg.seed,

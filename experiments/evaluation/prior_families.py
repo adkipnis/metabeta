@@ -191,7 +191,7 @@ def collectSize(
         )
         return None
     ckpt_dir = _ckpt_dir(FAMILY_NAMES[family], size, seed)
-    data_path = DATA_DIR / data_id / 'test.fit.npz'
+    data_path = DATA_DIR / data_id / 'test.npz'
     if not data_path.exists() or not ckpt_dir.exists():
         logger.warning('%s: data or checkpoint missing — skipping', data_id)
         return None

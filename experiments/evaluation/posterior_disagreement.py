@@ -29,7 +29,8 @@ from metabeta.utils.sampling import setSeed
 from metabeta.utils.config import assimilateConfig, loadDataConfig
 from metabeta.utils.templates import loadConfigFromCheckpoint
 from metabeta.utils.dataloader import Dataloader, toDevice
-from metabeta.utils.evaluation import Proposal, concatProposalsBatch, nutsConvergeMask
+from metabeta.utils.evaluation import nutsConverged
+from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.models.approximator import Approximator
 from metabeta.utils.experiments import dataFilePath, loadApproximator
 
@@ -76,12 +77,12 @@ def _dataPath(cfg) -> Path:
     data_cfg_train = loadDataConfig(cfg.data_id)
     assimilateConfig(cfg, data_cfg_train)
     data_id = loadDataConfig(cfg.data_id_valid)['data_id']
-    return dataFilePath(data_id, 'test', fit=True)
+    return dataFilePath(data_id, 'test')
 
 
 def _loadTestData(path: Path, batch_size: int) -> Dataloader:
     # sortish=False to preserve npz order (needed to align with raw npz fields)
-    return Dataloader(path, batch_size=batch_size, sortish=False)
+    return Dataloader(path, batch_size=batch_size, sortish=False, fits=('nuts2',))
 
 
 def _loadModel(cfg, device) -> Approximator:
@@ -104,16 +105,16 @@ def _sampleMB(model, dl: Dataloader, n_samples: int, device, rescale: bool) -> P
 
 
 def _nutsProposal(batch: dict, rescale: bool) -> Proposal:
-    ffx, sigma_rfx = batch['nuts_ffx'], batch['nuts_sigma_rfx']
-    has_se = 'nuts_sigma_eps' in batch
-    parts_g = [ffx, sigma_rfx] + ([batch['nuts_sigma_eps'].unsqueeze(-1)] if has_se else [])
+    ffx, sigma_rfx = batch['nuts2_ffx'], batch['nuts2_sigma_rfx']
+    has_se = 'nuts2_sigma_eps' in batch
+    parts_g = [ffx, sigma_rfx] + ([batch['nuts2_sigma_eps'].unsqueeze(-1)] if has_se else [])
     global_samples = torch.cat(parts_g, dim=-1)
-    rfx = batch['nuts_rfx']
+    rfx = batch['nuts2_rfx']
     proposed = {
         'global': {'samples': global_samples, 'log_prob': torch.zeros(global_samples.shape[:2])},
         'local': {'samples': rfx, 'log_prob': torch.zeros(rfx.shape[:-1])},
     }
-    p = Proposal(proposed, has_sigma_eps=has_se, corr_rfx=batch.get('nuts_corr_rfx'))
+    p = Proposal(proposed, has_sigma_eps=has_se, corr_rfx=batch.get('nuts2_corr_rfx'))
     if rescale:
         p.rescale(batch['sd_y'])
     return p
@@ -150,8 +151,8 @@ def perDatasetStats(
     n_arr = batch['n'].numpy()
 
     # NUTS quality
-    div_np = batch['nuts_divergences'].numpy()        # (B, chains)
-    n_draws = int(batch['nuts_draws'].item()) if 'nuts_draws' in batch else 1000
+    div_np = batch['nuts2_divergences'].numpy()        # (B, chains)
+    n_draws = int(batch['nuts2_draws'].item()) if 'nuts2_draws' in batch else 1000
     div_rate = div_np.sum(-1) / (div_np.shape[-1] * n_draws)
 
     def _param_stat(key, fn):
@@ -159,11 +160,11 @@ def perDatasetStats(
         a[a <= 0] = np.nan
         return fn(a, axis=-1)
 
-    max_rhat = _param_stat('nuts_rhat', np.nanmax)
-    min_ess = _param_stat('nuts_ess', np.nanmin)
-    td_sat = batch['nuts_max_treedepth'].numpy().mean(-1)
+    max_rhat = _param_stat('nuts2_rhat', np.nanmax)
+    min_ess = _param_stat('nuts2_ess', np.nanmin)
+    td_sat = batch['nuts2_max_treedepth'].numpy().mean(-1)
 
-    conv_mask = nutsConvergeMask(batch)
+    conv_mask = nutsConverged(batch, 'nuts2')
 
     rows = []
     for b in range(B):
