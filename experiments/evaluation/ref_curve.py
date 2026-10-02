@@ -375,6 +375,7 @@ class CurveExperiment:
         # the curve scores against the true parameters, which only the sampled sets carry
         rows = [r for r in self.rows if r['data_id'].endswith('-sampled')]
         methods = [m for m in (*LABELS,) if any(r['method'] == m for r in rows)]
+        plt.rc('font', size=13)  # the figure is set at text width in the paper
         fig, axes = plt.subplots(1, len(METRICS), figsize=(5 * len(METRICS), 4.2), dpi=DPI)
         cmap = plt.get_cmap('tab10')
         colors = {m: cmap(i % 10) for i, m in enumerate(methods)}
@@ -393,9 +394,11 @@ class CurveExperiment:
                 if len(pts) > 1:
                     ax.plot(*zip(*pts), color='0.4', lw=1.0, zorder=2)
             ax.set_xscale('log')
+            if metric == 'LOO-NLL':  # a few diverged ADVI 10k sets would otherwise set the ceiling
+                ax.set_yscale('log')
             ax.set_xlabel('wall time per dataset [s]')
             ax.set_ylabel(metric)
-        axes[-1].legend(fontsize=8, frameon=False, loc='best')
+        axes[-1].legend(fontsize=10, frameon=False, loc='best')
         fig.tight_layout()
         path = savePlot(self.outdir, f'ref_curve_{self.cfg.tag}', ending='pdf')
         plt.close(fig)
