@@ -128,14 +128,12 @@ def _composite(fit: dict[str, np.ndarray], tag: str, converged: bool, elapsed: f
     """Rename ``{tag}_*`` to ``nuts_*``, thin the draws to N_DRAWS, add level bookkeeping."""
     out = {}
     for key, value in fit.items():
-        name = 'nuts_' + key[len(tag) + 1 :]
-        if name.endswith('_corr_rfx'):
-            step = value.shape[1] // N_DRAWS  # (1, s, q, q)
-            value = value[:, ::step]
-        elif name.endswith(('_ffx', '_sigma_rfx', '_rfx', '_sigma_eps')):
-            step = value.shape[-1] // N_DRAWS  # (..., s)
-            value = value[..., ::step]
-        out[name] = value
+        field = key[len(tag) + 1 :]
+        if field == 'corr_rfx':
+            value = value[:, :: value.shape[1] // N_DRAWS]  # (1, s, q, q)
+        elif field in POSTERIOR_KEYS:
+            value = value[..., :: value.shape[-1] // N_DRAWS]  # (..., s)
+        out[f'nuts_{field}'] = value
     out['nuts_level'] = np.array(int(tag[len('nuts') :]))
     out['nuts_converged'] = np.array(converged)
     out['nuts_duration'] = np.array(elapsed)
