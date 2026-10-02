@@ -625,3 +625,16 @@ on `gpu_p`, plain `gpu:1` can land on supergpu02/03/05/08/09 with older cards.
   PF 4 σ-ratio down to 0.49; LA r 0.65–0.93, σ-ratio 1.9–4.9 (overdispersed random-effect
   SDs). Not yet in the paper: candidate appendix figure next to fig:rt plus one sentence
   in app:tra on the false-convergence check.
+
+### ref_curve in the paper (2026-10-02)
+
+Alex approved the appendix additions. `plot()` now draws LOO-NLL on a log ordinate (two
+diverged ADVI 10k sets, 19 and 55, set the ceiling before) and uses 13 pt fonts, since the
+figure sits at text width; re-rendered locally from `ref_curve_all.csv`
+(`rerender_curve.py` in the session scratchpad: load the csv into `CurveExperiment.rows`,
+call `plot()`). Paper (`~/LaTeX/metabeta-iclr`, uncommitted, Alex commits):
+`figures/ref_curve.pdf`, new `fig:ref_curve` after `fig:rt` in app:rt with a paragraph of
+curve medians, and one sentence in the convergence-criterion paragraph of app:tra with the
+false-convergence check (NUTS L0/L1 failing runs: r ≥ 0.999, σ-ratio 0.986–1.002, rank-MAD
+≤ 0.007 on all 23 sets; ADVI/PF σ-ratio 0.49–2.1). Paper builds clean (0 overfull, 0
+undefined). Remaining: branch retirement.
