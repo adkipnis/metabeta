@@ -29,12 +29,12 @@ from metabeta.utils.config import (
 )
 from metabeta.utils.templates import loadConfigFromCheckpoint
 from metabeta.utils.dataloader import Dataloader, toDevice, subsetBatch
-from metabeta.utils.fits import fitPath, loadFits
+from metabeta.utils.fits import REFERENCE_TAG, fitPath, loadFits
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.evaluation import (
     EvaluationSummary,
     dictMean,
-    nutsConverged,
+    referenceConverged,
     subsetProposal,
 )
 from metabeta.utils.results import Proposal, concatProposalsBatch
@@ -67,7 +67,6 @@ _ALL_MODELS = ('MB', 'NUTS', 'ADVI', 'PATHFINDER', 'LAPLACE')
 # the composite (cheapest converged budget level per dataset); the reference that decides which
 # datasets enter the tables is the highest level.
 _FIT_TAGS = {'NUTS': 'nuts', 'ADVI': 'advi1', 'PATHFINDER': 'pathfinder1', 'LAPLACE': 'laplace'}
-_REFERENCE_TAG = 'nuts2'
 _FIT_MODELS = frozenset(_FIT_TAGS)
 
 # Post-hoc IMH refinement layered on the raw MB flow posterior. Not part of "all": it costs a
@@ -843,15 +842,12 @@ class Evaluator:
     def _referenceMask(self, partition: str, n: int) -> np.ndarray | None:
         """Datasets where the NUTS reference converged; None without a reference or with
         --all_datasets (the convergence-validation check compares the two)."""
-        data_path = Path(self._partitionDataPath(partition))
-        if self.cfg.all_datasets or not fitPath(data_path, _REFERENCE_TAG).exists():
+        if self.cfg.all_datasets:
             return None
-        keys = tuple(
-            f'{_REFERENCE_TAG}_{k}'
-            for k in ('rhat', 'ess', 'ess_tail', 'divergences', 'draws', 'level')
-        )
-        mask = nutsConverged(loadFits(data_path, _REFERENCE_TAG, keys=keys), _REFERENCE_TAG)
-        logger.info('%s converged on %d / %d datasets', _REFERENCE_TAG, int(mask.sum()), n)
+        mask = referenceConverged(Path(self._partitionDataPath(partition)))
+        if mask is None:
+            return None
+        logger.info('%s converged on %d / %d datasets', REFERENCE_TAG, int(mask.sum()), n)
         return None if mask.all() else mask
 
     def _fitMaskFromPath(self, data_path: Path, method: str) -> np.ndarray | None:
