@@ -65,8 +65,8 @@ from likelihood_misspec import (
     FIT_PREFIXES,
     STAT_KEYS,
     _rescaleDataset,
+    copyReferenceFit,
     selectIndices,
-    sliceNpzStreaming,
 )
 from metabeta.simulation.simulator import simulate
 from metabeta.utils.constants import hasSigmaEps
@@ -74,8 +74,7 @@ from metabeta.utils.families import POISSON_X_CLIP_ABS
 from metabeta.utils.preprocessing import transformPredictors
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.experiments import DATA_DIR
-from metabeta.simulation.fit import NUTS_LEVELS
-from metabeta.utils.fits import availableFits, fitPath, saveFits
+from metabeta.utils.fits import REFERENCE_TAG, availableFits, fitPath
 
 logger = logging.getLogger(__name__)
 
@@ -253,7 +252,8 @@ def ensureBaseline(
         with open(base_dir / 'config.yaml') as f:
             base_cfg = yaml.safe_load(f)
         stored = base_cfg.get('misspec_orig_indices', [])
-        if len(stored) >= len(ours) and stored[: len(ours)] == ours:
+        has_reference = fitPath(base_dir / 'test.npz', REFERENCE_TAG).exists()
+        if has_reference and len(stored) >= len(ours) and stored[: len(ours)] == ours:
             logger.info('%s: exists with compatible indices — reusing', base_id)
             return base_id
         if stored[: min(len(stored), len(ours))] != ours[: min(len(stored), len(ours))]:
@@ -266,9 +266,7 @@ def ensureBaseline(
     kind = LIK_CONDITIONS[family][0]  # keep the sibling's family-specific baseline kind
     base_dir.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(base_dir / 'test.npz', **{k: v[idx] for k, v in source.items()})
-    # only the NUTS fits travel with the baseline; saveFits stamps the new test.npz's checksum
-    sliced_nuts = sliceNpzStreaming(fitPath(src_dir / 'test.npz', 'nuts'), idx)
-    saveFits(base_dir / 'test.npz', 'nuts', sliced_nuts, force=True)
+    copyReferenceFit(src_dir / 'test.npz', base_dir / 'test.npz', idx)
     writeConfig(src_dir, base_dir, base_id, cfg.n_datasets, kind, 0.0, idx, cfg.seed)
     logger.info('%s: baseline written (%d datasets)', base_id, cfg.n_datasets)
     return base_id
@@ -279,9 +277,8 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
     src_id = f'{size}-{family}-sampled'
     src_dir = DATA_DIR / src_id
     test_path = src_dir / 'test.npz'
-    fit_path = fitPath(test_path, 'nuts')
-    if not test_path.exists() or not fit_path.exists():
-        logger.warning('%s: test.npz or test.nuts.npz missing — skipping', src_id)
+    if not test_path.exists() or not fitPath(test_path, REFERENCE_TAG).exists():
+        logger.warning('%s: test.npz or its %s fit missing — skipping', src_id, REFERENCE_TAG)
         return []
 
     with np.load(test_path, allow_pickle=True) as z:
@@ -345,11 +342,10 @@ def printCommands(families: list[str], sizes: list[str], n_datasets: int) -> Non
         print(f'\n# --- {size} ---')
         for family in families:
             for tag, _, _ in CONDITIONS:
-                for level in range(len(NUTS_LEVELS)):
-                    print(
-                        f'scripts/fit-ref.sh --method nuts --level {level} '
-                        f'--n_datasets {n_datasets} --data_id {size}-{family}-{tag}'
-                    )
+                print(
+                    f'scripts/fit-ref.sh --method nuts --level 2 '
+                    f'--n_datasets {n_datasets} --data_id {size}-{family}-{tag}'
+                )
         print('# after all fits of this size finished (checks the fits, then reintegrates):')
         for family in families:
             for tag, _, _ in CONDITIONS:

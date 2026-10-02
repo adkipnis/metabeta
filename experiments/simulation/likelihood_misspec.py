@@ -51,8 +51,7 @@ from metabeta.simulation.simulator import SCALE_PARAMS, SCALE_HYPERPARAMS
 from metabeta.utils.families import POISSON_ETA_CLIP_MAX
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.experiments import DATA_DIR
-from metabeta.simulation.fit import NUTS_LEVELS
-from metabeta.utils.fits import availableFits, fitPath, saveFits
+from metabeta.utils.fits import REFERENCE_TAG, availableFits, fitPath, saveFits
 
 logger = logging.getLogger(__name__)
 
@@ -231,6 +230,16 @@ def writeConfig(
         yaml.safe_dump(cfg, f, sort_keys=False)
 
 
+def copyReferenceFit(src_path: Path, dst_path: Path, idx: np.ndarray) -> None:
+    """Slice the NUTS reference fit of ``src_path`` onto the baseline ``dst_path``.
+
+    Only the reference travels with a baseline (the other fits are not evaluated here);
+    saveFits stamps the checksum of the new ``dst_path``.
+    """
+    sliced = sliceNpzStreaming(fitPath(src_path, REFERENCE_TAG), idx)
+    saveFits(dst_path, REFERENCE_TAG, sliced, force=True)
+
+
 def selectIndices(B: int, n_datasets: int, seed: int) -> np.ndarray:
     """First ``n_datasets`` of a fixed permutation — deliberately NOT sorted, so smaller
     selections are prefixes of larger ones and their per-index NUTS fits stay valid."""
@@ -245,9 +254,8 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
     src_id = f'{size}-{family}-sampled'
     src_dir = DATA_DIR / src_id
     test_path = src_dir / 'test.npz'
-    fit_path = fitPath(test_path, 'nuts')
-    if not test_path.exists() or not fit_path.exists():
-        logger.warning('%s: test.npz or test.nuts.npz missing — skipping', src_id)
+    if not test_path.exists() or not fitPath(test_path, REFERENCE_TAG).exists():
+        logger.warning('%s: test.npz or its %s fit missing — skipping', src_id, REFERENCE_TAG)
         return []
 
     with np.load(test_path, allow_pickle=True) as z:
@@ -265,8 +273,7 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
     else:
         base_dir.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(base_dir / 'test.npz', **{k: v[idx] for k, v in source.items()})
-        # only the NUTS fits travel with the baseline; saveFits stamps the new test.npz's checksum
-        saveFits(base_dir / 'test.npz', 'nuts', sliceNpzStreaming(fit_path, idx), force=True)
+        copyReferenceFit(test_path, base_dir / 'test.npz', idx)
         writeConfig(src_dir, base_dir, base_id, cfg.n_datasets, kind, 0.0, idx, cfg.seed)
         logger.info('%s: baseline written (%d datasets)', base_id, cfg.n_datasets)
     created.append(base_id)
@@ -317,11 +324,10 @@ def printCommands(families: list[str], sizes: list[str], n_datasets: int) -> Non
         for family in families:
             _, conditions = CONDITIONS[family]
             for tag, _ in conditions:
-                for level in range(len(NUTS_LEVELS)):
-                    print(
-                        f'scripts/fit-ref.sh --method nuts --level {level} '
-                        f'--n_datasets {n_datasets} --data_id {size}-{family}-{tag}'
-                    )
+                print(
+                    f'scripts/fit-ref.sh --method nuts --level 2 '
+                    f'--n_datasets {n_datasets} --data_id {size}-{family}-{tag}'
+                )
         print('# after all fits of this size finished (checks the fits, then reintegrates):')
         for family in families:
             _, conditions = CONDITIONS[family]

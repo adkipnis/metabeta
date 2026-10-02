@@ -52,19 +52,17 @@ import yaml
 from metabeta.utils.constants import FFX_FAMILIES, SIGMA_FAMILIES
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.experiments import DATA_DIR
-from metabeta.simulation.fit import NUTS_LEVELS
-from metabeta.utils.fits import availableFits, fitPath, saveFits
+from metabeta.utils.fits import REFERENCE_TAG, availableFits, fitPath
 
 # sibling experiment script (this directory is sys.path[0] at run time); the npz slicing,
 # index selection and stale-key lists are identical for both misspecification studies.
 from likelihood_misspec import (
     DEFAULT_FAMILIES,
     DEFAULT_SIZES,
-    FAMILY_IDS,
     FIT_PREFIXES,
     STAT_KEYS,
+    copyReferenceFit,
     selectIndices,
-    sliceNpzStreaming,
 )
 
 logger = logging.getLogger(__name__)
@@ -180,9 +178,8 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
     src_id = f'{size}-{family}-sampled'
     src_dir = DATA_DIR / src_id
     test_path = src_dir / 'test.npz'
-    fit_path = fitPath(test_path, 'nuts')
-    if not test_path.exists() or not fit_path.exists():
-        logger.warning('%s: test.npz or test.nuts.npz missing — skipping', src_id)
+    if not test_path.exists() or not fitPath(test_path, REFERENCE_TAG).exists():
+        logger.warning('%s: test.npz or its %s fit missing — skipping', src_id, REFERENCE_TAG)
         return []
 
     with np.load(test_path, allow_pickle=True) as z:
@@ -200,8 +197,7 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
     else:
         base_dir.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(base_dir / 'test.npz', **_dropStaleKeys(source, idx))
-        # only the NUTS fits travel with the baseline; saveFits stamps the new test.npz's checksum
-        saveFits(base_dir / 'test.npz', 'nuts', sliceNpzStreaming(fit_path, idx), force=True)
+        copyReferenceFit(test_path, base_dir / 'test.npz', idx)
         writeConfig(
             src_dir, base_dir, base_id, cfg.n_datasets, BASE_TAG, 1.0, 0.0, False, idx, cfg.seed
         )
@@ -260,11 +256,10 @@ def printCommands(
         print(f'\n# --- {size} ---')
         for family in families:
             for tag in conditions:
-                for level in range(len(NUTS_LEVELS)):
-                    print(
-                        f'scripts/fit-ref.sh --method nuts --level {level} '
-                        f'--n_datasets {n_datasets} --data_id {size}-{family}-{tag}'
-                    )
+                print(
+                    f'scripts/fit-ref.sh --method nuts --level 2 '
+                    f'--n_datasets {n_datasets} --data_id {size}-{family}-{tag}'
+                )
         print('# after all fits of this size finished (checks the fits, then reintegrates):')
         for family in families:
             for tag in conditions:
