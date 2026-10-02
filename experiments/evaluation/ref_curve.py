@@ -35,9 +35,9 @@ from matplotlib import pyplot as plt
 
 from metabeta.utils.dataloader import subsetBatch
 from metabeta.utils.device import setDevice
-from metabeta.utils.evaluation import nutsConvergeMask, subsetProposal
+from metabeta.utils.evaluation import nutsConverged, referenceConverged, subsetProposal
 from metabeta.utils.experiments import DATA_DIR, REPO_ROOT, RESULTS_DIR
-from metabeta.utils.fits import fitPath
+from metabeta.utils.fits import REFERENCE_TAG, fitPath
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.plot import DPI, savePlot
 from metabeta.utils.posterior_eval import (
@@ -58,12 +58,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(REPO_ROOT / 'scripts'))
 from build_ckpt import BEST_SEEDS, _ckpt_dir  # noqa: E402
 from oracle_posterior import (  # noqa: E402
-    REFERENCE_TAG,
     _capFull,
     flattenActiveParams,
     loadRegimeBatch,
     methodFitBatch,
-    nutsConvergeMaskFromNpz,
 )
 from real_posterior import computeCorr, computeRankMAD, computeSigmaRatio  # noqa: E402
 from runtimes import (
@@ -81,13 +79,13 @@ logger = logging.getLogger(__name__)
 # Methods
 
 # competitor tags in ladder order; the composite `nuts` is a user's escalation strategy
-FIT_TAGS = ('nuts0', 'nuts1', 'nuts', 'advi0', 'advi1', 'pathfinder0', 'pathfinder1', 'laplace')
+CURVE_TAGS = ('nuts0', 'nuts1', 'nuts', 'advi0', 'advi1', 'pathfinder0', 'pathfinder1', 'laplace')
 LADDERS = {
     'NUTS': ('nuts0', 'nuts1'),
     'ADVI': ('advi0', 'advi1'),
     'PF': ('pathfinder0', 'pathfinder1'),
 }
-AGREEMENT_TAGS = ('nuts0', 'nuts1', 'advi0', 'advi1', 'pathfinder0', 'pathfinder1', 'laplace')
+AGREEMENT_TAGS = tuple(t for t in CURVE_TAGS if t != 'nuts')  # each run vs the reference
 LABELS = {
     'nuts0': 'NUTS L0',
     'nuts1': 'NUTS L1',
@@ -148,7 +146,7 @@ class CurveExperiment:
         data, n_total, n_kept, cap_mask = loadRegimeBatch(
             data_path, model_cfg.max_d, model_cfg.max_q
         )
-        conv = nutsConvergeMaskFromNpz(data_path, cap_mask)  # over the capacity-kept datasets
+        conv = referenceConverged(data_path)[cap_mask]  # over the capacity-kept datasets
         logger.info('  %s converged: %d / %d', REFERENCE_TAG, int(conv.sum()), n_kept)
         if not conv.any():
             return
@@ -210,7 +208,7 @@ class CurveExperiment:
         # reference methods: one fit file resident at a time
         reference: Proposal | None = None
         ref_success = None
-        for tag in (REFERENCE_TAG, *FIT_TAGS):
+        for tag in (REFERENCE_TAG, *CURVE_TAGS):
             if not fitPath(data_path, tag).exists():
                 logger.info('  %s: no fit file, skipping', tag)
                 continue
@@ -227,7 +225,7 @@ class CurveExperiment:
                 summary = self._summary(ctx, proposal, batch_sub, tag, success, False)
                 self._addRows(ctx, tag, summary, batch_sub, times)
             if tag in AGREEMENT_TAGS:
-                own = nutsConvergeMask(fit_batch, tag)[success] if tag.startswith('nuts') else None
+                own = nutsConverged(fit_batch, tag)[success] if tag.startswith('nuts') else None
                 self._addAgreement(ctx, tag, proposal, success, reference, ref_success, own)
             del fit_batch, proposal
 

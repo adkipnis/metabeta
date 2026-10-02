@@ -26,7 +26,7 @@ from scipy.stats import spearmanr
 from tabulate import tabulate
 
 from metabeta.utils.dataloader import Collection, collateGrouped, subsetBatch
-from metabeta.utils.evaluation import nutsConvergeMask
+from metabeta.utils.evaluation import nutsConverged
 from metabeta.utils.device import setDevice
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.preprocessing import rescaleData
@@ -197,7 +197,7 @@ def collectSizeRecords(
     batch = collateGrouped([col[i] for i in range(B_total)])
 
     kappa = conditionNumbers(batch, standardize=standardize)
-    conv_mask = nutsConvergeMask(batch, 'nuts2')
+    conv_mask = nutsConverged(batch, 'nuts2')
     if conv_mask is None:
         logger.warning('%s: no NUTS diagnostics; treating all as converged', data_id)
         conv_mask = np.ones(B_total, dtype=bool)

@@ -34,7 +34,7 @@ import torch
 from tabulate import tabulate
 
 from metabeta.utils.dataloader import Collection, collateGrouped
-from metabeta.utils.evaluation import nutsConvergeMask
+from metabeta.utils.evaluation import nutsConverged
 from metabeta.utils.device import setDevice
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.preprocessing import rescaleData
@@ -136,7 +136,7 @@ def collectCondition(
     B = len(col)
     batch = collateGrouped([col[i] for i in range(B)])
 
-    conv = nutsConvergeMask(batch, 'nuts2')
+    conv = nutsConverged(batch, 'nuts2')
     if conv is None:
         logger.warning('%s: no NUTS diagnostics; treating all as converged', data_id)
         conv = np.ones(B, dtype=bool)

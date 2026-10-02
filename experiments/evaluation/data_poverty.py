@@ -42,7 +42,7 @@ import torch
 from tabulate import tabulate
 
 from metabeta.utils.dataloader import Collection, collateGrouped
-from metabeta.utils.evaluation import nutsConvergeMask
+from metabeta.utils.evaluation import nutsConverged
 from metabeta.utils.device import setDevice
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.preprocessing import rescaleData
@@ -463,7 +463,7 @@ def collectSize(cfg, size: str, device: torch.device) -> dict | None:
     # The NUTS draws of the fit file are held in RAM twice (Collection, then collation): read it
     # here for the convergence mask only, and again just for the NUTS scoring.
     fit_batch = _loadFit(data_path, B, max_d, max_q)
-    conv = nutsConvergeMask(fit_batch, 'nuts2')
+    conv = nutsConverged(fit_batch, 'nuts2')
     conv = np.ones(B, dtype=bool) if conv is None else conv.astype(bool)
     del fit_batch
 

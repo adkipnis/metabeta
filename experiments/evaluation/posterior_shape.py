@@ -29,7 +29,7 @@ from metabeta.utils.config import assimilateConfig, loadDataConfig
 from metabeta.utils.templates import loadConfigFromCheckpoint
 from metabeta.utils.dataloader import Dataloader, toDevice, subsetBatch
 from metabeta.utils.preprocessing import rescaleData
-from metabeta.utils.evaluation import nutsConvergeMask, subsetProposal
+from metabeta.utils.evaluation import nutsConverged, subsetProposal
 from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.models.approximator import Approximator
 from metabeta.utils.experiments import dataFilePath, loadApproximator
@@ -424,7 +424,7 @@ def main() -> None:
     proposal_mb = _sampleMB(model, dl_test, cfg.n_samples, device, cfg.rescale)
     proposal_nuts = _batchToProposal(full_batch, 'nuts2', cfg.rescale)
 
-    conv_mask = nutsConvergeMask(full_batch, 'nuts2')
+    conv_mask = nutsConverged(full_batch, 'nuts2')
     if conv_mask is not None:
         logger.info('Converged NUTS: %d / %d datasets', int(conv_mask.sum()), len(conv_mask))
         batch_rescaled = subsetBatch(batch_rescaled, conv_mask)

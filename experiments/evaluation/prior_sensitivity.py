@@ -109,7 +109,7 @@ from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
 from metabeta.utils.api import coercePriors, parseFormula, resolveLikelihoodFamily
 from metabeta.utils.constants import FFX_FAMILIES, LIKELIHOOD_FAMILIES, SIGMA_FAMILIES
 from metabeta.utils.dataloader import sliceBatch, toDevice
-from metabeta.utils.evaluation import nutsConvergeMask
+from metabeta.utils.evaluation import nutsConverged
 from metabeta.utils.experiments import DATA_DIR, PREPROCESSED_DATA_DIR, REPO_ROOT, RESULTS_DIR
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.plot import PALETTE, VECTOR_RASTER_DPI
@@ -248,11 +248,9 @@ def buildGrid(lf: int) -> pd.DataFrame:
     return grid
 
 
-def nutsConverged(fit: dict[str, np.ndarray], prefix: str) -> bool:
-    """nutsConvergeMask on one per-point fit file."""
-    keys = ('rhat', 'ess', 'ess_tail', 'divergences', 'draws', 'level')
-    diag = {f'{prefix}_{k}': torch.as_tensor(fit[f'{prefix}_{k}'])[None] for k in keys}
-    return bool(nutsConvergeMask(diag, prefix)[0])
+def pointConverged(fit: dict[str, np.ndarray], prefix: str) -> bool:
+    """``nutsConverged`` on one per-point fit file (no dataset axis)."""
+    return bool(nutsConverged({k: np.asarray(v)[None] for k, v in fit.items()}, prefix)[0])
 
 
 def flagCount(g: pd.DataFrame) -> str:
@@ -672,7 +670,7 @@ class PriorSensitivity:
                     'ess_bulk_min': float(np.nanmin(fit[f'{prefix}_ess'])),
                     'divergences': int(fit[f'{prefix}_divergences'].sum()),
                     'treedepth_frac': float(np.mean(fit[f'{prefix}_max_treedepth'])),
-                    'nuts_converged': nutsConverged(fit, prefix),
+                    'nuts_converged': pointConverged(fit, prefix),
                 }
             out[method] = (p, diag)
         return out

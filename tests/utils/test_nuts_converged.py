@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-from metabeta.utils.evaluation import nutsConvergeMask, nutsConverged
+from metabeta.utils.evaluation import nutsChecks, nutsConverged
 
 
 def _diag(prefix: str = 'nuts', **overrides) -> dict[str, np.ndarray]:
@@ -21,14 +21,14 @@ def _diag(prefix: str = 'nuts', **overrides) -> dict[str, np.ndarray]:
 
 
 def test_single_criterion_flags_each_failure():
-    np.testing.assert_array_equal(nutsConverged(_diag()), [True, False, False, False])
+    np.testing.assert_array_equal(nutsConverged(_diag(), 'nuts'), [True, False, False, False])
 
 
 def test_level_two_tolerates_a_divergence_rate_of_one_permille():
     diag = _diag(level=np.full(4, 2), draws=np.full(4, 2000))  # 8000 draws, 1 divergence
-    np.testing.assert_array_equal(nutsConverged(diag), [True, False, False, True])
+    np.testing.assert_array_equal(nutsConverged(diag, 'nuts'), [True, False, False, True])
     diag = _diag(level=np.full(4, 1), draws=np.full(4, 2000))
-    assert not nutsConverged(diag)[3]
+    assert not nutsConverged(diag, 'nuts')[3]
 
 
 def test_prefix_selects_the_level_file_keys():
@@ -36,7 +36,15 @@ def test_prefix_selects_the_level_file_keys():
     assert nutsConverged(diag, prefix='nuts2').tolist() == [True, False, False, True]
 
 
-def test_mask_from_collated_batch_matches_numpy_core():
+def test_collated_tensors_match_numpy():
     diag = _diag()
     batch = {k: torch.as_tensor(v, dtype=torch.float32) for k, v in diag.items()}
-    np.testing.assert_array_equal(nutsConvergeMask(batch), nutsConverged(diag))
+    np.testing.assert_array_equal(nutsConverged(batch, 'nuts'), nutsConverged(diag, 'nuts'))
+
+
+def test_checks_name_the_failing_criterion():
+    checks = nutsChecks(_diag(), 'nuts')
+    assert checks['rhat'].tolist() == [True, False, True, True]
+    assert checks['ess_tail'].tolist() == [True, True, False, True]
+    assert checks['divergences'].tolist() == [True, True, True, False]
+    assert checks['ess'].all()

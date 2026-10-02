@@ -29,7 +29,7 @@ from metabeta.utils.sampling import setSeed
 from metabeta.utils.config import assimilateConfig, loadDataConfig
 from metabeta.utils.templates import loadConfigFromCheckpoint
 from metabeta.utils.dataloader import Dataloader, toDevice
-from metabeta.utils.evaluation import nutsConvergeMask
+from metabeta.utils.evaluation import nutsConverged
 from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.models.approximator import Approximator
 from metabeta.utils.experiments import dataFilePath, loadApproximator
@@ -164,7 +164,7 @@ def perDatasetStats(
     min_ess = _param_stat('nuts2_ess', np.nanmin)
     td_sat = batch['nuts2_max_treedepth'].numpy().mean(-1)
 
-    conv_mask = nutsConvergeMask(batch, 'nuts2')
+    conv_mask = nutsConverged(batch, 'nuts2')
 
     rows = []
     for b in range(B):

@@ -36,7 +36,7 @@ from metabeta.utils.sampling import setSeed
 from metabeta.utils.config import assimilateConfig, loadDataConfig
 from metabeta.utils.templates import loadConfigFromCheckpoint
 from metabeta.utils.dataloader import Dataloader, toDevice
-from metabeta.utils.evaluation import nutsConvergeMask
+from metabeta.utils.evaluation import nutsConverged
 from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.models.approximator import Approximator
 from metabeta.evaluation.predictive import getPosteriorPredictive, psisLooNLL
@@ -218,7 +218,7 @@ def printModeComparison(
     k_thr: float = 0.7,
 ) -> None:
     all_mask = np.ones(len(mb_loo), dtype=bool)
-    conv_mask = nutsConvergeMask(batch, 'nuts2')
+    conv_mask = nutsConverged(batch, 'nuts2')
     # Filter only on NUTS k: ensures the reference (NUTS LOO) is reliable.
     # MB k is intentionally NOT used as a filter — filtering on MB k would discard
     # datasets where MB's LOO estimate is unreliable, hiding potential MB failures.
@@ -291,7 +291,7 @@ def main() -> None:
 
     device = setDevice(cfg.device)
     data_path = _dataPath(cfg)
-    # sortish=False: preserve npz order for nutsConvergeMask alignment
+    # sortish=False: preserve npz order for nutsConverged alignment
     dl = Dataloader(data_path, batch_size=8, sortish=False, fits=('nuts2',))
     model = _loadModel(cfg, device)
 

@@ -56,7 +56,7 @@ from metabeta.utils.constants import (
 )
 from metabeta.utils.dataloader import Collection, collateGrouped
 from metabeta.utils.device import setDevice
-from metabeta.utils.evaluation import nutsConvergeMask
+from metabeta.utils.evaluation import nutsConverged
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR, REPO_ROOT
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.posterior_eval import (
@@ -378,7 +378,7 @@ class FixedPriorStudy:
         self.max_d, self.max_q = model_cfg.max_d, model_cfg.max_q
         batch, mask, data_path = self.loadBatch(size)
         B = batch['X'].shape[0]
-        conv = nutsConvergeMask(batch, 'nuts2').astype(bool)
+        conv = nutsConverged(batch, 'nuts2').astype(bool)
         logger.info('%s-%s: %d datasets, %d NUTS-converged', size, self.family, B, conv.sum())
 
         nuts = fit2proposal(batch, 'nuts2')

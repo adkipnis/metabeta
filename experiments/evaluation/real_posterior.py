@@ -40,7 +40,8 @@ from tabulate import tabulate
 from metabeta.evaluation.point import pointEstimate
 from metabeta.models.approximator import Approximator
 from metabeta.utils.dataloader import Collection, collateGrouped, subsetBatch
-from metabeta.utils.evaluation import nutsConvergeMask, subsetProposal
+from metabeta.utils.evaluation import nutsConverged, subsetProposal
+from metabeta.utils.fits import REFERENCE_TAG
 from metabeta.utils.results import Proposal
 from metabeta.utils.device import setDevice
 from metabeta.utils.logger import setupLogging
@@ -61,7 +62,6 @@ from metabeta.utils.posterior_eval import (
 )
 
 OUT_DIR = RESULTS_DIR
-REFERENCE_TAG = 'nuts2'
 SECONDARY = (('ADVI', 'advi1'), ('PF', 'pathfinder1'))  # competitors scored against the reference
 
 logger = logging.getLogger(__name__)
@@ -456,7 +456,7 @@ def evaluateReal(
         )
 
     # Restrict to the datasets on which the NUTS reference converged
-    conv_mask = nutsConvergeMask(batch, REFERENCE_TAG)
+    conv_mask = nutsConverged(batch, REFERENCE_TAG)
     n_conv = int(conv_mask.sum())
     logger.info('%s converged: %d / %d', REFERENCE_TAG, n_conv, B_total)
     if n_conv == 0:

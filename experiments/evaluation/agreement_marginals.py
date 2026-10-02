@@ -33,7 +33,8 @@ from matplotlib import pyplot as plt
 from matplotlib.lines import Line2D
 
 from metabeta.utils.dataloader import Collection, collateGrouped, subsetBatch
-from metabeta.utils.evaluation import nutsConvergeMask
+from metabeta.utils.evaluation import nutsConverged
+from metabeta.utils.fits import REFERENCE_TAG
 from metabeta.utils.posterior_eval import (
     fit2proposal,
     loadModel,
@@ -62,7 +63,6 @@ CKPTS = {
 }
 
 FAMILY = {'n': 'normal', 'b': 'bernoulli', 'p': 'poisson'}
-REFERENCE_TAG = 'nuts2'
 
 COL_MB = '#663399'    # rebeccapurple — metabeta
 COL_NUTS = '#B8860B'  # darkgoldenrod — NUTS
@@ -151,7 +151,7 @@ def loadProposals(
     B_total = len(col)
     batch = collateGrouped([col[i] for i in range(B_total)])
 
-    conv_mask = nutsConvergeMask(batch, REFERENCE_TAG)
+    conv_mask = nutsConverged(batch, REFERENCE_TAG)
     batch = subsetBatch(batch, conv_mask)
     idx_full = np.arange(B_total)[conv_mask]
 

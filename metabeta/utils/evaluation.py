@@ -5,6 +5,8 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from metabeta.utils.fits import REFERENCE_TAG, fitPath, loadFits
+
 if TYPE_CHECKING:
     from metabeta.utils.results import Proposal
 
@@ -211,35 +213,48 @@ ESS_MIN = 400
 DIVERGENCE_RATE_MAX = {0: 0.0, 1: 0.0, 2: 1e-3}
 
 
-def nutsConverged(diag: dict[str, np.ndarray], prefix: str = 'nuts') -> np.ndarray:
-    """Boolean mask (shape b) of NUTS runs that pass the convergence criterion.
+NUTS_DIAG_KEYS = ('rhat', 'ess', 'ess_tail', 'divergences', 'draws', 'level')
 
-    ``diag`` holds the ``{prefix}_*`` arrays of a fit file with the dataset axis first:
-    ``rhat``, ``ess``, ``ess_tail`` (b, n_params; padded entries <= 0 are ignored),
+
+def nutsChecks(diag: dict[str, np.ndarray], prefix: str) -> dict[str, np.ndarray]:
+    """The four checks of the convergence criterion, each a boolean mask (shape b).
+
+    ``diag`` holds the ``{prefix}_*`` arrays (numpy or CPU tensors) with the dataset axis
+    first: ``rhat``, ``ess``, ``ess_tail`` (b, n_params; padded entries <= 0 are ignored),
     ``divergences`` (b, chains), ``draws`` and ``level`` (b,).
     """
 
     def stat(key: str, fn) -> np.ndarray:
-        a = np.asarray(diag[f'{prefix}_{key}'], dtype=np.float64).copy()
+        a = np.array(diag[f'{prefix}_{key}'], dtype=np.float64)
         a[a <= 0] = np.nan
         return fn(a, axis=-1)
 
     divergences = np.asarray(diag[f'{prefix}_divergences'])  # (b, chains)
     total = divergences.shape[-1] * np.asarray(diag[f'{prefix}_draws']).reshape(-1)
-    level = np.asarray(diag[f'{prefix}_level']).reshape(-1).astype(int)
-    div_max = np.vectorize(DIVERGENCE_RATE_MAX.get)(level)
-    ok_div = divergences.sum(-1) / total <= div_max
-    ok_rhat = stat('rhat', np.nanmax) <= RHAT_MAX
-    ok_ess = stat('ess', np.nanmin) >= ESS_MIN
-    ok_ess_tail = stat('ess_tail', np.nanmin) >= ESS_MIN
-    return ok_div & ok_rhat & ok_ess & ok_ess_tail
+    levels = np.asarray(diag[f'{prefix}_level']).reshape(-1).astype(int)
+    div_max = np.array([DIVERGENCE_RATE_MAX[level] for level in levels])
+    return {
+        'rhat': stat('rhat', np.nanmax) <= RHAT_MAX,
+        'ess': stat('ess', np.nanmin) >= ESS_MIN,
+        'ess_tail': stat('ess_tail', np.nanmin) >= ESS_MIN,
+        'divergences': divergences.sum(-1) / total <= div_max,
+    }
 
 
-def nutsConvergeMask(batch: dict[str, torch.Tensor], prefix: str = 'nuts') -> np.ndarray:
-    """``nutsConverged`` on a collated batch (tensors, dataset axis first)."""
-    keys = ('rhat', 'ess', 'ess_tail', 'divergences', 'draws', 'level')
-    diag = {f'{prefix}_{k}': batch[f'{prefix}_{k}'].cpu().numpy() for k in keys}
-    return nutsConverged(diag, prefix)
+def nutsConverged(diag: dict[str, np.ndarray], prefix: str) -> np.ndarray:
+    """Boolean mask (shape b) of NUTS runs that pass every check of ``nutsChecks``."""
+    return np.logical_and.reduce(list(nutsChecks(diag, prefix).values()))
+
+
+def referenceConverged(data_path: Path) -> np.ndarray | None:
+    """``nutsConverged`` of the reference fit next to ``data_path``; None without one.
+
+    Reads only the diagnostic arrays, never the multi-GB posterior draws.
+    """
+    if not fitPath(data_path, REFERENCE_TAG).exists():
+        return None
+    keys = [f'{REFERENCE_TAG}_{k}' for k in NUTS_DIAG_KEYS]
+    return nutsConverged(loadFits(data_path, REFERENCE_TAG, keys=keys), REFERENCE_TAG)
 
 
 def subsetProposal(proposal: 'Proposal', mask: np.ndarray) -> 'Proposal':
