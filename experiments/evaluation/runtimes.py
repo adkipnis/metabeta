@@ -79,7 +79,7 @@ from metabeta.models.approximator import Approximator
 from metabeta.plotting.runtimes import plotRuntimeRecords
 from metabeta.utils.dataloader import Collection, collateGrouped, toDevice
 from metabeta.utils.device import setDevice, synchronizeDevice
-from metabeta.utils.evaluation import nutsConverged
+from metabeta.utils.evaluation import referenceConverged
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR, REPO_ROOT
 from metabeta.utils.fits import fitPath, loadFits
 from metabeta.utils.logger import setupLogging
@@ -119,7 +119,6 @@ FIT_TAG = {  # test.{tag}.npz per method; NUTS0 = ladder level 0, NUTS = composi
     'NUTS0': 'nuts0',
     'NUTS': 'nuts',
 }
-REFERENCE_TAG = 'nuts2'  # its convergence mask defines "converged" throughout
 METHOD_ORDER = MB_METHODS + FIT_METHODS
 METHOD_LABELS = {
     MB_FLOW: 'MB^0',
@@ -141,12 +140,6 @@ TEX_LABELS = {
 # fraction of the slowest runs summarised separately; 5% of 512 datasets is 26 datasets,
 # enough for a stable mean and small enough to still be a tail
 TAIL_FRAC = 0.05
-
-# diagnostics nutsConverged reads; loaded on their own so the multi-GB posterior sample
-# arrays in test.nuts2.npz stay on disk
-_DIAG_KEYS = tuple(
-    f'{REFERENCE_TAG}_{k}' for k in ('rhat', 'ess', 'ess_tail', 'divergences', 'draws', 'level')
-)
 
 
 # ---------------------------------------------------------------------------
@@ -173,10 +166,8 @@ def loadReferences(path: Path) -> tuple[dict[str, np.ndarray], dict[str, np.ndar
             if f'{tag}_failed' in fit
             else np.ones(n, dtype=bool)
         )
-    conv = np.ones(n, dtype=bool)
-    if fitPath(path, REFERENCE_TAG).exists():
-        conv = nutsConverged(loadFits(path, REFERENCE_TAG, keys=_DIAG_KEYS), REFERENCE_TAG)
-    return durations, masks, conv
+    conv = referenceConverged(path)
+    return durations, masks, np.ones(n, dtype=bool) if conv is None else conv
 
 
 def nutsDrawCount(family: str, sizes: list[str], ds_type: str) -> int:
