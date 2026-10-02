@@ -27,11 +27,11 @@ from scipy.stats import fisher_exact, mannwhitneyu, spearmanr
 from tabulate import tabulate
 
 from metabeta.utils.evaluation import (
-    DIVERGENCE_RATE_MAX,
     ESS_MIN,
+    NUTS_DIAG_KEYS,
     RHAT_MAX,
     EvaluationSummary,
-    nutsConverged,
+    nutsChecks,
 )
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR
 from metabeta.utils.fits import fitPath, loadFits
@@ -41,7 +41,7 @@ SIZES = ['small', 'medium', 'large', 'huge']
 VARIANTS = ['sampled', 'real']
 LEVELS = ('nuts0', 'nuts1', 'nuts2')  # the NUTS budget ladder, one fit file each
 
-DIAG_KEYS = ('rhat', 'ess', 'ess_tail', 'divergences', 'draws', 'level', 'max_treedepth')
+DIAG_KEYS = (*NUTS_DIAG_KEYS, 'max_treedepth')
 EXTRA_KEYS = ['sigma_eps', 'sd_y', 'm', 'q']
 
 SIGMA_EPS_THRESHOLD = 0.10   # standardized sigma_eps below which NUTS struggles
@@ -85,23 +85,14 @@ def perDataset(diag: dict[str, np.ndarray], tag: str) -> dict[str, np.ndarray]:
     ``fail_*`` are the complements of the individual checks (a dataset converged iff none
     fails), so the table can attribute every non-converged run to its reasons.
     """
-    divergences = diag[f'{tag}_divergences']  # (b, chains)
-    total = divergences.shape[-1] * diag[f'{tag}_draws'].reshape(-1)
-    levels = diag[f'{tag}_level'].reshape(-1).astype(int)
-    div_max = np.array([DIVERGENCE_RATE_MAX[level] for level in levels])
-    max_rhat = _paramStat(diag[f'{tag}_rhat'], np.nanmax)
-    min_ess = _paramStat(diag[f'{tag}_ess'], np.nanmin)
-    min_ess_tail = _paramStat(diag[f'{tag}_ess_tail'], np.nanmin)
+    checks = nutsChecks(diag, tag)
     return {
-        'total_div': divergences.sum(-1),
-        'max_rhat': max_rhat,
-        'min_ess': min_ess,
+        'total_div': diag[f'{tag}_divergences'].sum(-1),
+        'max_rhat': _paramStat(diag[f'{tag}_rhat'], np.nanmax),
+        'min_ess': _paramStat(diag[f'{tag}_ess'], np.nanmin),
         'td_sat': diag[f'{tag}_max_treedepth'].mean(-1),
-        'fail_rhat': ~(max_rhat <= RHAT_MAX),
-        'fail_ess': ~(min_ess >= ESS_MIN),
-        'fail_ess_tail': ~(min_ess_tail >= ESS_MIN),
-        'fail_div': ~(divergences.sum(-1) / total <= div_max),
-        'conv': nutsConverged(diag, tag),
+        **{f'fail_{k}': ~ok for k, ok in checks.items()},
+        'conv': np.logical_and.reduce(list(checks.values())),
     }
 
 
@@ -122,7 +113,7 @@ def benchmarkRow(data_id: str, tag: str, per: dict[str, np.ndarray]) -> dict:
         'pct_fail_rhat': 100.0 * per['fail_rhat'].mean(),
         'pct_fail_ess': 100.0 * per['fail_ess'].mean(),
         'pct_fail_ess_tail': 100.0 * per['fail_ess_tail'].mean(),
-        'pct_fail_div': 100.0 * per['fail_div'].mean(),
+        'pct_fail_div': 100.0 * per['fail_divergences'].mean(),
     }
 
 
