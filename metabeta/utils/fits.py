@@ -17,7 +17,7 @@ import numpy as np
 
 # NUTS budget ladder (nuts0 < nuts1 < nuts2) plus the composite `nuts` written by
 # reintegration, ADVI at PyMC's default budget (advi0) and at 100k iterations (advi1),
-# Pathfinder with 4 (pathfinder0) and 20 (pathfinder1) paths, and the torch Laplace fit.
+# Pathfinder with 4 (pathfinder0) and 20 (pathfinder1) paths, and the pymc-extras Laplace fit.
 FIT_TAGS = (
     'nuts0',
     'nuts1',
@@ -29,6 +29,9 @@ FIT_TAGS = (
     'pathfinder1',
     'laplace',
 )
+# the top of the NUTS ladder: the reference posterior, and whose convergence decides which
+# datasets enter the comparisons
+REFERENCE_TAG = 'nuts2'
 _SHA_KEY = 'source_sha'
 
 
