@@ -602,3 +602,26 @@ runner reported the item as FAILED and exited (no done_ marker). Resubmitted as 
 (40874631) with `--gres=gpu:h100:1`, running on supergpu29 since 2026-10-02 morning; the
 earlier eval runners ran on supergpu19/26 (H100). Lesson: always request `gpu:h100:1`
 on `gpu_p`, plain `gpu:1` can land on supergpu02/03/05/08/09 with older cards.
+- `eval2-4` finished rc-all 2026-10-02 15:24 (6 h on supergpu29: the five huge sets
+  recomputed every summary cache). Outputs pulled and installed in `experiments/results/`
+  (`ref_curve_all.csv`, `ref_curve_all_agreement.md`, `ref_curve_all_latest.pdf`). Bug: the
+  curve plotted the 11 real sets too, which have no true parameters (NRMSE NaN → the median
+  markers vanished; EACE a constant 0.725; Laplace LOO-NLL 1,300–3,200 on real Poisson
+  sets); `plot()` now uses the sampled sets only (2efd8012), figure re-rendered locally from
+  the csv (cluster render kept as `*.cluster-render.pdf` in hpc-pull).
+- Curve (12 oracle sets, medians over sets; NRMSE / EACE / LOO-NLL / wall time s): MB
+  0.296 / 0.017 / 1.374 / 0.11 (GPU), MB⁰ 0.312 / 0.015 / 1.559 / 0.06; NUTS L0 0.297 /
+  0.016 / 1.374 / 60, L1 0.296 / 0.015 / 1.374 / 67, composite 0.297 / 0.015 / 1.374 / 84;
+  ADVI 10k 0.442 / 0.126 / 2.84 / 16, 100k 0.314 / 0.108 / 1.47 / 37; PF 4 0.364 / 0.185 /
+  1.43 / 30, PF 20 0.329 / 0.065 / 1.44 / 31; LA 0.360 / 0.052 / 2.46 / 21 (failed fits
+  excluded). MB sits on the NUTS point three decades to the left; every cheaper reference
+  budget pays in NRMSE or calibration.
+- False-convergence check (23 sets, vs nuts2): NUTS L0/L1 runs that *fail* the criterion
+  still agree with the reference (r ≥ 0.999, σ-ratio 0.986–1.002, rank-MAD ≤ 0.007; worst
+  small-p-real), as do runs that pass (σ-ratio 0.998–1.001, rank-MAD ≤ 0.003): the filter is
+  conservative, failing it does not mean a wrong posterior at these budgets. ADVI 100k r
+  0.945–0.998 but σ-ratio 0.59–0.95 (overconfident, worst small-p-real 0.59); ADVI 10k r
+  down to 0.54 (small-p-real), σ-ratio up to 2.1; PF 20 r 0.90–0.99, σ-ratio 0.72–1.14;
+  PF 4 σ-ratio down to 0.49; LA r 0.65–0.93, σ-ratio 1.9–4.9 (overdispersed random-effect
+  SDs). Not yet in the paper: candidate appendix figure next to fig:rt plus one sentence
+  in app:tra on the false-convergence check.
