@@ -372,15 +372,17 @@ class CurveExperiment:
         logger.info('Wrote %s.csv and %s_agreement.md', stem, stem)
 
     def plot(self) -> None:
-        methods = [m for m in (*LABELS,) if any(r['method'] == m for r in self.rows)]
+        # the curve scores against the true parameters, which only the sampled sets carry
+        rows = [r for r in self.rows if r['data_id'].endswith('-sampled')]
+        methods = [m for m in (*LABELS,) if any(r['method'] == m for r in rows)]
         fig, axes = plt.subplots(1, len(METRICS), figsize=(5 * len(METRICS), 4.2), dpi=DPI)
         cmap = plt.get_cmap('tab10')
         colors = {m: cmap(i % 10) for i, m in enumerate(methods)}
         for ax, metric in zip(axes, METRICS):
             agg = {}
             for m in methods:
-                t = [r['value'] for r in self.rows if r['method'] == m and r['metric'] == 'time']
-                v = [r['value'] for r in self.rows if r['method'] == m and r['metric'] == metric]
+                t = [r['value'] for r in rows if r['method'] == m and r['metric'] == 'time']
+                v = [r['value'] for r in rows if r['method'] == m and r['metric'] == metric]
                 ax.scatter(t, v, color=colors[m], alpha=0.35, s=18, edgecolors='none')
                 agg[m] = (float(np.median(t)), float(np.median(v)))
                 ax.scatter(
