@@ -37,7 +37,6 @@ from oracle_posterior import (
     _fmtTex,
     loadRegimeBatch,
     methodFitBatch,
-    nutsConvergeMaskFromNpz,
 )
 from metabeta.evaluation.intervals import getCoverageErrors, getCoverages, getCredibleIntervals
 from metabeta.evaluation.point import getCorrelation, getPointEstimates, getRMSE
@@ -45,7 +44,7 @@ from metabeta.evaluation.summary import EST_TYPE, _averageOverAlpha
 from metabeta.plotting.recovery import _plotRecovery
 from metabeta.utils.dataloader import subsetBatch
 from metabeta.utils.device import setDevice
-from metabeta.utils.evaluation import subsetProposal
+from metabeta.utils.evaluation import referenceConverged, subsetProposal
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR
 from metabeta.utils.fits import fitPath
 from metabeta.utils.logger import setupLogging
@@ -203,7 +202,8 @@ def evaluateRegime(
     # Selection: non-identity correlation matrix, and NUTS-converged where diagnostics exist.
     sel = correlatedMask(data_batch)
     n_corr = int(sel.sum())
-    conv_mask = nutsConvergeMaskFromNpz(data_path, cap_mask)
+    conv = referenceConverged(data_path)
+    conv_mask = None if conv is None else conv[cap_mask]
     if conv_mask is not None:
         sel &= conv_mask
         logger.info(

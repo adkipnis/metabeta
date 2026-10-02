@@ -39,14 +39,14 @@ from tabulate import tabulate
 
 from metabeta.models.approximator import Approximator
 from metabeta.utils.dataloader import Collection, collateGrouped, subsetBatch
-from metabeta.utils.evaluation import nutsConverged, subsetProposal
+from metabeta.utils.evaluation import referenceConverged, subsetProposal
 from metabeta.utils.results import Proposal
 from metabeta.utils.device import setDevice
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.sampling import setSeed
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR
-from metabeta.utils.fits import FIT_TAGS, fitPath, loadFits
+from metabeta.utils.fits import FIT_TAGS, REFERENCE_TAG, fitPath
 from metabeta.utils.posterior_eval import (
     SUPPORTED_METHODS,
     fit2proposal,
@@ -166,8 +166,6 @@ def trimBatch(batch: dict[str, torch.Tensor], max_d: int, max_q: int) -> dict[st
 # tensors are ever materialized at a time (see evaluateRegime). The tag also keys the summary
 # caches.
 REFERENCE_METHODS = (('NUTS', 'nuts'), ('ADVI', 'advi1'), ('PF', 'pathfinder1'), ('LA', 'laplace'))
-# NUTS reference whose convergence mask defines the ``_conv`` tables.
-REFERENCE_TAG = 'nuts2'
 
 
 def methodFitBatch(batch: dict[str, torch.Tensor], prefix: str) -> dict[str, torch.Tensor]:
@@ -219,21 +217,6 @@ def loadRegimeBatch(
     batch = subsetBatch(batch, cap_mask)
     batch = trimBatch(batch, max_d, max_q)
     return batch, n_total, n_kept, cap_mask
-
-
-def nutsConvergeMaskFromNpz(data_path: Path, cap_mask: np.ndarray) -> np.ndarray | None:
-    """Convergence mask of the NUTS reference (REFERENCE_TAG) over the capacity-kept datasets.
-
-    Loads only the tiny diagnostic arrays (divergences/rhat/ess/…) — never the multi-GB
-    sample tensors — so it can run before any fit proposal is materialized. None without a
-    reference fit file.
-    """
-    if not fitPath(data_path, REFERENCE_TAG).exists():
-        return None
-    keys = tuple(
-        f'{REFERENCE_TAG}_{k}' for k in ('rhat', 'ess', 'ess_tail', 'divergences', 'draws', 'level')
-    )
-    return nutsConverged(loadFits(data_path, REFERENCE_TAG, keys=keys), REFERENCE_TAG)[cap_mask]
 
 
 def _capFull(cap_mask: np.ndarray, sub: np.ndarray) -> np.ndarray:
@@ -461,7 +444,8 @@ def evaluateRegime(
         return [], None
 
     # NUTS reference convergence from the small diagnostic arrays (no fit samples materialized).
-    conv_mask = nutsConvergeMaskFromNpz(data_path, cap_mask)
+    conv = referenceConverged(data_path)
+    conv_mask = None if conv is None else conv[cap_mask]
     have_conv = False
     conv_idx = conv_batch = conv_full = None
     if conv_mask is not None:
