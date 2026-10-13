@@ -113,7 +113,10 @@ import argparse
 import time
 from typing import Literal
 
+import numpy as np
 import torch
+from scipy.special import ndtri
+from scipy.stats import rankdata
 from torch import Tensor
 
 from metabeta.models.approximator import Approximator
@@ -159,6 +162,47 @@ def suggestPoolSize(
     s = (n_eff_target / a_bar).ceil()
     s = (s / 500.0).ceil() * 500.0
     return s.clamp(min=SUGGEST_MIN, max=SUGGEST_MAX).long()
+
+
+def bulkEss(samples: Tensor, n_chains: int) -> Tensor:
+    """Rank-normalized split-chain bulk ESS (Vehtari et al., 2021) per dataset and dimension.
+
+    samples: (b, n_chains * T, D), chain-major as MetropolisSampler returns them. Ties (the
+    repeated states of rejected IMH moves) get average ranks. Returns (b, D) float64; NaN
+    for dimensions that are constant (padding).
+    """
+    x = samples.detach().double().cpu().numpy()
+    b, s, D = x.shape
+    half = s // n_chains // 2
+    x = x[:, : n_chains * (s // n_chains)].reshape(b, n_chains, -1, D)[:, :, : 2 * half]
+    x = np.moveaxis(x.reshape(b, 2 * n_chains, half, D), -1, 1)  # (b, D, M, n) split chains
+    M, n = 2 * n_chains, half
+    flat = x.reshape(b, D, M * n)
+    const = np.ptp(flat, axis=-1) == 0
+    z = ndtri((rankdata(flat, axis=-1) - 0.375) / (M * n + 0.25)).reshape(b, D, M, n)
+
+    # per-chain autocovariance via FFT (biased, divided by n)
+    zc = z - z.mean(-1, keepdims=True)
+    n_fft = 1 << int(np.ceil(np.log2(2 * n)))
+    f = np.fft.rfft(zc, n_fft, axis=-1)
+    acov = np.fft.irfft(f * np.conj(f), n_fft, axis=-1)[..., :n] / n  # (b, D, M, n)
+    mean_var = acov[..., 0].mean(-1) * n / (n - 1)  # (b, D)
+    var_plus = mean_var * (n - 1) / n + z.mean(-1).var(-1, ddof=1)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        rho = 1.0 - (mean_var[..., None] - acov.mean(-2)) / var_plus[..., None]  # (b, D, n)
+    rho[..., 0] = 1.0
+
+    # Geyer's initial positive sequence of pair sums, made monotone
+    L = n // 2
+    pairs = rho[..., 0 : 2 * L : 2] + rho[..., 1 : 2 * L : 2]  # (b, D, L)
+    neg = pairs < 0
+    first = np.where(neg.any(-1), neg.argmax(-1), L)
+    pairs = np.where(np.arange(L) < first[..., None], pairs, 0.0)
+    pairs = np.minimum.accumulate(pairs, axis=-1)
+    tau = np.maximum(-1.0 + 2.0 * pairs.sum(-1), 1.0 / np.log10(M * n))
+    ess = M * n / tau
+    ess[const] = np.nan
+    return torch.from_numpy(ess)
 
 
 class MetropolisSampler:
