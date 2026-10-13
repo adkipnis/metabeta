@@ -3,7 +3,8 @@ E2 follow-up: how much of MB's key-effect disagreement with NUTS is Monte Carlo 
 
 Step 1 (--stages mcse): for every NUTS-converged Normal-slope prior of the slope variant, the ESS
 and the MCSE of the key-effect median on both sides (arviz ess / mcse(method='median')), from the
-4 IMH chains x 1000 draws of the cached MB run and the 4 NUTS chains x 1000 draws.  Both store
+4 IMH chains x 1000 draws of the cached MB run and the 4 chains x 2000 draws of the NUTS reference
+(level 2 of the ladder, REFERENCE_TAG).  Both store
 their draws chain-major: MetropolisSampler._runChains reshapes (b, C, T_post) -> (b, C*T_post),
 utils/pymc.extractSingle flattens (chains, draws).  z = |med_MB - med_NUTS| / sqrt(mcse_MB^2 +
 mcse_NUTS^2).
@@ -31,6 +32,7 @@ import torch
 
 from metabeta.utils.api import parseFormula
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR
+from metabeta.utils.fits import REFERENCE_TAG
 from metabeta.utils.sampling import setSeed
 
 # sibling experiment script (this directory is sys.path[0] at run time)
@@ -64,6 +66,12 @@ def setup() -> argparse.Namespace:
 
 def dataDir(name: str) -> Path:
     return DATA_DIR / f'e2-{name}-{RFX}'
+
+
+def nutsKey(name: str, point: int, ki: int) -> np.ndarray:
+    """Key-effect draws (chain-major) of the NUTS reference at one grid point."""
+    with np.load(dataDir(name) / 'fits' / f'test_{REFERENCE_TAG}_{point:03d}.npz') as f:
+        return f[f'{REFERENCE_TAG}_ffx'][ki]
 
 
 def chainStats(x: np.ndarray) -> tuple[float, float, float]:
@@ -105,8 +113,7 @@ class McseCheck:
                     if point not in conv:
                         continue
                     x_mb = g[j, :, ki].numpy()
-                    with np.load(dataDir(name) / 'fits' / f'test_nuts_{point:03d}.npz') as f:
-                        x_nuts = f['nuts_ffx'][ki]
+                    x_nuts = nutsKey(name, point, ki)
                     med_m, ess_m, mcse_m = chainStats(x_mb)
                     med_n, ess_n, mcse_n = chainStats(x_nuts)
                     r = mbrow.loc[point]
@@ -185,8 +192,7 @@ class McseCheck:
                     for j, p in enumerate(block['points']):
                         runs[seed][int(p)] = (block['key'][j].numpy(), block['accept_rate'][j])
             for point in base.point[base.dataset == name]:
-                with np.load(dataDir(name) / 'fits' / f'test_nuts_{point:03d}.npz') as f:
-                    x_n = f['nuts_ffx'][ki]
+                x_n = nutsKey(name, point, ki)
                 width = lambda x: np.quantile(x, 0.95) - np.quantile(x, 0.05)
                 row = {'dataset': name, 'point': int(point)}
                 meds = []

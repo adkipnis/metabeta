@@ -73,6 +73,9 @@ Stages (--stages, run in the order given):
   evidence  Normal datasets only: IS log p(D) from the flow pool on all grid points vs Meng-Wong
             bridge sampling on the NUTS draws (experiments/posthoc/evidence.py)
   plot      prior_sensitivity_{rfx}.pdf (+ _main, _exp1; _bf after evidence)
+  paper     the appendix numbers over the Normal slope priors (the reported grid):
+            prior_sensitivity_{rfx}_paper.md and the tables prior_grid_setup / prior_grid /
+            prior_grid_diag (.tex), from the analyze and evidence CSVs and the MB cache
 
 Usage (from repo root):
     uv run python experiments/evaluation/prior_sensitivity.py --rfx slope --stages export mb analyze --dry_run
@@ -81,7 +84,7 @@ Usage (from repo root):
     sbatch --array=0-$((n - 1)) scripts/fit-nuts-prior-grid.sh --dataset sleep --rfx slope
     uv run python experiments/evaluation/prior_sensitivity.py --rfx slope --stages mb --device cuda
     uv run python experiments/evaluation/prior_sensitivity.py --rfx slope --device cuda \
-        --stages analyze evidence plot
+        --stages analyze evidence plot paper
 """
 
 from __future__ import annotations
@@ -111,6 +114,7 @@ from metabeta.utils.constants import FFX_FAMILIES, LIKELIHOOD_FAMILIES, SIGMA_FA
 from metabeta.utils.dataloader import sliceBatch, toDevice
 from metabeta.utils.evaluation import nutsConverged
 from metabeta.utils.experiments import DATA_DIR, PREPROCESSED_DATA_DIR, REPO_ROOT, RESULTS_DIR
+from metabeta.utils.fits import REFERENCE_TAG
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.plot import PALETTE, VECTOR_RASTER_DPI
 from metabeta.utils.priors import bambiDefaultPriors
@@ -177,7 +181,10 @@ TRAIN_MAX_TAU_FFX = {0: 4.0, 1: 3.0, 2: 1.5}
 TRAIN_MAX_TAU_RFX = {0: 5.0, 1: 2.0, 2: 1.0}
 
 METHODS = {'MB0': False, 'MB': True}  # label -> Api.sample(refine=...)
-FIT_PREFIXES = {'NUTS': 'nuts0', 'ADVI': 'advi1'}  # fit.py tags of the per-point files
+FIT_PREFIXES = {'NUTS': REFERENCE_TAG, 'ADVI': 'advi1'}  # fit.py tags of the per-point files
+# the NUTS ladder (fit.py NUTS_LEVELS): level 2 is the reference, and the escalating run (cheapest
+# converged level, fit.py composeNuts) is what a user pays for NUTS at one prior
+NUTS_LADDER = ('nuts0', 'nuts1', 'nuts2')
 QUANTILES = {'q05': 0.05, 'q50': 0.5, 'q95': 0.95}
 NUTS_CHAINS = 4  # fit.py default; chains run in parallel, one core each
 
@@ -192,6 +199,11 @@ FIG_SD_FAMILY = {  # figure suffix -> row-1 SD family, at that family's NUTS sub
 BAMBI_TAU = 2.5  # row 2 and the Bayes-factor reference use the grid tau_beta nearest to this
 
 SD_MARKERS = {'halfnormal': 'o', 'exponential': 'D'}  # NUTS SD priors in figure row 2
+PAPER_NAMES = {  # (dataset, family) labels of the appendix tables
+    'sleep': ('sleepstudy', 'Gaussian'),
+    'cbpp': ('cbpp', 'Bernoulli'),
+    'salamanders': ('Salamanders', 'Poisson'),
+}
 FIG_DIR = Path.home() / 'LaTeX' / 'metabeta-iclr' / 'figures'
 C_MB, C_NUTS = PALETTE[4], PALETTE[3]  # runtimes figure colours of MB and NUTS
 C_UNCONV = '0.6'  # NUTS points failing nutsConverged
@@ -205,7 +217,7 @@ ACCEPT_NORM = mcolors.Normalize(0.0, 1.0)
 # fmt: off
 def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--stages', nargs='+', required=True, choices=['export', 'mb', 'analyze', 'evidence', 'plot'])
+    parser.add_argument('--stages', nargs='+', required=True, choices=['export', 'mb', 'analyze', 'evidence', 'plot', 'paper'])
     parser.add_argument('--rfx', type=str, required=True, choices=['slope', 'intercept'], help='rfx structure of every dataset: correlated random slope or random intercept only')
     parser.add_argument('--datasets', nargs='+', default=list(DATASETS), choices=list(DATASETS))
     parser.add_argument('--device', type=str, default='cpu', help='device of the mb stage; analyze reads that cache')
@@ -249,8 +261,36 @@ def buildGrid(lf: int) -> pd.DataFrame:
 
 
 def pointConverged(fit: dict[str, np.ndarray], prefix: str) -> bool:
-    """``nutsConverged`` on one per-point fit file (no dataset axis)."""
+    """``nutsConverged`` on one per-point fit file (no dataset axis); False for a failed fit."""
+    if bool(fit.get(f'{prefix}_failed', False)):
+        return False
     return bool(nutsConverged({k: np.asarray(v)[None] for k, v in fit.items()}, prefix)[0])
+
+
+def ladderCost(fits_dir: Path, point: int) -> dict:
+    """The escalating NUTS run at one grid point, as fit.py's composeNuts builds it: the
+    cumulative wall time up to the cheapest converged level (the top level if none converges)
+    and that level; plus each level's own convergence and wall time. NaN cost while a level's
+    fit is missing."""
+    out = {}
+    for tag in NUTS_LADDER:
+        path = fits_dir / f'test_{tag}_{point:03d}.npz'
+        if not path.exists():
+            return out | {'nuts_cost_s': np.nan, 'nuts_level': np.nan}
+        with np.load(path, allow_pickle=True) as f:
+            fit = dict(f)
+        out[f'converged_{tag}'] = pointConverged(fit, tag)
+        out[f'duration_{tag}_s'] = float(fit[f'{tag}_duration'])
+    converged = [out[f'converged_{tag}'] for tag in NUTS_LADDER]
+    level = converged.index(True) if any(converged) else len(NUTS_LADDER) - 1
+    cost = sum(out[f'duration_{tag}_s'] for tag in NUTS_LADDER[: level + 1])
+    return out | {'nuts_cost_s': cost, 'nuts_level': level}
+
+
+def _pad(x, width: int) -> str:
+    """x left-padded with \\phantom{0} to width digits (column alignment in the tex tables)."""
+    x = str(x)
+    return (rf'\phantom{{{"0" * (width - len(x))}}}' if len(x) < width else '') + x
 
 
 def flagCount(g: pd.DataFrame) -> str:
@@ -671,7 +711,7 @@ class PriorSensitivity:
                     'divergences': int(fit[f'{prefix}_divergences'].sum()),
                     'treedepth_frac': float(np.mean(fit[f'{prefix}_max_treedepth'])),
                     'nuts_converged': pointConverged(fit, prefix),
-                }
+                } | ladderCost(self.dataDir(name) / 'fits', point)
             out[method] = (p, diag)
         return out
 
@@ -747,10 +787,18 @@ class PriorSensitivity:
             total = nuts.duration_s.sum()
             per_fit = nuts.duration_s.mean()
             lines.append(
-                f'- NUTS ({NUTS_CHAINS} parallel chains, {NUTS_CHAINS} cores per fit), {len(nuts)} fits: '
-                f'{total:.0f} s wall summed, {total * NUTS_CHAINS / 3600:.2f} core-hours '
-                f'({per_fit:.1f} s per fit)'
+                f'- NUTS reference ({REFERENCE_TAG}; {NUTS_CHAINS} parallel chains, {NUTS_CHAINS} cores per '
+                f'fit), {len(nuts)} fits: {total:.0f} s wall summed, '
+                f'{total * NUTS_CHAINS / 3600:.2f} core-hours ({per_fit:.1f} s per fit)'
             )
+            if 'nuts_cost_s' in nuts:
+                cost = nuts.nuts_cost_s
+                lines.append(
+                    f'- NUTS escalating ({"/".join(NUTS_LADDER)} up to the first converged level), '
+                    f'{int(cost.notna().sum())} fits: {cost.sum() * NUTS_CHAINS / 3600:.2f} core-hours '
+                    f'(median {cost.median():.1f} s per prior); stops at level '
+                    f'{nuts.nuts_level.value_counts().sort_index().to_dict()}'
+                )
             n_grid = len(self.meta[name]['grid'])
             if len(nuts) < n_grid:
                 lines.append(
@@ -982,7 +1030,7 @@ class PriorSensitivity:
     def evidence(self) -> None:
         """IS log p(D) (flow pool, all points) vs bridge sampling on NUTS draws (sub-grid)."""
         sys.path.insert(0, str(REPO_ROOT / 'experiments' / 'posthoc'))
-        from evidence import Target, bridge, isEvidence, toDouble
+        from evidence import N_REF_DRAWS, Target, bridge, isEvidence, toDouble
 
         S = self.cfg.n_samples
         for name in [n for n in self.data if self.meta[n]['lf'] == 0]:
@@ -1003,7 +1051,7 @@ class PriorSensitivity:
                 flow = self.proposal(block['MB0'])
                 for j, point in enumerate(block['points']):
                     batch64 = toDouble(sliceBatch(block['batch'], j, j + 1))
-                    ev = isEvidence(flow.slice_b(j, j + 1), batch64, [S])
+                    ev = isEvidence(flow.slice_b(j, j + 1), batch64, [S], lf=0, n_inner=0)
                     row = self.rowBase(name, point, 'MB0') | {
                         'logev_is': ev[f'logev_is_s{S}'],
                         'psis_k': ev[f'k_s{S}'],
@@ -1013,11 +1061,18 @@ class PriorSensitivity:
                     path = self.dataDir(name) / 'fits' / f'test_{prefix}_{point:03d}.npz'
                     if path.exists():
                         with np.load(path, allow_pickle=True) as f:
+                            converged = pointConverged(dict(f), prefix)
+                            # thinned to N_REF_DRAWS with the stride of fit.py's composite
                             fit = {
                                 k: torch.as_tensor(f[f'{prefix}_{k}'])
                                 for k in ('ffx', 'sigma_rfx', 'sigma_eps', 'corr_rfx')
                             }
-                        target = Target(batch64, block['MB0']['d_corr'])
+                        stride = fit['ffx'].shape[-1] // N_REF_DRAWS
+                        fit = {
+                            k: v[:, ::stride] if k == 'corr_rfx' else v[..., ::stride]
+                            for k, v in fit.items()
+                        }
+                        target = Target(batch64, block['MB0']['d_corr'], likelihood_family=0)
                         u = target.fromConstrained(
                             fit['ffx'].T,
                             fit['sigma_rfx'].T,
@@ -1028,12 +1083,222 @@ class PriorSensitivity:
                         row |= {
                             'logev_bridge': br['log_ev'],
                             'logev_bridge_swap': br['log_ev_swap'],
+                            'nuts_converged': converged,
                         }
                     rows.append(row)
             df = pd.DataFrame(rows).sort_values('point')
             path = self.resultPath(f'_evidence_{name}.csv')
             df.to_csv(path, index=False)
             logger.info('saved %s', path)
+
+    # --------------------------------------------------------------------------
+    # paper
+
+    def paper(self) -> None:
+        """Numbers and tables of the appendix: Normal slope priors, NUTS-converged unless noted."""
+        if self.cfg.dry_run:
+            logger.info('paper: from %s', [self.resultPath(f'_{n}.csv').name for n in self.data])
+            return
+        md, setup_rows, agree_rows, diag_rows = [], [], [], []
+        total = np.zeros(4, dtype=int)
+        for name in self.data:
+            meta, (label, family) = self.meta[name], PAPER_NAMES[name]
+            title = rf'\texttt{{{label}}} ({family})'
+            df = pd.read_csv(self.resultPath(f'_{name}.csv'))
+            df = df[df.ffx_family == 'normal']
+            nuts = df[df.method == 'NUTS'].set_index('point')
+            conv = nuts.index[nuts.nuts_converged.astype(bool)]
+            n_grid = int(df.point.nunique())
+            cost, ref = nuts.nuts_cost_s, nuts.duration_s
+            mb = torch.load(self.dataDir(name) / f'mb_{self.cfg.device}.pt', weights_only=False)
+            normal = [
+                b
+                for b in mb['blocks']
+                if meta['grid'].loc[b['points'][0], 'ffx_family'] == 'normal'
+            ]
+            wall = sum(b['MB']['wall_s'] for b in normal)
+            md += [
+                f'## {name}',
+                '',
+                f'- grid {n_grid} priors, NUTS fits {len(nuts)}, level-2 converged {len(conv)} '
+                f'(not converged: {sorted(set(nuts.index) - set(conv))})',
+                f'- escalating NUTS stops at level {nuts.nuts_level.value_counts().sort_index().to_dict()}; '
+                + ', '.join(
+                    f'{tag} converged {int(nuts[f"converged_{tag}"].fillna(False).astype(bool).sum())}'
+                    for tag in NUTS_LADDER[:-1]
+                ),
+                f'- NUTS cost per prior (escalating, the reported cost): median {cost.median():.0f} s, '
+                f'max {cost.max():.0f} s; full grid {cost.sum() * NUTS_CHAINS / 3600:.1f} core-hours',
+                f'- NUTS level 2 alone (reference, not the reported cost): median {ref.median():.0f} s, '
+                f'max {ref.max():.0f} s; full grid {ref.sum() * NUTS_CHAINS / 3600:.1f} core-hours; '
+                f'all three levels {nuts[[f"duration_{t}_s" for t in NUTS_LADDER]].sum().sum() * NUTS_CHAINS / 3600:.1f} '
+                'core-hours spent',
+                f'- MB ({mb["device"]}): {len(normal)} batched calls, {wall:.2f} s IMH included '
+                f'(raw flow {sum(b["MB0"]["wall_s"] for b in normal):.2f} s)',
+            ]
+            setup_rows.append(
+                f'    {title:<34} & {meta["m"]} & {meta["n"]} & {_pad(n_grid, 3)} & '
+                f'{_pad(len(conv), 3)} & {_pad(round(cost.median()), 3)} & '
+                f'{_pad(f"{cost.sum() * NUTS_CHAINS / 3600:.1f}", 4)} \\\\'
+            )
+            agree_rows.append(rf'    \multirow{{2}}{{*}}{{\texttt{{{label}}}}}')
+            for method, model in (('MB', r'\texttt{MB}'), ('MB0', r'\MBz{}')):
+                g = df[(df.method == method) & df.point.isin(conv)]
+                flags = int(g.flagged.astype(bool).sum())
+                cells = [
+                    medMad(g[c]) for c in ('r', 'sigma_ratio', 'rank_mad', 'delta_loo_nll', 'key_z')
+                ]
+                cells = [c.replace(' ± ', r' \pm ') for c in cells]
+                if cells[3].startswith('-0.00 '):  # a median that rounds to zero carries no sign
+                    cells[3] = cells[3][1:]
+                cells[3] = cells[3] if cells[3].startswith('-') else r'\phantom{-}' + cells[3]
+                acc = medMad(g.accept_rate).replace(' ± ', r' \pm ') if method == 'MB' else None
+                agree_rows.append(
+                    f'      & {model:<22} & '
+                    + ' & '.join(f'${c}$' for c in cells)
+                    + f' & ${_pad(flags, len(str(len(conv))))}/{len(conv)}$ & '
+                    + (f'${acc}$' if acc else '--')
+                    + r' \\'
+                )
+                md.append(
+                    f'- {method}: '
+                    + ', '.join(
+                        f'{c} {medMad(g[c], 3)}'
+                        for c in ('r', 'sigma_ratio', 'rank_mad', 'delta_loo_nll', 'key_z')
+                    )
+                    + f', flagged {flags}/{len(conv)}'
+                    + (f', IMH acceptance {medMad(g.accept_rate)}' if method == 'MB' else '')
+                )
+            agree_rows.append(r'    \midrule')
+            g = df[(df.method == 'MB') & df.point.isin(conv)]
+            flag = g.flagged.astype(bool)
+            fired = (g.accept_rate < FIRE_ACCEPT) | (g.k_hat > FIRE_KHAT)
+            counts = np.array(
+                [
+                    (flag & fired).sum(),
+                    (flag & ~fired).sum(),
+                    (~flag & fired).sum(),
+                    (~flag & ~fired).sum(),
+                ]
+            )
+            total += counts
+            diag_rows.append(
+                f'    {rf"\texttt{{{label}}}":<20} & '
+                + ' & '.join(_pad(c, 2 if i < 2 else 3) for i, c in enumerate(counts))
+                + r' \\'
+            )
+            cols = [
+                'point',
+                'tau_beta',
+                'sigma_family',
+                'tau_sigma',
+                'key_z',
+                'key_width_ratio',
+                'accept_rate',
+                'k_hat',
+            ]
+            flagged = g[flag].assign(fired=fired[flag])[cols + ['fired']]
+            md += [
+                f'- MB flags vs diagnostics (fired = acceptance < {FIRE_ACCEPT:g} or k-hat > {FIRE_KHAT:g}): '
+                f'flagged & fired {counts[0]}, flagged & silent {counts[1]}, unflagged & fired {counts[2]}, '
+                f'unflagged & silent {counts[3]}',
+                '',
+                tabulate(
+                    flagged.to_numpy().tolist(),
+                    headers=cols + ['fired'],
+                    tablefmt='pipe',
+                    floatfmt='.3g',
+                )
+                if len(flagged)
+                else 'no MB flags',
+                '',
+            ]
+        md = [
+            f'# E2 paper numbers ({self.cfg.rfx}; Normal slope priors; reference {REFERENCE_TAG}, '
+            'nutsConverged; NUTS cost = escalating ladder, fit.py composeNuts)',
+            '',
+            f'- MB flags vs diagnostics, all datasets: {total.tolist()} '
+            '(flagged & fired, flagged & silent, unflagged & fired, unflagged & silent)',
+            '',
+            *md,
+        ]
+        ev_path = self.resultPath('_evidence_sleep.csv')
+        if 'sleep' in self.data and ev_path.exists():
+            md += self._paperEvidence(pd.read_csv(ev_path))
+        self.resultPath('_paper.md').write_text('\n'.join(md) + '\n')
+        tex = {
+            'prior_grid_setup': [
+                r'\begin{tabular}{lcc|cc|cc}',
+                r'    \toprule',
+                r'    & & & \multicolumn{2}{c|}{priors} & \multicolumn{2}{c}{\texttt{NUTS}} \\',
+                r'    dataset & $m$ & $n$ & grid & conv. & per prior & full grid \\',
+                r'    & & & & & [s] & [core-h] \\',
+                r'    \midrule',
+                *setup_rows,
+            ],
+            'prior_grid': [
+                r'\begin{tabular}{ll|ccccc|c|c}',
+                r'    \toprule',
+                r'    dataset & model & $r$ & $\sigma$-ratio & rank-MAD & $\Delta\mathrm{LOO\text{-}NLL}$ & '
+                r'$|\Delta \mathrm{med}| / \mathrm{sd}$ & flagged & IMH acc. \\',
+                r'    \midrule',
+                *agree_rows[:-1],
+            ],
+            'prior_grid_diag': [
+                r'\begin{tabular}{l|cc|cc}',
+                r'    \toprule',
+                r'    dataset & flagged, fired & flagged, silent & unflagged, fired & unflagged, silent \\',
+                r'    \midrule',
+                *diag_rows,
+                r'    \midrule',
+                f'    {"total":<20} & ' + ' & '.join(str(c) for c in total) + r' \\',
+            ],
+        }
+        for stem, lines in tex.items():
+            path = self.resultPath(f'_{stem}.tex')
+            path.write_text('\n'.join([*lines, r'    \bottomrule', r'\end{tabular}', '']))
+            logger.info('saved %s', path)
+        logger.info('saved %s', self.resultPath('_paper.md'))
+
+    def _paperEvidence(self, ev: pd.DataFrame) -> list[str]:
+        """sleepstudy: IS evidence vs bridge on the NUTS draws, and the Bayes-factor curve."""
+        meta = self.meta['sleep']
+        ev = ev[ev.ffx_family == 'normal']
+        both = ev[ev.logev_bridge.notna() & ev.nuts_converged.astype(bool)]
+        d = (both.logev_is - both.logev_bridge).abs()
+        big = both[d > 1]
+        ts, tb = meta['nuts_sd']['halfnormal'], meta['fig_tau_beta']
+        ref = ev[
+            (ev.sigma_family == 'halfnormal')
+            & np.isclose(ev.tau_sigma, ts)
+            & np.isclose(ev.tau_beta, tb)
+        ]
+        rows = []
+        for sfam, stau in meta['nuts_sd'].items():
+            sl = ev[(ev.sigma_family == sfam) & np.isclose(ev.tau_sigma, stau)].sort_values(
+                'tau_beta'
+            )
+            for _, r in sl.iterrows():
+                rows.append([f'{sfam}({stau:g})', r.tau_beta, r.logev_is - ref.logev_is.item(),
+                             r.logev_bridge - ref.logev_bridge.item(), r.psis_k])  # fmt: skip
+        return [
+            '## sleepstudy evidence (IS on the flow pool vs bridge on the NUTS reference draws)',
+            '',
+            f'- over {len(both)} NUTS-converged priors: median |Δ| {d.median():.3f} nats, q90 '
+            f'{d.quantile(0.9):.3f}; bridge noise floor (swapped halves) median '
+            f'{(both.logev_bridge - both.logev_bridge_swap).abs().median():.4f}',
+            f'- |Δ| > 1 nat: {len(big)} priors, PSIS k-hat {big.psis_k.round(2).tolist()}',
+            '',
+            f'ln BF against Normal({tb:.3g}), HN({ts:g}):',
+            '',
+            tabulate(
+                rows,
+                headers=['SD prior', 'tau_beta', 'IS', 'bridge', 'k-hat'],
+                tablefmt='pipe',
+                floatfmt='.3g',
+            ),
+            '',
+        ]
 
     # --------------------------------------------------------------------------
     # plot
@@ -1171,8 +1436,10 @@ class PriorSensitivity:
                 sl = sl.sort_values('tau_beta')
                 ax.plot(sl.tau_beta, sl.logev_is - ref.logev_is.item(), color=color, lw=1.6,
                         label=f'MB IS, normal, {sfam}({stau:g})')  # fmt: skip
-                ax.plot(sl.tau_beta, sl.logev_bridge - ref.logev_bridge.item(), marker='o',
-                        color=C_NUTS, ls='', ms=4.5)  # fmt: skip
+                conv = sl.nuts_converged.astype(bool)  # unconverged references hollow grey
+                for sel, color, face in ((conv, C_NUTS, C_NUTS), (~conv, C_UNCONV, 'white')):
+                    ax.plot(sl.tau_beta[sel], sl.logev_bridge[sel] - ref.logev_bridge.item(),
+                            marker='o', color=color, mfc=face, ls='', ms=4.5)  # fmt: skip
             ax.plot(
                 [],
                 [],
@@ -1214,6 +1481,7 @@ if __name__ == '__main__':
         'analyze': study.analyze,
         'evidence': study.evidence,
         'plot': study.plot,
+        'paper': study.paper,
     }
     for stage in cfg.stages:
         stages[stage]()
