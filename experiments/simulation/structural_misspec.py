@@ -170,6 +170,11 @@ def perturbDataset(ds: dict[str, np.ndarray], scale: float) -> dict[str, np.ndar
     predictors = X[:, 1:d]  # (n, d-1)
     centered = predictors - predictors.mean(axis=0, keepdims=True)
     nonlinear = (centered**2).sum(axis=1)  # (n,)
+    # BUG: the precomputed analytical stats of valid.npz (beta_est, sigma_rfx_est, blup_est,
+    # blup_var, sigma_eps_est, Psi) are copied unchanged, so sampleMetabeta conditions the flow
+    # on stats of the unperturbed y (collateGrouped packs them into batch['stats'], which
+    # Approximator._resolveStats prefers over recomputing). Pop them here as
+    # evidence.reducedItem does; results of this script are invalid until then.
     out['y'] = ds['y'] + scale * nonlinear
     return out
 

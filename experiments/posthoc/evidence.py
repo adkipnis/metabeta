@@ -97,6 +97,16 @@ SIZES = ('small', 'medium', 'large', 'huge')
 FAMILIES = {'normal': 0, 'bernoulli': 1, 'poisson': 2}
 TARGET_CHUNK = 1000  # bridge-target draws per AGQ pass (bounds the (m, n, s) intermediates)
 JEFFREYS_EDGES = np.log([3.0, 10.0, 30.0, 100.0])  # ln BF thresholds (Jeffreys, natural log)
+# test.npz keys that collateStats packs into batch['stats']
+ANALYTICAL_STATS = (
+    'beta_est',
+    'sigma_rfx_est',
+    'blup_est',
+    'blup_var',
+    'sigma_eps_est',
+    'phi_pearson',
+    'Psi',
+)
 COLOR = '#3B6FB6'
 # CSVs written while the legacy 'z' prior coordinates were still reported carry an `_r` infix
 LEGACY_COLUMNS = {'logev_is_r_': 'logev_is_', 'k_r_': 'k_', 'eff_r_': 'eff_', '_is_r': '_is'}
@@ -202,6 +212,10 @@ def reducedItem(item: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
     out['rfx'][:, 1:] = 0.0
     out['eta_rfx'] = np.zeros_like(item['eta_rfx'])
     out['corr_rfx'] = np.eye(item['corr_rfx'].shape[-1], dtype=item['corr_rfx'].dtype)
+    # the precomputed analytical stats belong to the full model; without them the flow
+    # computes them from the reduced data (Approximator._resolveStats)
+    for key in ANALYTICAL_STATS:
+        out.pop(key, None)
     return out
 
 
