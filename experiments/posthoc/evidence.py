@@ -9,9 +9,11 @@ oracle sets against a bridge-sampling reference.
 Per dataset (standardized space — the space the flow density lives in):
   IS         : log p(D) ≈ logsumexp(log_w) - log S from ImportanceSampler(marginal=True),
                for pool prefixes S in --pool-sizes (flow draws are i.i.d.).
-  bridgeNuts : Meng-Wong iterative bridge sampling on the cached NUTS draws
-               (test.nuts.npz), warped-Gaussian proposal fitted on one half of the draws
-               and evaluated on the other, with the halves swapped as a noise floor.
+  bridgeNuts : Meng-Wong iterative bridge sampling on the NUTS reference draws (level 2 of
+               the ladder, test.nuts2.npz, thinned to N_REF_DRAWS), warped-Gaussian proposal
+               fitted on one half of the draws and evaluated on the other, with the halves
+               swapped as a noise floor. Each row records whether the reference converged
+               (utils/evaluation.nutsConverged); the tables keep the converged rows only.
                The unnormalized target reuses ImportanceSampler.unnormalizedPosterior
                (marginal likelihood + priors) in unconstrained coordinates.
   bridgeImh  : the same bridge on MB-IMH draws (flow + independence MH, exact marginal
@@ -36,7 +38,8 @@ GLMMs (--family bernoulli/poisson): no closed-form marginal exists, so
 
 Outputs: {out_dir}/{prefix}{size}_{split}_n{n_ds}.csv (per-dataset rows; prefix '' for Normal,
 '{family}_k{K}_' otherwise), .md (summary tables) and .png (diagnostic figure);
---summarize-only additionally writes evidence_normal.tex.
+--summarize-only additionally writes evidence_normal.tex / evidence_discrete.tex (converged
+references only) and evidence_paper.md (the numbers quoted in the appendix).
 
 Run from the repo root:
     uv run python experiments/posthoc/evidence.py --sizes small --n-datasets 32
@@ -76,7 +79,8 @@ from metabeta.utils.config import ApproximatorConfig  # noqa: E402
 from metabeta.utils.constants import hasSigmaEps  # noqa: E402
 from metabeta.utils.psis import psislw  # noqa: E402
 from metabeta.utils.dataloader import Collection, collateGrouped, toDevice  # noqa: E402
-from metabeta.utils.fits import loadFits  # noqa: E402
+from metabeta.utils.evaluation import NUTS_DIAG_KEYS, nutsConverged  # noqa: E402
+from metabeta.utils.fits import REFERENCE_TAG, loadFits  # noqa: E402
 from metabeta.utils.families import logProbCorrRfx  # noqa: E402
 from metabeta.utils.preprocessing import logJacobianStandardization  # noqa: E402
 from metabeta.utils.regularization import (  # noqa: E402
@@ -88,6 +92,7 @@ from metabeta.utils.results import Proposal  # noqa: E402
 
 IMH_CHAINS = 4
 IMH_BURNIN = 25
+N_REF_DRAWS = 4000  # reference draws per dataset: level 2 thinned like the composite NUTS fit
 SIZES = ('small', 'medium', 'large', 'huge')
 FAMILIES = {'normal': 0, 'bernoulli': 1, 'poisson': 2}
 TARGET_CHUNK = 1000  # bridge-target draws per AGQ pass (bounds the (m, n, s) intermediates)
@@ -134,20 +139,26 @@ def loadModel(ckpt: Path) -> tuple[Approximator, int]:
 
 
 def loadNuts(npz_path: Path, n_ds: int) -> dict[str, np.ndarray]:
-    """Global NUTS draws (standardized space) and diagnostics for the first n_ds datasets.
+    """Global draws (standardized space) and diagnostics of the NUTS reference (REFERENCE_TAG)
+    for the first n_ds datasets, under ``nuts_*`` keys.
 
-    Every key is read once; the rfx draws (GBs) are never touched.
+    Draws are thinned to N_REF_DRAWS with the composite fit's stride (fit.py, _composite),
+    which keeps every chain, so the two bridge halves are still chains 0-1 and 2-3.
+    ``nuts_converged`` is the convergence criterion of the paper. Every key is read once;
+    the rfx draws (GBs) are never touched.
     """
-    keys = (
-        'nuts_ffx',
-        'nuts_sigma_rfx',
-        'nuts_sigma_eps',
-        'nuts_corr_rfx',
-        'nuts_rhat',
-        'nuts_ess',
-        'nuts_divergences',
-    )
-    return {k: v[:n_ds] for k, v in loadFits(npz_path, 'nuts', keys=keys).items()}
+    tag = REFERENCE_TAG
+    draws = ('ffx', 'sigma_rfx', 'sigma_eps', 'corr_rfx')
+    keys = [f'{tag}_{k}' for k in (*draws, *NUTS_DIAG_KEYS)]
+    fits = {k: v[:n_ds] for k, v in loadFits(npz_path, tag, keys=keys).items()}
+    out = {'nuts_converged': nutsConverged(fits, tag)}
+    for k, v in fits.items():
+        field = k[len(tag) + 1 :]
+        if field in draws:
+            axis = 2 if field == 'corr_rfx' else -1  # corr: (b, 1, s, q, q), else (b, ..., s)
+            v = v.take(np.arange(0, v.shape[axis], v.shape[axis] // N_REF_DRAWS), axis=axis)
+        out[f'nuts_{field}'] = v
+    return out
 
 
 def loadCsv(path: Path) -> pd.DataFrame:
@@ -678,55 +689,208 @@ def plot(df: pd.DataFrame, pool_sizes: list[int], path: Path, label: str) -> Non
     plt.close(fig)
 
 
+def convergedRows(df: pd.DataFrame) -> pd.DataFrame:
+    """Rows whose NUTS reference converged (all rows for CSVs without the column)."""
+    return df[df['nuts_converged'].astype(bool)] if 'nuts_converged' in df else df
+
+
 def writeOutputs(df: pd.DataFrame, pool_sizes: list[int], out_dir: Path, stem: str, label: str):
+    """md summary and figure over the datasets whose NUTS reference converged."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    md = summarize(df, pool_sizes, label)
+    conv = convergedRows(df)
+    label += f', converged reference {len(conv)}/{len(df)}'
+    md = summarize(conv.reset_index(drop=True), pool_sizes, label)
     (out_dir / f'{stem}.md').write_text(md)
-    plot(df, pool_sizes, out_dir / f'{stem}.png', label)
+    plot(conv.reset_index(drop=True), pool_sizes, out_dir / f'{stem}.png', label)
     print(md)
 
 
+def latestCsvs(out_dir: Path, family: str, split: str) -> dict[str, Path]:
+    """size -> newest merged CSV of one family in out_dir (K = IS2_N_INNER for GLMMs)."""
+    prefix = '' if family == 'normal' else f'{family}_k{IS2_N_INNER}_'
+    csvs = {
+        size: sorted(
+            p for p in out_dir.glob(f'{prefix}{size}_{split}_n*.csv') if '_shard' not in p.stem
+        )
+        for size in SIZES
+    }
+    return {size: paths[-1] for size, paths in csvs.items() if paths}
+
+
+def _texRows(df: pd.DataFrame, pool_sizes: list[int], head: str, blank: str) -> list[str]:
+    """Two table rows (smallest and largest pool) of one family and size, converged rows only."""
+    df = convergedRows(df)
+    ref = df['logev_bridge_nuts']
+    nested = nestedRows(df)
+    s_min, s_max = min(pool_sizes), max(pool_sizes)
+    lines = []
+    for s in (s_min, s_max):
+        d = (df[f'logev_is_s{s}'] - ref).abs()
+        frac_k = (df[f'k_s{s}'] > 0.7).mean()
+        nested_cells = ' & & '
+        if s == s_max and len(nested):
+            agree = categoryAgreement(nested['logbf_is'], nested['logbf_ref'])
+            bf = (nested['logbf_is'] - nested['logbf_ref']).abs().median()
+            nested_cells = f'{len(nested)} & ${agree:.2f}$ & ${bf:.3f}$'
+        lines.append(
+            f'{head} & {s} & ${d.median():.3f}$ & ${d.quantile(0.9):.3f}$ & '
+            f'${frac_k:.2f}$ & {nested_cells} \\\\'
+        )
+        head = blank
+    return lines
+
+
+_TEX_COLUMNS = (
+    r'$\#\mathrm{ds}$ & $\#\mathrm{corr}$ & $S$ & $\mathrm{med}\,|\Delta|$ & '
+    r'$q_{90}\,|\Delta|$ & $\mathrm{frac}\,\hat k>0.7$ & $\#\mathrm{nested}$ & '
+    r'$\mathrm{BF\ cat.\ agree}$ & $\mathrm{med}\,|\Delta\ln \mathrm{BF}|$ \\'
+)
+
+
 def writeTex(out_dir: Path, split: str, pool_sizes: list[int]) -> Path | None:
-    """Appendix table over all sizes with a CSV in out_dir."""
-    csvs = {size: sorted(out_dir.glob(f'{size}_{split}_n*.csv')) for size in SIZES}
-    csvs = {size: paths[-1] for size, paths in csvs.items() if paths}
+    """Appendix table (tab:ev) over all Normal sizes with a CSV in out_dir."""
+    csvs = latestCsvs(out_dir, 'normal', split)
     if not csvs:
         return None
     lines = [
         r'\begin{tabular}{lrr r cc c r cc}',
         r'    \toprule',
-        r'    $\mathrm{regime}$ & $\#\mathrm{ds}$ & $\#\mathrm{corr}$ & $S$ & '
-        r'$\mathrm{med}\,|\Delta\log p(\mathcal{D})|$ & $q_{90}\,|\Delta\log p(\mathcal{D})|$ & '
-        r'$\mathrm{frac}\,k>0.7$ & $\#\mathrm{nested}$ & $\mathrm{BF\ cat.\ agree}$ & '
-        r'$\mathrm{med}\,|\Delta\ln \mathrm{BF}|$ \\',
+        r'    $\mathrm{regime}$ & ' + _TEX_COLUMNS,
         r'    \midrule',
     ]
-    s_min, s_max = min(pool_sizes), max(pool_sizes)
     for size, path in csvs.items():
-        df = loadCsv(path)
-        ref = df['logev_bridge_nuts']
-        nested = nestedRows(df)
+        df = convergedRows(loadCsv(path))
         head = f'    \\texttt{{{size}}} & {len(df)} & {int(df["corr_active"].sum())}'
-        for s in (s_min, s_max):
-            if f'logev_is_s{s}' not in df:
-                continue
-            d = (df[f'logev_is_s{s}'] - ref).abs()
-            frac_k = (df[f'k_s{s}'] > 0.7).mean()
-            nested_cells = ' & & '
-            if s == s_max and len(nested):
-                agree = categoryAgreement(nested['logbf_is'], nested['logbf_ref'])
-                bf = (nested['logbf_is'] - nested['logbf_ref']).abs().median()
-                nested_cells = f'{len(nested)} & ${agree:.2f}$ & ${bf:.3f}$'
-            lines.append(
-                f'{head} & {s} & ${d.median():.3f}$ & ${d.quantile(0.9):.3f}$ & '
-                f'${frac_k:.2f}$ & {nested_cells} \\\\'
-            )
-            head = '     &  & '
+        lines += _texRows(df, pool_sizes, head, '     &  & ')
         lines.append(r'    \midrule')
     lines[-1] = r'    \bottomrule'
     lines.append(r'\end{tabular}')
     path = out_dir / 'evidence_normal.tex'
     path.write_text('\n'.join(lines) + '\n')
+    return path
+
+
+def writeTexDiscrete(out_dir: Path, split: str, pool_sizes: list[int]) -> Path | None:
+    """Appendix table (tab:ev_discrete) over the Bernoulli and Poisson sizes in out_dir."""
+    blocks = {f: latestCsvs(out_dir, f, split) for f in ('bernoulli', 'poisson')}
+    if not any(blocks.values()):
+        return None
+    lines = [
+        r'\begin{tabular}{llrr r cc c r cc}',
+        r'    \toprule',
+        r'    $\mathrm{family}$ & $\mathrm{regime}$ & ' + _TEX_COLUMNS,
+        r'    \midrule',
+    ]
+    for family, csvs in blocks.items():
+        if not csvs:
+            continue
+        name = family.capitalize()
+        for size, path in csvs.items():
+            df = convergedRows(loadCsv(path))
+            head = f'    {name} & \\texttt{{{size}}} & {len(df)} & {int(df["corr_active"].sum())}'
+            lines += _texRows(df, pool_sizes, head, '     &  &  &  ')
+            lines.append(r'    \midrule')
+            name = ''
+        lines[-1] = r'    \midrule\midrule'
+    lines[-1] = r'    \bottomrule'
+    lines.append(r'\end{tabular}')
+    path = out_dir / 'evidence_discrete.tex'
+    path.write_text('\n'.join(lines) + '\n')
+    return path
+
+
+def _nearEdge(log_bf: pd.Series, tol: float = 0.2) -> pd.Series:
+    """Reference ln BF within tol nats of a Jeffreys category boundary."""
+    edges = np.concatenate([-JEFFREYS_EDGES, JEFFREYS_EDGES])
+    return pd.Series(
+        np.abs(log_bf.to_numpy()[:, None] - edges[None]).min(1) < tol, index=log_bf.index
+    )
+
+
+def writePaperStats(out_dir: Path, split: str, pool_sizes: list[int]) -> Path | None:
+    """The numbers the appendix quotes (app:ev), per family and size over converged rows,
+    plus pooled counts; evidence_paper.md."""
+    s_min, s_max = min(pool_sizes), max(pool_sizes)
+    rows, pooled, frames = {}, {}, {}
+    for family in FAMILIES:
+        for size, path in latestCsvs(out_dir, family, split).items():
+            full = loadCsv(path)
+            df = convergedRows(full)
+            frames[(family, size)] = (full, df)
+            ref = df['logev_bridge_nuts']
+            d_min = (df[f'logev_is_s{s_min}'] - ref).abs()
+            d = (df[f'logev_is_s{s_max}'] - ref).abs()
+            k = df[f'k_s{s_max}']
+            nested = nestedRows(df)
+            r = {
+                'converged': f'{len(df)}/{len(full)}',
+                'swap floor med': (ref - df['logev_bridge_nuts_swap']).abs().median(),
+                f'med S={s_min}': d_min.median(),
+                f'med S={s_max}': d.median(),
+                'shrink': 1 - d.median() / d_min.median(),
+                'frac k>0.7': (k > 0.7).mean(),
+                'med k<=0.5': d[k <= 0.5].median(),
+                'med 0.5<k<=0.7': d[(k > 0.5) & (k <= 0.7)].median(),
+                'med k>0.7': d[k > 0.7].median(),
+                '#|Δ|>1': int((d > 1).sum()),
+                '#|Δ|>1 & k>0.7': int(((d > 1) & (k > 0.7)).sum()),
+            }
+            if f'logev_laplace_s{s_max}' in df:
+                lap = (df[f'logev_laplace_s{s_max}'] - ref).abs()
+                r['Laplace med'] = lap.median()
+                r['Laplace frac>0.3'] = (lap > 0.3).mean()
+            if len(nested):
+                ca, cb = nested['logbf_is'].map(jeffreys), nested['logbf_ref'].map(jeffreys)
+                miss = ~((ca == cb) & ca.notna() & cb.notna())
+                full_k = nested[f'k_s{s_max}'] > 0.7
+                flag = full_k | (nested['k_red'] > 0.7)
+                edge = _nearEdge(nested['logbf_ref'])
+                r |= {
+                    'nested': len(nested),
+                    'agree IS': 1 - miss.mean(),
+                    'agree bridgeImh': categoryAgreement(
+                        nested['logbf_ref_imh'], nested['logbf_ref']
+                    ),
+                    'med |ΔlnBF|': (nested['logbf_is'] - nested['logbf_ref']).abs().median(),
+                    '#disagree': int(miss.sum()),
+                    '#disagree flagged|edge': int((miss & (flag | edge)).sum()),
+                    '#disagree fullk|edge': int((miss & (full_k | edge)).sum()),
+                }
+            rows[f'{family} {size}'] = r
+        fam = [v for (f, _), v in frames.items() if f == family]
+        if not fam:
+            continue
+        for tag, idx in (('converged', 1), ('all', 0)):
+            nested = pd.concat([nestedRows(v[idx]) for v in fam])
+            pooled[f'{family} ({tag})'] = {
+                'nested': len(nested),
+                'agree IS': categoryAgreement(nested['logbf_is'], nested['logbf_ref']),
+            }
+    if not rows:
+        return None
+    for tag, idx in (('converged', 1), ('all', 0)):
+        glmm = [v[idx] for (f, _), v in frames.items() if f != 'normal']
+        if glmm:
+            nested = pd.concat([nestedRows(df) for df in glmm])
+            pooled[f'bernoulli+poisson ({tag})'] = {
+                'nested': len(nested),
+                'agree IS': categoryAgreement(nested['logbf_is'], nested['logbf_ref']),
+            }
+    lines = [
+        '# Evidence check: numbers quoted in the appendix (app:ev)',
+        '',
+        f'Reference: {REFERENCE_TAG} thinned to {N_REF_DRAWS} draws; rows restricted to '
+        'nutsConverged unless marked (all).',
+        '',
+        _table(rows),
+        '',
+        '## Pooled nested agreement',
+        '',
+        _table(pooled),
+        '',
+    ]
+    path = out_dir / 'evidence_paper.md'
+    path.write_text('\n'.join(lines))
     return path
 
 
@@ -795,6 +959,7 @@ def runSize(size: str, args: argparse.Namespace) -> None:
             'nuts_max_rhat': float(np.nanmax(nuts['nuts_rhat'][i])),
             'nuts_min_ess': float(np.nanmin(np.where(ess > 0, ess, np.nan))),
             'nuts_div': int(nuts['nuts_divergences'][i].sum()),
+            'nuts_converged': bool(nuts['nuts_converged'][i]),
             'imh_accept': fit['imh_accept'],
             **{k: v for k, v in fit['is'].items() if k != 'weights'},
         }
@@ -902,12 +1067,14 @@ def main() -> None:
     args = setup()
     for size in args.sizes:
         (resummarize if args.summarize_only else runSize)(size, args)
-    # the combined table spans all sizes with a CSV in out_dir; assemble it only in the
+    # the combined tables span all sizes with a CSV in out_dir; assemble them only in the
     # summarize-only pass so parallel per-size runs do not race on the same file
-    if args.summarize_only and args.family == 'normal':
-        tex = writeTex(args.out_dir, args.split, sorted(args.pool_sizes))
-        if tex is not None:
-            print(f'[saved] {tex}')
+    if args.summarize_only:
+        pool_sizes = sorted(args.pool_sizes)
+        for write in (writeTex, writeTexDiscrete, writePaperStats):
+            path = write(args.out_dir, args.split, pool_sizes)
+            if path is not None:
+                print(f'[saved] {path}')
 
 
 if __name__ == '__main__':
