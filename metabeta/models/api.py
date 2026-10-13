@@ -21,7 +21,7 @@ from metabeta.evaluation import predictive as _predictive
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
-from metabeta.posthoc.metropolis import IS2_N_INNER, MetropolisSampler, suggestPoolSize
+from metabeta.posthoc.metropolis import IS2_N_INNER, MetropolisSampler, bulkEss, suggestPoolSize
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.dataloader import (
@@ -86,6 +86,7 @@ MIN_SAFEGUARD_SAMPLES = 64
 IMH_N_CHAINS = 4
 IMH_BURNIN = 25
 IMH_ACCEPT_WARN = 0.1
+IMH_ESS_WARN = 150
 
 
 def mapZScores(
@@ -712,8 +713,9 @@ class Api:
 
         'imh' (default) runs Independence Metropolis-Hastings with the flow pool as
         proposals: asymptotically exact in the pool size, no weight-degeneracy failure
-        mode.  Per-dataset acceptance and a suggested pool size are reported; mean
-        acceptance below ``IMH_ACCEPT_WARN`` triggers a warning.  The post-burn-in
+        mode.  Per-dataset acceptance, a suggested pool size and the bulk ESS per global
+        parameter are reported; mean acceptance below ``IMH_ACCEPT_WARN`` or a minimum ESS
+        below ``IMH_ESS_WARN`` triggers a warning.  The post-burn-in
         draws are trimmed to exactly ``n_samples``.
 
         'is' applies self-normalized importance sampling with PSIS smoothing; datasets
@@ -839,6 +841,12 @@ class Api:
             proposal = concatProposalsBatch(chunks).resizeGroups(batch['mask_n'].shape[1])
             accept = torch.cat(accepts, dim=0)
 
+        # bulk ESS over the IMH chains before trimming (the trim cuts into the last chain)
+        ess = bulkEss(proposal.samples_g, IMH_N_CHAINS).numpy()  # (B, D_g), NaN = padding
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)  # all-NaN rows
+            ess_min = np.nanmin(ess, axis=1)
+
         # the pool was over-drawn by the burn-in; trim to exactly n_samples
         idx = (
             torch.arange(n_samples, device=proposal.samples_g.device)
@@ -862,12 +870,28 @@ class Api:
                 'exact MCMC (e.g. NUTS) instead.',
                 stacklevel=4,
             )
+        ess_flag = ess_min < IMH_ESS_WARN
+        if ess_flag.any():
+            flagged = np.flatnonzero(ess_flag)
+            e_vals = ', '.join(f'{ess_min[i]:.0f}' for i in flagged)
+            warnings.warn(
+                f'IMH effective sample size is low for dataset(s) {flagged.tolist()} '
+                f'(min bulk ESS over global parameters {e_vals} < {IMH_ESS_WARN:g}): the '
+                'chains revisit few distinct states, and the refined sample can be too narrow '
+                'where the flow under-covers the posterior, which more draws do not fix. '
+                'Check against exact MCMC (e.g. NUTS).',
+                stacklevel=4,
+            )
         return proposal, {
             'refine_method': 'imhMarginal' if lf == 0 else 'imhPM',
             'accept_rate': a_bar.detach().float().cpu().numpy().copy(),
             'accept_threshold': IMH_ACCEPT_WARN,
             'accept_flag': flag,
             'suggested_n_samples': suggested.detach().cpu().numpy().copy(),
+            'ess': ess,
+            'ess_min': ess_min,
+            'ess_threshold': IMH_ESS_WARN,
+            'ess_flag': ess_flag,
         }
 
     def _mapConsistency(
