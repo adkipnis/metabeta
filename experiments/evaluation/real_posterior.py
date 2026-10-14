@@ -14,7 +14,7 @@ Optionally layers post-hoc refinements on the raw MB flow posterior (extra
 The SNIS/Laplace families keep their PSIS-smoothed IS weights and the comparison
 metrics are weight-aware (IMH returns an equal-weight chain); see refineProposal.
 The method(s) come from ``--methods`` or, if omitted, the per-family default in
-metabeta/configs/presets.yaml (imhMarginal for Normal); pass ``--methods`` with no
+metabeta/configs/presets.yaml (imhMarginal+moves for Normal); pass ``--methods`` with no
 values for raw MB only.
 
 Metrics (median ± MAD over datasets):
@@ -110,7 +110,7 @@ def setup() -> argparse.Namespace:
                         choices=list(SUPPORTED_METHODS),
                         help='Post-hoc refinement methods to run on top of raw MB, evaluated '
                              'as extra rows vs NUTS. Default: the family preset in presets.yaml '
-                             '(isMarginal for Normal). Pass an empty list to run raw MB only.')
+                             '(imhMarginal+moves for Normal). Pass an empty list to run raw MB only.')
     # fmt: on
     return parser.parse_args()
 
