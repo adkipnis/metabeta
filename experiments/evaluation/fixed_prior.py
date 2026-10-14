@@ -295,7 +295,11 @@ class FixedPriorStudy:
 
     @staticmethod
     def acceptRate(proposal: Proposal) -> np.ndarray:
-        """Per-dataset IMH acceptance, read off the chains: a step accepts iff the state moves."""
+        """Per-dataset IMH acceptance: MetropolisSampler's own record where the cache has it (after
+        local moves the draws are no longer the IMH chains), else read off the chains (a step
+        accepts iff the state moves)."""
+        if 'imh_accept_rate' in proposal.is_results:
+            return proposal.is_results['imh_accept_rate'].float().numpy()
         b, s, D = proposal.samples_g.shape
         chains = proposal.samples_g.reshape(b, IMH_N_CHAINS, s // IMH_N_CHAINS, D)
         moved = (chains[:, :, 1:] != chains[:, :, :-1]).any(-1)   # (b, C, T-1)
