@@ -396,6 +396,30 @@ def test_local_moves_gate_leaves_high_ess_datasets_untouched():
     assert torch.equal(plain.rfx, gated.rfx)
 
 
+def test_local_moves_ignore_a_stray_first_rfx_draw():
+    """The moves' mode search starts at the median of the pool's Laplace modes: an extreme first
+    rfx draw (as the flow's local draws give on Poisson real data) must not change the result.
+    Seeded by that draw, the moves shifted every group's rfx mean by 1-5."""
+    data = _tinyBernoulli(m=6)
+    g = torch.Generator().manual_seed(3)
+    b = 1.5 * torch.randn(6, 1, generator=g, dtype=torch.float64)
+    y = torch.poisson(torch.exp(1.0 + b).expand(6, 5), generator=g)
+    y[0], y[1] = 0.0, 40.0  # an all-zero and a high-count group
+    data['y'] = y[None]
+    means = []
+    for first in (0.0, 20.0):
+        torch.manual_seed(7)
+        proposal = _gaussianProposal(4 * 400, 6, 1.0, 0.6, 1.5)
+        proposal.data['local']['samples'][:, :, 0] = first
+        sampler = MetropolisSampler(
+            data, n_chains=4, n_steps=400, mode='laplace', likelihood_family=2,
+            n_eff_target=None, n_inner=4, moves=LocalMoves(gate_ess=None),
+        )  # fmt: skip
+        out, _ = sampler(proposal)
+        means.append(out.rfx[0, :, :, 0].mean(-1))
+    assert torch.allclose(means[0], means[1], atol=0.05), means
+
+
 def test_local_moves_settings():
     """No burn-in still records a full chain-major sample; invalid settings fail early."""
     data = _tinyBernoulli()
