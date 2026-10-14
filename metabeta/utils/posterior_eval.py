@@ -30,6 +30,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
+from metabeta.models.api import IMH_MOVES_DEFAULT
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler, weightsTag
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
@@ -59,7 +60,13 @@ FAM_LETTER = {0: 'n', 1: 'b', 2: 'p'}
 # the IMH family returns an equal-weight chain.
 SNIS_METHODS = ('is', 'isFull', 'isMarginal')          # ImportanceSampler
 LAPLACE_METHODS = ('isLaplace', 'rbAttach')            # LaplaceImportanceSampler (GLMM only)
-IMH_METHODS = ('imhMarginal', 'imhGlobal', 'imhLaplace', 'imhPM')   # MetropolisSampler
+# '<imh method>+moves': that IMH followed by the Api's default local random-walk moves, on the
+# datasets whose IMH min bulk ESS is below its IMH_ESS_WARN (posthoc/metropolis.py, LocalMoves)
+IMH_MOVES = {
+    'imhMarginal+moves': ('imhMarginal', IMH_MOVES_DEFAULT),
+    'imhPM+moves': ('imhPM', IMH_MOVES_DEFAULT),
+}
+IMH_METHODS = ('imhMarginal', 'imhGlobal', 'imhLaplace', 'imhPM', *IMH_MOVES)   # MetropolisSampler
 SUPPORTED_METHODS = SNIS_METHODS + LAPLACE_METHODS + IMH_METHODS
 
 # IMH pool geometry: n_chains × (n_samples // n_chains) proposals, mirroring
@@ -82,9 +89,10 @@ def validMethods(methods: list[str], lf: int) -> list[str]:
     """Drop refinement methods that are incompatible with the likelihood family (warns)."""
     valid: list[str] = []
     for m in methods:
-        if m in ('isMarginal', 'imhGlobal') and lf != 0:
+        base = IMH_MOVES[m][0] if m in IMH_MOVES else m
+        if base in ('isMarginal', 'imhGlobal') and lf != 0:
             logger.warning('Skipping %s: Normal-only (lf=%d)', m, lf)
-        elif m in LAPLACE_METHODS + ('imhLaplace', 'imhPM') and lf == 0:
+        elif base in LAPLACE_METHODS + ('imhLaplace', 'imhPM') and lf == 0:
             logger.warning('Skipping %s: GLMM-only, Normal uses the exact marginal', m)
         else:
             valid.append(m)
@@ -369,6 +377,7 @@ def _refineChunk(
         return sampler(base.slice_b(0, B))
 
     if method in IMH_METHODS:
+        method, moves = IMH_MOVES.get(method, (method, None))
         if method == 'imhGlobal' and lf != 0:
             raise ValueError(
                 'imhGlobal is Normal-only; non-Normal imhMarginal already uses laplace'
@@ -396,6 +405,7 @@ def _refineChunk(
             mode=mode,
             likelihood_family=lf,
             n_inner=IS2_N_INNER if method == 'imhPM' else 0,
+            moves=moves,
         )
         p_out, _ = sampler(pool)
         return p_out
