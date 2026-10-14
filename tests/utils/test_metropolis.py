@@ -74,3 +74,57 @@ def test_bulk_ess_sticky_chain_and_padding():
     ess = bulkEss(x, C)[0]
     assert ess[0] < C * T / 10
     assert torch.isnan(ess[1])
+
+
+# ---------------------------------------------------------------------------
+# Local moves: coordinates and Jacobian
+# ---------------------------------------------------------------------------
+
+
+def _globalsLayout():
+    """d = 3 (last ffx padded), q = 2, sigma_eps, one corr dim; one dataset."""
+    import types
+
+    from metabeta.posthoc.metropolis import MetropolisSampler
+
+    sampler = types.SimpleNamespace(has_sigma_eps=True)
+    for name in ('_unconstrain', '_constrain', '_activeGlobals'):
+        setattr(sampler, name, getattr(MetropolisSampler, name).__get__(sampler))
+    data = {
+        'mask_d': torch.tensor([[True, True, False]]),
+        'mask_q': torch.tensor([[True, True]]),
+        'mask_corr': torch.tensor([[True]]),
+        'eta_rfx': torch.tensor([1.0]),
+    }
+    return sampler, data
+
+
+def test_local_move_coordinates_round_trip_with_exact_jacobian():
+    sampler, data = _globalsLayout()
+    d, q, d_corr = 3, 2, 1
+    active = sampler._activeGlobals(data, d, q, d_corr)
+    assert active.tolist() == [[True, True, False, True, True, True, True]]
+    gen = torch.Generator().manual_seed(0)
+    sg = torch.cat(
+        [
+            torch.randn(1, 5, 2, generator=gen, dtype=torch.float64),
+            torch.zeros(1, 5, 1, dtype=torch.float64),  # padded ffx
+            torch.rand(1, 5, 3, generator=gen, dtype=torch.float64) * 2 + 0.05,  # sigmas
+            torch.rand(1, 5, 1, generator=gen, dtype=torch.float64) * 1.8 - 0.9,  # corr
+        ],
+        dim=-1,
+    )
+    u = sampler._unconstrain(sg, d, q, d_corr)
+    back, ldj = sampler._constrain(u, sg[:, :1], active, d, q, d_corr)
+    assert torch.allclose(back, sg, atol=1e-10)
+    # log |dθ/du| over the active dims, by autograd
+    idx = active[0].nonzero().squeeze(-1)
+    for k in range(sg.shape[1]):
+
+        def f(x, k=k):
+            full = u[:, k : k + 1].clone()
+            full[0, 0, idx] = x
+            return sampler._constrain(full, sg[:, :1], active, d, q, d_corr)[0][0, 0, idx]
+
+        J = torch.autograd.functional.jacobian(f, u[0, k, idx])
+        assert abs(torch.linalg.slogdet(J)[1].item() - ldj[0, k].item()) < 1e-8
