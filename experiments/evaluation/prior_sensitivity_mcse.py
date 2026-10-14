@@ -3,9 +3,10 @@ E2 follow-up: how much of MB's key-effect disagreement with NUTS is Monte Carlo 
 
 Step 1 (--stages mcse): for every NUTS-converged Normal-slope prior of the slope variant, the ESS
 and the MCSE of the key-effect median on both sides (arviz ess / mcse(method='median')), from the
-4 IMH chains x 1000 draws of the cached MB run and the 4 chains x 2000 draws of the NUTS reference
-(level 2 of the ladder, REFERENCE_TAG).  Both store
-their draws chain-major: MetropolisSampler._runChains reshapes (b, C, T_post) -> (b, C*T_post),
+4 IMH chains x 1000 draws of the cached MB run (at points where the IMH ESS gate ran the local
+moves: their 500 chains x 8 records) and the 4 chains x 2000 draws of the NUTS reference (level 2
+of the ladder, REFERENCE_TAG).  All store their draws chain-major: MetropolisSampler._runChains
+reshapes (b, C, T_post) -> (b, C*T_post), _localMoves flattens (b, C, n_rec),
 utils/pymc.extractSingle flattens (chains, draws).  z = |med_MB - med_NUTS| / sqrt(mcse_MB^2 +
 mcse_NUTS^2).
 
@@ -30,6 +31,7 @@ import numpy as np
 import pandas as pd
 import torch
 
+from metabeta.models.api import IMH_MOVES_DEFAULT
 from metabeta.utils.api import parseFormula
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR
 from metabeta.utils.fits import REFERENCE_TAG
@@ -74,9 +76,9 @@ def nutsKey(name: str, point: int, ki: int) -> np.ndarray:
         return f[f'{REFERENCE_TAG}_ffx'][ki]
 
 
-def chainStats(x: np.ndarray) -> tuple[float, float, float]:
-    """(median, ESS, MCSE of the median) of chain-major draws (C*T,)."""
-    ch = x.reshape(CHAINS, -1)
+def chainStats(x: np.ndarray, chains: int = CHAINS) -> tuple[float, float, float]:
+    """(median, ESS, MCSE of the median) of chain-major draws (chains*T,)."""
+    ch = x.reshape(chains, -1)
     return (
         float(np.median(x)),
         float(az.ess(ch, method='bulk')),
@@ -109,12 +111,14 @@ class McseCheck:
             mb = torch.load(dataDir(name) / 'mb_cuda.pt', weights_only=False)
             for block in mb['blocks']:
                 g = block['MB']['data']['global']['samples']  # (B, 4000, D_g)
+                moved = block['MB']['moved']
                 for j, point in enumerate(block['points']):
                     if point not in conv:
                         continue
                     x_mb = g[j, :, ki].numpy()
                     x_nuts = nutsKey(name, point, ki)
-                    med_m, ess_m, mcse_m = chainStats(x_mb)
+                    n_ch = min(IMH_MOVES_DEFAULT.n_chains, len(x_mb) // 4) if moved[j] else CHAINS
+                    med_m, ess_m, mcse_m = chainStats(x_mb, n_ch)
                     med_n, ess_n, mcse_n = chainStats(x_nuts)
                     r = mbrow.loc[point]
                     sd_n = x_nuts.std()
@@ -122,6 +126,7 @@ class McseCheck:
                         'dataset': name, 'point': int(point), 'tau_beta': r.tau_beta,
                         'sd_prior': f'{r.sigma_family}({r.tau_sigma:g})',
                         'flagged': bool(r.flagged), 'accept': r.accept_rate, 'k_hat': r.k_hat,
+                        'moved': bool(moved[j]),
                         'fired': bool(r.accept_rate < FIRE_ACCEPT or r.k_hat > FIRE_KHAT),
                         'shift_sd': abs(med_m - med_n) / sd_n, 'shift_sd_csv': r.key_z,
                         'width_ratio': r.key_width_ratio,
