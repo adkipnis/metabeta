@@ -107,10 +107,25 @@ The large/huge-regime FFX under-dispersion is the finite proposal pool — ident
 exact marginal target on Normal-huge, and shrinking with pool size (calibration error
 ≈ (ā·s)^−0.4 for the pseudo-marginal chain in a pool-size sweep) — hence the
 acceptance-based pool-size suggestion below.
+
+Flow under-coverage: local moves
+--------------------------------
+IMH can only revisit pool members, so where the flow lacks tail mass the chains repeat a few
+states and the refined sample stays too narrow. LocalMoves follow the IMH with
+pseudo-marginal random-walk Metropolis on the same target, in the unconstrained global space
+(proposal covariance 2.38² / D × the covariance of the kept IMH states); every state carries
+its target estimate and (GLMMs) its Laplace factors and IS² rfx draw, so the chain stays
+exact. `n_chains` chains start at random kept states (re-evaluated with the moves' own
+estimator), burn in for a number of steps that grows with the number of active global
+dimensions, then record every `thin`-th state. With
+`gate_ess` set, only datasets whose IMH min bulk ESS falls below it are moved (the Api's default
+refinement gates at its IMH_ESS_WARN). Supported for mode='marginal' and mode='laplace'.
 """
 
 import argparse
+import math
 import time
+from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
@@ -118,6 +133,7 @@ import torch
 from scipy.special import ndtri
 from scipy.stats import rankdata
 from torch import Tensor
+from torch.nn import functional as F
 
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler
@@ -127,9 +143,16 @@ from metabeta.posthoc.laplace_glmm import (
     sampleRfxLaplace,
 )
 from metabeta.utils.constants import hasSigmaEps
+from metabeta.utils.dataloader import subsetBatch
 from metabeta.utils.families import sampleRfxConditionalNormal
 from metabeta.utils.preprocessing import rescaleData
-from metabeta.utils.regularization import corrLowerToUnconstrained, unconstrainedToCholesky
+from metabeta.utils.regularization import (
+    corrLowerToUnconstrained,
+    corrToLower,
+    inverseSoftplus,
+    logDetJacobianCorr,
+    unconstrainedToCholesky,
+)
 from metabeta.utils.results import Proposal
 
 Mode = Literal['global', 'marginal', 'joint', 'laplace']
@@ -144,6 +167,36 @@ IS2_N_INNER = 8
 N_EFF_TARGET = 700
 SUGGEST_MIN = 1_000
 SUGGEST_MAX = 16_000
+
+# random-walk proposal scale 2.38 / sqrt(D) (Roberts & Rosenthal, 2001)
+RWM_SCALE = 2.38
+
+
+# Newton steps of the pseudo-marginal move chains' Laplace mode search: the IS² estimate is
+# unbiased for any proposal centre, so a looser mode costs a little estimator noise, not exactness
+MOVES_N_NEWTON = 1
+
+
+@dataclass(frozen=True)
+class LocalMoves:
+    """Random-walk moves after the IMH chains (module docstring, 'Flow under-coverage').
+
+    ``n_chains`` chains start at random kept IMH states, burn in for ``burnin_per_dim`` steps
+    per active global dimension (of the batch's largest dataset; the random walk's mixing time
+    grows with it), then record every ``thin``-th state until the IMH sample size is reached.
+    ``n_inner``: IS² draws per group of the chains' target estimate (GLMMs). ``gate_ess``: move
+    only the datasets whose IMH min bulk ESS over the globals is below it (None: all).
+    """
+
+    n_chains: int = 500
+    burnin_per_dim: float = 2.0
+    thin: int = 5
+    n_inner: int = 4
+    gate_ess: float | None = None
+
+    def __post_init__(self) -> None:
+        if min(self.n_chains, self.thin, self.n_inner) < 1 or self.burnin_per_dim < 0:
+            raise ValueError('LocalMoves: n_chains, thin, n_inner >= 1 and burnin_per_dim >= 0')
 
 
 def suggestPoolSize(
@@ -217,6 +270,7 @@ class MetropolisSampler:
         eps: float = 1e-12,
         n_eff_target: int | None = N_EFF_TARGET,  # None disables the pool-size suggestion
         n_inner: int = 0,  # 'laplace' only: IS² draws per group; > 0 makes the chain pseudo-marginal
+        moves: LocalMoves | None = None,  # random-walk moves after the IMH (None: off)
     ) -> None:
         if n_inner > 0 and mode != 'laplace':
             raise ValueError("n_inner (pseudo-marginal IS² weights) requires mode='laplace'")
@@ -226,6 +280,8 @@ class MetropolisSampler:
             raise ValueError("mode='laplace' is for GLMMs; Normal has the exact 'marginal'")
         if burnin >= n_steps:
             raise ValueError('burnin must be < n_steps')
+        if moves is not None and mode not in ('marginal', 'laplace'):
+            raise ValueError("local moves need a global-space target: mode='marginal' or 'laplace'")
 
         self.n_chains = n_chains
         self.n_steps = n_steps
@@ -236,24 +292,9 @@ class MetropolisSampler:
         self.eps = eps
         self.n_eff_target = n_eff_target
         self.n_inner = n_inner
-
-        # Delegate all weight computation to ImportanceSampler.unnormalizedPosterior —
-        # single source of truth shared with SNIS. 'marginal' uses the (correlated)
-        # marginal likelihood + LKJ prior; 'laplace' the Laplace-approximated marginal
-        # (same weights as isLaplace); 'joint' needs full=True (rfx prior + local
-        # log-prob).
-        if mode == 'laplace':
-            self._is: ImportanceSampler = LaplaceImportanceSampler(
-                data, likelihood_family=likelihood_family, eps=eps, n_inner=n_inner
-            )
-        else:
-            self._is = ImportanceSampler(
-                data,
-                full=(mode == 'joint'),
-                marginal=(mode == 'marginal'),
-                likelihood_family=likelihood_family,
-                eps=eps,
-            )
+        self.moves = moves
+        self._data = data
+        self._is = self._targetSampler(data)
 
         # Data tensors for the Normal-Normal conditional (marginal mode).
         # These mirror what ImportanceSampler stores but are kept as direct references.
@@ -262,6 +303,33 @@ class MetropolisSampler:
         self._y = data['y'].unsqueeze(-1)  # (b, m, n, 1)
         self._mask_n = data['mask_n'].unsqueeze(-1)   # (b, m, n, 1)
         self._mask_m = data['mask_m'].unsqueeze(-1)   # (b, m, 1)
+
+    def _targetSampler(
+        self, data: dict[str, Tensor], n_inner: int | None = None, n_newton: int = 3
+    ) -> ImportanceSampler:
+        """Unnormalized-posterior evaluator for this mode on ``data``.
+
+        Delegate all weight computation to ImportanceSampler.unnormalizedPosterior —
+        single source of truth shared with SNIS. 'marginal' uses the (correlated)
+        marginal likelihood + LKJ prior; 'laplace' the Laplace-approximated marginal
+        (same weights as isLaplace); 'joint' needs full=True (rfx prior + local
+        log-prob).
+        """
+        if self.mode == 'laplace':
+            return LaplaceImportanceSampler(
+                data,
+                likelihood_family=self.likelihood_family,
+                eps=self.eps,
+                n_newton=n_newton,
+                n_inner=self.n_inner if n_inner is None else n_inner,
+            )
+        return ImportanceSampler(
+            data,
+            full=(self.mode == 'joint'),
+            marginal=(self.mode == 'marginal'),
+            likelihood_family=self.likelihood_family,
+            eps=self.eps,
+        )
 
     # ------------------------------------------------------------------
     # Log-weight computation
@@ -405,29 +473,221 @@ class MetropolisSampler:
             L_corr=L_corr,
         )
 
-    def _sampleRfxLaplace(self, idx_out: Tensor) -> Tensor:
-        """Laplace analog of _sampleRfxConditional (mode='laplace').
+    def _laplaceState(self, idx_out: Tensor) -> dict[str, Tensor]:
+        """Laplace factors of the kept chain states (mode='laplace').
 
         Every kept chain state is a member of the proposal pool, and the pool pass
         (_logWeights → LaplaceImportanceSampler.unnormalizedPosterior) already computed its
-        per-group Laplace modes b* and Hessian factors. Gathering them by ``idx_out`` and
-        drawing rfx ~ N(b*, H⁻¹) is therefore exact and avoids a second full Newton pass,
-        which used to cost as much as the pool pass itself. Returns (b, m, s_out, q).
+        per-group Laplace modes b* and Hessian factors. Gathering them by ``idx_out`` is
+        therefore exact and avoids a second full Newton pass, which used to cost as much as
+        the pool pass itself. With IS² weights (n_inner > 0) the state's weight-selected inner
+        draw is gathered too: under the pseudo-marginal extended target it is an exact
+        conditional draw. Returns {'modes', 'chol'[, 'rfx']}, each (b, m, s_out, ...).
+        """
+        state = {'modes': self._is._modes, 'chol': self._is._chol_H}
+        if self.n_inner > 0:
+            state['rfx'] = self._is._rfx
+        return {k: self._gatherPool(t, idx_out) for k, t in state.items()}
 
-        With IS² weights (n_inner > 0) the kept state's weight-selected inner draw is gathered
-        instead: under the pseudo-marginal extended target it is an exact conditional draw.
+    def _sampleRfxLaplace(self, state: dict[str, Tensor]) -> Tensor:
+        """Laplace analog of _sampleRfxConditional (mode='laplace'): the state's IS² draw
+        (n_inner > 0), else rfx ~ N(b*, H⁻¹) from its Laplace factors. Returns (b, m, s_out, q).
         """
         if self.n_inner > 0:
-            return self._gatherPool(self._is._rfx, idx_out)
-        modes_sel = self._gatherPool(self._is._modes, idx_out)
-        chol_sel = self._gatherPool(self._is._chol_H, idx_out)
-        return sampleRfxLaplace(modes_sel, chol_sel, self._is.mask_m)
+            return state['rfx']
+        return sampleRfxLaplace(state['modes'], state['chol'], self._is.mask_m)
 
     @staticmethod
     def _gatherPool(t: Tensor, idx_out: Tensor) -> Tensor:
         """Per-group pool tensor (b, m, s, ...) → its kept states (b, m, s_out, ...)."""
         idx = idx_out[:, None, :].reshape(*idx_out.shape[:1], 1, -1, *([1] * (t.dim() - 3)))
         return torch.gather(t, 2, idx.expand(*t.shape[:2], idx_out.shape[1], *t.shape[3:]))
+
+    # ------------------------------------------------------------------
+    # Local random-walk moves (LocalMoves)
+    # ------------------------------------------------------------------
+
+    def _activeGlobals(self, data: dict[str, Tensor], d: int, q: int, d_corr: int) -> Tensor:
+        """(b, D_g) bool: the global dims each dataset has (Approximator._masks layout)."""
+        masks = [data['mask_d'][..., :d].bool(), data['mask_q'][..., :q].bool()]
+        if self.has_sigma_eps:
+            masks.append(torch.ones_like(masks[0][..., :1]))
+        if d_corr > 0:
+            mask_corr = data['mask_corr'][..., :d_corr].bool()
+            if 'eta_rfx' in data:
+                mask_corr = mask_corr & (data['eta_rfx'].unsqueeze(-1) > 0)
+            masks.append(mask_corr)
+        return torch.cat(masks, dim=-1)
+
+    def _unconstrain(self, sg: Tensor, d: int, q: int, d_corr: int) -> Tensor:
+        """Constrained globals → the flow's unconstrained coordinates (inverse-softplus sigmas,
+        partial-correlation z); padded dims map to 0."""
+        q_var = q + int(self.has_sigma_eps)
+        u = sg.clone()
+        sig = sg[..., d : d + q_var]
+        u[..., d : d + q_var] = torch.where(sig > 0, inverseSoftplus(sig), 0.0)
+        if d_corr > 0:
+            u[..., d + q_var :] = corrLowerToUnconstrained(sg[..., d + q_var :], q)
+        return u
+
+    def _constrain(
+        self, u: Tensor, sg_ref: Tensor, active: Tensor, d: int, q: int, d_corr: int
+    ) -> tuple[Tensor, Tensor]:
+        """Inverse of _unconstrain on the active dims (the others are copied from sg_ref) and
+        log |dθ/du|, which turns the target density in θ into one in u. The corr term is the
+        padded-q Jacobian that Approximator._postprocess and the LKJ prior also use."""
+        q_var = q + int(self.has_sigma_eps)
+        log_sig = u[..., d : d + q_var]
+        ldj = (F.logsigmoid(log_sig) * active[:, None, d : d + q_var]).sum(-1)
+        parts = [u[..., :d], F.softplus(log_sig)]
+        if d_corr > 0:
+            z = u[..., d + q_var :]
+            ldj = ldj + logDetJacobianCorr(z, q)
+            L = unconstrainedToCholesky(z, q)
+            parts.append(corrToLower(L @ L.mT))
+        return torch.where(active[:, None, :], torch.cat(parts, dim=-1), sg_ref), ldj
+
+    @staticmethod
+    def _rwmCholesky(u: Tensor, active: Tensor) -> Tensor:
+        """(b, D_g, D_g) Cholesky factor of the proposal covariance RWM_SCALE² / D × Cov(u) on
+        each dataset's active dims, zero elsewhere."""
+        b, S, D_g = u.shape
+        x = u.double() * active[:, None, :]
+        x = x - x.mean(1, keepdim=True)
+        cov = x.mT @ x / max(S - 1, 1)
+        cov = cov * (RWM_SCALE**2 / active.sum(-1).clamp(min=1).double())[:, None, None]
+        pair = active[:, :, None] & active[:, None, :]
+        # unit diagonal on the inactive dims so the factor exists; jitter for collapsed samples
+        jitter = 1e-8 * cov.diagonal(dim1=-2, dim2=-1).mean(-1, keepdim=True).clamp(min=1e-12)
+        cov = cov * pair + torch.diag_embed(torch.where(active, jitter, 1.0))
+        L, info = torch.linalg.cholesky_ex(cov)
+        diag = torch.diag_embed(cov.diagonal(dim1=-2, dim2=-1).sqrt())
+        L = torch.where((info > 0)[:, None, None], diag, L)  # not PD: diagonal proposal
+        return (L * pair).to(u.dtype)
+
+    @torch.no_grad()
+    def _localMoves(
+        self,
+        data: dict[str, Tensor],
+        sg: Tensor,  # (b, S, D_g) kept IMH states
+        seed_l: Tensor,  # (b, m, 1, q) start of the Laplace mode search
+        d: int,
+        q: int,
+        d_corr: int,
+    ) -> tuple[Tensor, dict[str, Tensor], Tensor]:
+        """Random-walk Metropolis on the datasets in ``data`` (see LocalMoves).
+
+        The chains start at random kept IMH states, re-evaluated with the moves' own target
+        estimator, so every MH ratio compares estimates of one extended target. The mode search
+        starts at the pool's state-independent seed, so a move's target estimate does not depend
+        on the current state (the pseudo-marginal chain stays exact). Returns (sg, per-state
+        Laplace tensors ({} for 'marginal'), acceptance rate (b,)).
+        """
+        mv = self.moves
+        assert mv is not None
+        b, S, D_g = sg.shape
+        # an IS² estimate is unbiased for any mode-search depth; the deterministic Laplace
+        # target is not, so it keeps the pool's
+        evaluator = (
+            self._targetSampler(data, n_inner=mv.n_inner, n_newton=MOVES_N_NEWTON)
+            if self.n_inner > 0
+            else self._targetSampler(data)
+        )
+        active = self._activeGlobals(data, d, q, d_corr)
+        u = self._unconstrain(sg, d, q, d_corr)
+        L = self._rwmCholesky(u, active)
+        burnin = max(1, math.ceil(mv.burnin_per_dim * int(active.sum(-1).max())))
+        C = max(1, min(mv.n_chains, S // 4))
+        n_rec = math.ceil(S / C)
+
+        start = torch.rand(b, S, device=sg.device).argsort(-1)[:, :C]  # (b, C)
+        sg_ref = sg[:, :1]  # padded dims are constant within a dataset
+        u = torch.gather(u, 1, start[..., None].expand(b, C, D_g))
+        seed = seed_l.expand(b, seed_l.shape[1], C, seed_l.shape[-1])
+        zeros_g, zeros_l = sg.new_zeros(b, C), sg.new_zeros(b, seed.shape[1], C)
+
+        def evaluate(u: Tensor) -> tuple[Tensor, dict[str, Tensor]]:
+            """Log target in u (−inf where not finite) and the estimate's Laplace tensors."""
+            sg_u, ldj = self._constrain(u, sg_ref, active, d, q, d_corr)
+            p = Proposal(
+                {
+                    'global': {'samples': sg_u, 'log_prob': zeros_g},
+                    'local': {'samples': seed, 'log_prob': zeros_l},
+                },
+                has_sigma_eps=self.has_sigma_eps,
+                d_corr=d_corr,
+            )
+            ll, lp = evaluator.unnormalizedPosterior(p)
+            log_t = ll + lp + ldj
+            log_t = torch.where(torch.isfinite(log_t), log_t, -math.inf)
+            if self.mode != 'laplace':
+                return log_t, {}
+            fresh = {'modes': evaluator._modes, 'chol': evaluator._chol_H}
+            if self.n_inner > 0:
+                fresh['rfx'] = evaluator._rfx
+            return log_t, fresh
+
+        cur, state = evaluate(u)
+        out_u = u.new_empty(b, C, n_rec, D_g)  # chain-major records
+        out_state = {k: t.new_empty(*t.shape[:3], n_rec, *t.shape[3:]) for k, t in state.items()}
+        n_acc = sg.new_zeros(b)
+        n_steps = burnin + (n_rec - 1) * mv.thin
+        for step in range(1, n_steps + 1):
+            u_p = u + torch.einsum('bij,bsj->bsi', L, torch.randn_like(u))
+            new, fresh = evaluate(u_p)
+            acc = torch.rand_like(cur).log() < new - cur  # NaN (−inf − −inf): reject
+            u = torch.where(acc[..., None], u_p, u)
+            cur = torch.where(acc, new, cur)
+            state = {
+                k: torch.where(acc.view(b, 1, C, *([1] * (t.dim() - 3))), fresh[k], t)
+                for k, t in state.items()
+            }
+            n_acc += acc.float().mean(-1)
+            if step >= burnin and (step - burnin) % mv.thin == 0:
+                r = (step - burnin) // mv.thin
+                out_u[:, :, r] = u
+                for k, t in state.items():
+                    out_state[k][:, :, :, r] = t
+
+        # flattened chain-major, trimmed to S
+        u = out_u.reshape(b, C * n_rec, D_g)[:, :S]
+        state = {k: t.flatten(2, 3)[:, :, :S] for k, t in out_state.items()}
+        return self._constrain(u, sg_ref, active, d, q, d_corr)[0], state, n_acc / n_steps
+
+    def _applyMoves(
+        self, proposal: Proposal, sg_out: Tensor, state: dict[str, Tensor]
+    ) -> tuple[Tensor, dict[str, Tensor], dict]:
+        """Gate the datasets on the IMH bulk ESS and run the local moves on the selected ones.
+
+        The reported ESS stays the IMH chains' (the gate's statistic): the move chains are
+        hundreds of short chains, whose bulk ESS stays near their number even when they do not
+        move, so it cannot flag a failed move.
+        """
+        mv = self.moves
+        assert mv is not None
+        ess = bulkEss(sg_out, self.n_chains)  # (b, D_g) float64 on cpu, NaN = padding
+        ess_min = ess.nan_to_num(nan=float('inf')).amin(-1)
+        moved = torch.ones_like(ess_min, dtype=torch.bool)
+        if mv.gate_ess is not None:
+            moved = ess_min < mv.gate_ess
+        diag = {'moved': moved, 'move_accept': torch.full_like(ess_min, float('nan')), 'ess': ess}
+        if not moved.any():
+            return sg_out, state, diag
+
+        sel = moved.nonzero().squeeze(-1).to(sg_out.device)
+        sg_new, state_new, accept = self._localMoves(
+            self._data if moved.all() else subsetBatch(self._data, moved.numpy()),
+            sg_out[sel],
+            proposal.samples_l[sel, :, :1],
+            proposal.d,
+            proposal.q,
+            proposal.d_corr,
+        )
+        sg_out = sg_out.clone()
+        sg_out[sel] = sg_new
+        state = {k: t.index_copy(0, sel, state_new[k]) for k, t in state.items()}
+        diag['move_accept'][moved] = accept.double().cpu()
+        return sg_out, state, diag
 
     # ------------------------------------------------------------------
     # Main entry point
@@ -451,6 +711,9 @@ class MetropolisSampler:
             sweep-calibrated effective-draw target at the measured acceptance
             (omitted when n_eff_target is None). Inference itself always runs at
             the user-specified pool size.
+            With local moves: 'moved' (b,) the moved datasets, 'move_accept' (b,) their move
+            acceptance (NaN elsewhere) and 'ess' (b, D_g) the IMH chains' bulk ESS (the gate's
+            statistic).
         """
         t0 = time.perf_counter()
         s_expected = self.n_chains * self.n_steps
@@ -469,12 +732,16 @@ class MetropolisSampler:
         # and 'laplace' redraw rfx from the conditional at the accepted globals
         sl_in = proposal.samples_l if self.mode in ('global', 'joint') else None
         sg_out, sl_out, idx_out, accept_rate = self._runChains(log_w, proposal.samples_g, sl_in)
+        state = self._laplaceState(idx_out) if self.mode == 'laplace' else {}
+        move_diag: dict = {}
+        if self.moves is not None:
+            sg_out, state, move_diag = self._applyMoves(proposal, sg_out, state)
 
         # Attach rfx
         if self.mode == 'marginal':
             sl_out = self._sampleRfxConditional(sg_out, d, q, d_corr)
         elif self.mode == 'laplace':
-            sl_out = self._sampleRfxLaplace(idx_out)
+            sl_out = self._sampleRfxLaplace(state)
         # 'global' and 'joint': sl_out already set by _runChains
 
         b, s_out = sg_out.shape[0], sg_out.shape[1]
@@ -484,13 +751,15 @@ class MetropolisSampler:
             'local': {'samples': sl_out, 'log_prob': sl_out.new_zeros(b, m, s_out)},
         }
         out = Proposal(proposed, has_sigma_eps=proposal.has_sigma_eps, d_corr=d_corr)
+        # per-dataset IMH acceptance; after local moves it can no longer be read off the draws
+        out.is_results['imh_accept_rate'] = accept_rate.mean(-1)
         if self.n_inner > 0:
             # pseudo-marginal chain: a rejected step repeats the state's rfx, which left the rfx
             # under-covered at low acceptance (large/huge ablation); an iterated-SIR move given
             # θ_g, which leaves p(rfx | θ_g, y) invariant, gives each kept state its own draw.
-            # The pool pass already solved the Laplace factors of every kept state: reuse them.
+            # The pool pass (or the local move that produced it) already solved the Laplace
+            # factors of every kept state: reuse them.
             is_ = self._is
-            laplace = tuple(self._gatherPool(t, idx_out) for t in (is_._modes, is_._chol_H))
             _, ffx, sigma_eps = is_._logPriorGlobals(out)
             out.data['local']['samples'] = refreshRfxIS2(
                 ffx,
@@ -505,11 +774,11 @@ class MetropolisSampler:
                 out.rfx,
                 is_.n_inner,
                 L_corr=is_._getLCorr(out),
-                laplace=laplace,
+                laplace=(state['modes'], state['chol']),
             )
         t1 = time.perf_counter()
         out.tpd = (proposal.tpd or 0.0) + (t1 - t0)
-        diagnostics = {'accept_rate': accept_rate}
+        diagnostics = {'accept_rate': accept_rate, **move_diag}
         if self.n_eff_target is not None:
             diagnostics['suggested_n_samples'] = suggestPoolSize(accept_rate, self.n_eff_target)
         return out, diagnostics
