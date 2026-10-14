@@ -491,6 +491,7 @@ class PriorSensitivity:
                         'd_corr': p.d_corr,
                         'has_sigma_eps': p.has_sigma_eps,
                         'accept_rate': (res.safeguards or {}).get('accept_rate'),
+                        'moved': (res.safeguards or {}).get('moved'),  # IMH ESS gate
                         'map_z': (res.safeguards or {}).get('map_z'),
                         'route': res.routes[0],
                     }
