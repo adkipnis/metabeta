@@ -21,7 +21,13 @@ from metabeta.evaluation import predictive as _predictive
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
-from metabeta.posthoc.metropolis import IS2_N_INNER, MetropolisSampler, bulkEss, suggestPoolSize
+from metabeta.posthoc.metropolis import (
+    IS2_N_INNER,
+    LocalMoves,
+    MetropolisSampler,
+    bulkEss,
+    suggestPoolSize,
+)
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.dataloader import (
@@ -87,6 +93,8 @@ IMH_N_CHAINS = 4
 IMH_BURNIN = 25
 IMH_ACCEPT_WARN = 0.1
 IMH_ESS_WARN = 150
+# the default refinement's local moves (sample(imh_moves=True)), gated at IMH_ESS_WARN
+IMH_MOVES_DEFAULT = LocalMoves(gate_ess=IMH_ESS_WARN)
 
 
 def mapZScores(
@@ -351,6 +359,7 @@ class Api:
         refine: bool | str = True,
         k_threshold: float = PSIS_K_THRESHOLD,
         map_z_threshold: float = MAP_Z_THRESHOLD,
+        imh_moves: LocalMoves | bool = True,
         **prepare_kwargs: Any,
     ) -> RouterResult:
         """Sample from the posterior, routing each dataset to the smallest compatible submodel.
@@ -369,7 +378,11 @@ class Api:
         calibration-validated effective-draw target at the measured acceptance) are
         reported in ``RouterResult.safeguards``; datasets with mean acceptance below
         ``IMH_ACCEPT_WARN`` trigger a warning recommending the suggested size or exact
-        MCMC.
+        MCMC.  The IMH can only revisit pool members, so where the flow lacks tail mass its
+        chains repeat few states; datasets whose minimum bulk ESS falls below
+        ``IMH_ESS_WARN`` therefore continue with pseudo-marginal random-walk moves on the
+        same target (``imh_moves``; posthoc/metropolis.py, ``LocalMoves``).  ``imh_moves=False``
+        keeps the plain IMH; a ``LocalMoves`` instance sets them explicitly.
 
         ``refine='is'`` selects the previous self-normalized importance-sampling
         correction instead, with the PSIS shape diagnostic k̂ (Yao et al., 2018) computed
@@ -389,6 +402,11 @@ class Api:
         if method not in (None, 'imh', 'is'):
             raise ValueError(f"refine must be True, False, 'imh' or 'is' (got {refine!r})")
         do_refine = method is not None and n_samples >= MIN_SAFEGUARD_SAMPLES
+        if isinstance(imh_moves, LocalMoves) and method != 'imh':
+            raise ValueError("imh_moves requires refine='imh'")
+        moves = None
+        if method == 'imh' and imh_moves:
+            moves = IMH_MOVES_DEFAULT if imh_moves is True else imh_moves
 
         self._param_names: dict[str, list[str]] | None = None
         self._scale_info: 'ScaleInfo | None' = None
@@ -409,7 +427,12 @@ class Api:
         safeguards: dict[str, Any] | None = None
         if do_refine:
             proposal, safeguards = self._refineAndCheck(
-                proposal, batch, method=method, k_threshold=k_threshold, n_samples=n_samples
+                proposal,
+                batch,
+                method=method,
+                k_threshold=k_threshold,
+                n_samples=n_samples,
+                moves=moves,
             )
         if stats is not None and n_samples >= MIN_SAFEGUARD_SAMPLES:
             map_check = self._mapConsistency(proposal, stats, batch, threshold=map_z_threshold)
@@ -704,6 +727,7 @@ class Api:
         method: str,
         k_threshold: float,
         n_samples: int,
+        moves: LocalMoves | None = None,
     ) -> tuple[Proposal, dict[str, Any]]:
         """Refine the flow posterior ('imh' or 'is') and run the reliability checks.
 
@@ -716,7 +740,8 @@ class Api:
         mode.  Per-dataset acceptance, a suggested pool size and the bulk ESS per global
         parameter are reported; mean acceptance below ``IMH_ACCEPT_WARN`` or a minimum ESS
         below ``IMH_ESS_WARN`` triggers a warning.  The post-burn-in
-        draws are trimmed to exactly ``n_samples``.
+        draws are trimmed to exactly ``n_samples``.  With ``moves`` (``LocalMoves``), 'moved'
+        and 'move_accept' are reported too; the ESS stays the IMH chains' (the gate's statistic).
 
         'is' applies self-normalized importance sampling with PSIS smoothing; datasets
         with k̂ > ``k_threshold`` fall back to uniform weights (the raw flow globals, with
@@ -729,7 +754,7 @@ class Api:
         """
         lf = int(batch['likelihood_family'].flatten()[0].item())
         if method == 'imh':
-            return self._refineIMH(proposal, batch, lf=lf, n_samples=n_samples)
+            return self._refineIMH(proposal, batch, lf=lf, n_samples=n_samples, moves=moves)
 
         def _refineChunk(chunk_proposal: Proposal, chunk: dict[str, torch.Tensor]) -> Proposal:
             if lf == 0:
@@ -805,9 +830,11 @@ class Api:
         *,
         lf: int,
         n_samples: int,
+        moves: LocalMoves | None = None,
     ) -> tuple[Proposal, dict[str, Any]]:
         """IMH-refine the flow posterior; see ``_refineAndCheck`` for the contract."""
         n_steps = proposal.n_samples // IMH_N_CHAINS
+        move_diags: list[dict] = []
 
         def _imhChunk(
             chunk_proposal: Proposal, chunk: dict[str, torch.Tensor]
@@ -821,8 +848,11 @@ class Api:
                 likelihood_family=lf,
                 # GLMMs: pseudo-marginal chain (unbiased IS² weights), i.e. the exact posterior
                 n_inner=0 if lf == 0 else IS2_N_INNER,
+                moves=moves,
             )
             refined, diag = sampler(chunk_proposal)
+            if moves is not None:
+                move_diags.append(diag)
             return refined, diag['accept_rate']
 
         B = proposal.samples_g.shape[0]
@@ -842,7 +872,14 @@ class Api:
             accept = torch.cat(accepts, dim=0)
 
         # bulk ESS over the IMH chains before trimming (the trim cuts into the last chain)
-        ess = bulkEss(proposal.samples_g, IMH_N_CHAINS).numpy()  # (B, D_g), NaN = padding
+        move_report: dict[str, Any] = {}
+        if moves is None:
+            ess = bulkEss(proposal.samples_g, IMH_N_CHAINS).numpy()  # (B, D_g), NaN = padding
+        else:  # the sampler's: the moves replace the IMH chains
+            ess = torch.cat([d['ess'] for d in move_diags]).numpy()
+            move_report = {
+                k: torch.cat([d[k] for d in move_diags]).numpy() for k in ('moved', 'move_accept')
+            }
         with warnings.catch_warnings():
             warnings.simplefilter('ignore', RuntimeWarning)  # all-NaN rows
             ess_min = np.nanmin(ess, axis=1)
@@ -874,16 +911,20 @@ class Api:
         if ess_flag.any():
             flagged = np.flatnonzero(ess_flag)
             e_vals = ', '.join(f'{ess_min[i]:.0f}' for i in flagged)
+            moved = flagged[move_report['moved'][flagged]] if move_report else flagged[:0]
+            note = (
+                f'Local random-walk moves widened it for {moved.tolist()}. ' if moved.size else ''
+            )
             warnings.warn(
                 f'IMH effective sample size is low for dataset(s) {flagged.tolist()} '
                 f'(min bulk ESS over global parameters {e_vals} < {IMH_ESS_WARN:g}): the '
                 'chains revisit few distinct states, and the refined sample can be too narrow '
-                'where the flow under-covers the posterior, which more draws do not fix. '
+                f'where the flow under-covers the posterior, which more draws do not fix. {note}'
                 'Check against exact MCMC (e.g. NUTS).',
                 stacklevel=4,
             )
         return proposal, {
-            'refine_method': 'imhMarginal' if lf == 0 else 'imhPM',
+            'refine_method': ('imhMarginal' if lf == 0 else 'imhPM') + ('+moves' if moves else ''),
             'accept_rate': a_bar.detach().float().cpu().numpy().copy(),
             'accept_threshold': IMH_ACCEPT_WARN,
             'accept_flag': flag,
@@ -892,6 +933,7 @@ class Api:
             'ess_min': ess_min,
             'ess_threshold': IMH_ESS_WARN,
             'ess_flag': ess_flag,
+            **move_report,
         }
 
     def _mapConsistency(
