@@ -675,10 +675,17 @@ class MetropolisSampler:
             return sg_out, state, diag
 
         sel = moved.nonzero().squeeze(-1).to(sg_out.device)
+        # the moves' mode search starts at one seed per group, fixed before the chain: the
+        # median of the pool's Laplace modes. A single flow rfx draw can sit far from the mode
+        # (Poisson real data), and then every move's estimate and IS² rfx draw inherit it.
+        if self.mode == 'laplace':
+            seed_l = self._is._modes.index_select(0, sel).median(dim=2, keepdim=True).values
+        else:  # the marginal target ignores the rfx
+            seed_l = proposal.samples_l[sel, :, :1]
         sg_new, state_new, accept = self._localMoves(
             self._data if moved.all() else subsetBatch(self._data, moved.numpy()),
             sg_out[sel],
-            proposal.samples_l[sel, :, :1],
+            seed_l,
             proposal.d,
             proposal.q,
             proposal.d_corr,
