@@ -82,13 +82,15 @@ families:
 # experiments/evaluation/real_posterior.py (used when --methods is not given).
 # Keyed by likelihood_family id (0=normal, 1=bernoulli, 2=poisson).
 # Use `null` to disable (only the raw MB posterior is evaluated).
+# '+moves': the IMH followed by local random-walk moves where its min bulk ESS is below the
+# Api's IMH_ESS_WARN (posthoc/metropolis.py, LocalMoves; utils/posterior_eval.py, IMH_MOVES).
 posthoc:
   0:
-    default: imhMarginal
+    default: imhMarginal+moves
   1:
-    default: imhPM
+    default: imhPM+moves
   2:
-    default: imhPM
+    default: imhPM+moves
 
 # CLI-only parameters (never have defaults in YAML configs)
 cli_only:
