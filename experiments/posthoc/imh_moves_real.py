@@ -7,9 +7,9 @@ key-effect shift and 90% width ratio, flag) plus the 90% width ratio and |Δmedi
 every global parameter. The Api batches each (ffx family, SD family) block of priors in one
 call, as the prior-grid experiment does. Nothing is written to the experiment's data dirs.
 
-Variants are 'mb' (plain IMH, imh_moves=False) or '+'-joined tokens: 'gate' (local moves where
-the IMH min bulk ESS < IMH_ESS_WARN, the Api default), 'B<x>' (burn-in steps per active global
-dimension) and 'K<n>' (IS² draws per group of the moves' target estimate).
+Variants are 'mb' (plain IMH, random_walk=False) or '+'-joined tokens: 'gate' (local moves where
+the IMH min bulk ESS < IMH_ESS_WARN), 'B<x>' (burn-in steps per active global dimension) and
+'K<n>' (IS² draws per group of the moves' target estimate).
 
     uv run python experiments/posthoc/imh_moves_real.py --variants mb gate gate+K2 --seeds 0 1
     uv run python experiments/posthoc/imh_moves_real.py --stage table
@@ -57,7 +57,7 @@ def setup() -> argparse.Namespace:
 
 def variantKwargs(name: str) -> dict:
     if name == 'mb':
-        return {'imh_moves': False}  # plain IMH
+        return {'random_walk': False}  # plain IMH
     moves = None
     gated = LocalMoves(gate_ess=float(IMH_ESS_WARN))
     for tok in name.split('+'):
@@ -69,7 +69,7 @@ def variantKwargs(name: str) -> dict:
             moves = replace(moves or gated, n_inner=int(tok[1:]))
         else:
             raise ValueError(f'unknown variant token {tok!r} in {name!r}')
-    return {'imh_moves': moves}
+    return {'random_walk': moves}
 
 
 def globalScores(ps: PriorSensitivity, name: str, p, nuts) -> dict:
@@ -150,8 +150,8 @@ def run(cfg: argparse.Namespace) -> None:
                             'tau_beta': float(block.loc[point, 'tau_beta']),
                             'nuts_converged': bool(ndiag['nuts_converged']),
                             'accept': float(sg['accept_rate'][j]), 'ess_min': float(sg['ess_min'][j]),
-                            'moved': bool(sg['moved'][j]) if 'moved' in sg else False,
-                            'move_accept': float(sg['move_accept'][j]) if 'moved' in sg else np.nan,
+                            'moved': bool(sg['random_walk_ran'][j]),
+                            'move_accept': float(sg['random_walk_accept'][j]),
                             'wall_s_per_point': wall / len(block),
                         }  # fmt: skip
                         row |= ps.agreement(name, p, nuts, batch1) | globalScores(ps, name, p, nuts)
