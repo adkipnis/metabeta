@@ -15,9 +15,9 @@ score). Also records IMH acceptance, the IMH min bulk ESS (the gate), whether mo
 their acceptance and ESS, and the wall time per batch.
 
 Variants are 'imh' (baseline) or '+'-joined LocalMoves tokens: 'gate' (moves where the IMH
-min bulk ESS < IMH_ESS_WARN), 'moves' (moves on every dataset), and overrides of the defaults
-'B<x>' (burn-in steps per active global dimension), 'C<n>' (chains), 'T<n>' (thinning),
-'K<n>' (IS² draws per group). Example: gate+T1+B3.
+min bulk ESS < IMH_ESS_WARN), 'moves' (moves on every dataset), and overrides of the '+moves' RW
+(utils/posterior_eval.py, MOVES_RW): 'B<x>' (burn-in steps per active global dimension),
+'C<n>' (chains), 'T<n>' (thinning), 'K<n>' (IS² draws per group). Example: gate+T1+B3.
 
 One CSV row per (variant, dataset, parameter) goes to
 metabeta/outputs/results/imh_moves/{family}_{size}.csv (resumable: finished variants are
@@ -52,7 +52,7 @@ from metabeta.utils.dataloader import Collection, collateGrouped, toDevice  # no
 from metabeta.utils.device import synchronizeDevice  # noqa: E402
 from metabeta.utils.evaluation import referenceConverged  # noqa: E402
 from metabeta.utils.fits import REFERENCE_TAG, fitPath, loadFits  # noqa: E402
-from metabeta.utils.posterior_eval import REFINE_MAX_ELEMENTS  # noqa: E402
+from metabeta.utils.posterior_eval import MOVES_RW, REFINE_MAX_ELEMENTS  # noqa: E402
 from metabeta.utils.sampling import setSeed  # noqa: E402
 
 FAMILY_INITIAL = {'normal': 'n', 'bernoulli': 'b', 'poisson': 'p'}
@@ -88,7 +88,7 @@ def parseVariant(name: str, cfg: argparse.Namespace) -> LocalMoves | None:
         'T': ('thin', int),
         'K': ('n_inner', int),
     }
-    moves = LocalMoves()
+    moves = replace(MOVES_RW, gate_ess=None)  # the '+moves' RW, ungated; tokens override it
     for tok in name.split('+'):
         if tok in ('gate', 'moves'):
             moves = replace(moves, gate_ess=float(IMH_ESS_WARN) if tok == 'gate' else None)
