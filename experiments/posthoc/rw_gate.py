@@ -43,6 +43,7 @@ import argparse
 import math
 import sys
 import warnings
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -67,9 +68,10 @@ from imh_moves import (  # noqa: E402
 from prior_sensitivity import DATASETS, PriorSensitivity  # noqa: E402
 
 from metabeta.models.api import IMH_BURNIN, IMH_ESS_WARN, IMH_N_CHAINS, Api  # noqa: E402
-from metabeta.posthoc.metropolis import IS2_N_INNER, LocalMoves, MetropolisSampler  # noqa: E402
+from metabeta.posthoc.metropolis import IS2_N_INNER, MetropolisSampler  # noqa: E402
 from metabeta.utils.constants import LIKELIHOOD_FAMILIES  # noqa: E402
 from metabeta.utils.dataloader import Collection, collateGrouped, sliceBatch, toDevice  # noqa: E402
+from metabeta.utils.posterior_eval import MOVES_RW  # noqa: E402
 from metabeta.utils.psis import psislw  # noqa: E402
 from metabeta.utils.sampling import setSeed  # noqa: E402
 
@@ -121,7 +123,7 @@ def refinePaired(pool, batch: dict, lf: int) -> dict:
         mode='marginal' if lf == 0 else 'laplace',
         likelihood_family=lf,
         n_inner=0 if lf == 0 else IS2_N_INNER,
-        moves=LocalMoves(),  # ungated
+        moves=replace(MOVES_RW, gate_ess=None),  # the '+moves' RW, ungated
     )
     log_w = sampler._logWeights(pool)  # (b, s)
     sg, _, idx, accept = sampler._runChains(log_w, pool.samples_g, None)
