@@ -8,6 +8,7 @@ from metabeta.models.transformers import SetTransformer
 from metabeta.models.normalizingflows import CouplingFlow
 from metabeta.utils.regularization import (
     getConstrainers,
+    softplus,
     corrToLower,
     corrToUnconstrained,
     corrLowerToUnconstrained,
@@ -27,7 +28,7 @@ from metabeta.analytical.lmm.gaussian_local import (
 
 logger = logging.getLogger(__name__)
 
-constrainSigma, unconstrainSigma, logDetJacobian = getConstrainers(method='softplus')
+constrainSigma, unconstrainSigma, _ = getConstrainers(method='softplus')
 CLAMP = 20.0
 
 
@@ -429,8 +430,8 @@ class Approximator(nn.Module):
             )
         return targets
 
-    def _postprocess(self, proposed: dict[str, dict[str, torch.Tensor]]):
-        """reverse _preprocess for samples"""
+    def _postprocess(self, proposed: dict[str, dict[str, torch.Tensor]], mask_g: torch.Tensor):
+        """reverse _preprocess for samples; mask_g marks the active global dims"""
         d = self.d_ffx
         q = self.d_rfx
         d_corr = self.d_corr
@@ -447,9 +448,13 @@ class Approximator(nn.Module):
         if 'global' in proposed:
             samples = proposed['global']['samples']
             log_sigmas = samples[..., d : d + q_var].clone()
-            log_det = logDetJacobian(log_sigmas)
+            # padding comes from mask_g, not from log_sigma == 0 (the masked constrainers' rule):
+            # an active float32 draw lands on exactly 0 about once per few million draws, and
+            # would become sigma = 0 with its Jacobian dropped
+            active = mask_g[..., d : d + q_var].unsqueeze(-2).to(log_sigmas.dtype)
+            log_det = F.logsigmoid(log_sigmas) * active
             log_prob_g = proposed['global']['log_prob'] - log_det.sum(dim=-1)
-            sigmas = constrainSigma(log_sigmas)
+            sigmas = softplus(log_sigmas) * active
             samples_out = [samples[..., :d], sigmas]
             if d_corr > 0:
                 z_corr = samples[..., d + q_var : d + q_var + d_corr]
@@ -636,7 +641,7 @@ class Approximator(nn.Module):
             proposed['local'] = self._localPlaceholder(data, samples_g, n_samples, stats)
 
         # postprocess samples
-        proposal = self._postprocess(proposed)
+        proposal = self._postprocess(proposed, mask_g)
         if local and self.analytical_local_posterior:
             hybrid = gaussianHybrid(proposal, data)
             hybrid.debug_stats = proposal.debug_stats
