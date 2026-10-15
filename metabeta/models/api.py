@@ -95,8 +95,12 @@ IMH_ACCEPT_WARN = 0.1
 IMH_ESS_WARN = 150
 # below it the random-walk moves narrow the gap but may not close it: exact MCMC is recommended
 IMH_ESS_NUTS = 10
-# sample(random_walk=True): random-walk moves after the IMH on the datasets IMH_ESS_WARN flags
-RANDOM_WALK_DEFAULT = LocalMoves(gate_ess=IMH_ESS_WARN)
+# sample(random_walk=True): random-walk moves after the IMH on the datasets IMH_ESS_WARN flags.
+# A CPU step costs in proportion to the IS² draws per group, a GPU step barely: the GPU takes more
+RANDOM_WALK_DEFAULT = {
+    'cpu': LocalMoves(n_inner=2, gate_ess=IMH_ESS_WARN),
+    'cuda': LocalMoves(n_inner=4, gate_ess=IMH_ESS_WARN),
+}
 
 
 def mapZScores(
@@ -385,7 +389,7 @@ class Api:
         not fix; datasets whose minimum bulk ESS over the global parameters falls below
         ``IMH_ESS_WARN`` are flagged with a warning.  ``random_walk=True`` continues the IMH
         on the flagged datasets with pseudo-marginal random-walk moves on the same target
-        (posthoc/metropolis.py, ``LocalMoves``; ``RANDOM_WALK_DEFAULT``); below
+        (posthoc/metropolis.py, ``LocalMoves``; ``RANDOM_WALK_DEFAULT``, by device); below
         ``IMH_ESS_NUTS`` they may not repair it fully, and exact MCMC is recommended there.  A
         ``LocalMoves`` instance sets them, and its own gate, explicitly.  Per dataset, the safeguards record
         the flag ('ess_flag'), whether the moves ran ('random_walk_ran') and their acceptance
@@ -413,7 +417,8 @@ class Api:
             raise ValueError("random_walk requires refine='imh'")
         moves = None
         if method == 'imh' and random_walk:
-            moves = RANDOM_WALK_DEFAULT if random_walk is True else random_walk
+            preset = RANDOM_WALK_DEFAULT['cuda' if self.device.type == 'cuda' else 'cpu']
+            moves = preset if random_walk is True else random_walk
 
         self._param_names: dict[str, list[str]] | None = None
         self._scale_info: 'ScaleInfo | None' = None
