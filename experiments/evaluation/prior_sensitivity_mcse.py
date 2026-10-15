@@ -31,10 +31,10 @@ import numpy as np
 import pandas as pd
 import torch
 
-from metabeta.models.api import IMH_MOVES_DEFAULT
 from metabeta.utils.api import parseFormula
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR
 from metabeta.utils.fits import REFERENCE_TAG
+from metabeta.utils.posterior_eval import MOVES_RW
 from metabeta.utils.sampling import setSeed
 
 # sibling experiment script (this directory is sys.path[0] at run time)
@@ -117,7 +117,7 @@ class McseCheck:
                         continue
                     x_mb = g[j, :, ki].numpy()
                     x_nuts = nutsKey(name, point, ki)
-                    n_ch = min(IMH_MOVES_DEFAULT.n_chains, len(x_mb) // 4) if moved[j] else CHAINS
+                    n_ch = min(MOVES_RW.n_chains, len(x_mb) // 4) if moved[j] else CHAINS
                     med_m, ess_m, mcse_m = chainStats(x_mb, n_ch)
                     med_n, ess_n, mcse_n = chainStats(x_nuts)
                     r = mbrow.loc[point]
@@ -163,6 +163,7 @@ class McseCheck:
                     priors=priors,
                     n_samples=4000,
                     refine=True,
+                    random_walk=MOVES_RW,
                 )
                 g = res.proposal.samples_g  # (B, 4000, D_g)
                 blocks.append({
