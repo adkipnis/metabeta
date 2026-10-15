@@ -96,10 +96,11 @@ IMH_ESS_WARN = 150
 # below it the random-walk moves narrow the gap but may not close it: exact MCMC is recommended
 IMH_ESS_NUTS = 10
 # sample(random_walk=True): random-walk moves after the IMH on the datasets IMH_ESS_WARN flags.
-# A CPU step costs in proportion to the IS² draws per group, a GPU step barely: the GPU takes more
+# A CPU step costs in proportion to chains × IS² draws per group, a GPU step barely, so the GPU
+# runs more of both: K=4 and 500 chains (half the sequential steps of 250 for the same draws).
 RANDOM_WALK_DEFAULT = {
     'cpu': LocalMoves(n_inner=2, gate_ess=IMH_ESS_WARN),
-    'cuda': LocalMoves(n_inner=4, gate_ess=IMH_ESS_WARN),
+    'cuda': LocalMoves(n_chains=500, n_inner=4, gate_ess=IMH_ESS_WARN),
 }
 
 
