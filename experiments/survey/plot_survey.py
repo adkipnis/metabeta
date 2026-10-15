@@ -1,4 +1,4 @@
-"""Histograms of the GLMM literature survey (paper appendix figure).
+"""Histograms of the GLMM literature survey (paper figure).
 
 Reads model_equations.csv next to this script and writes a vector PDF:
     python experiments/survey/plot_survey.py [--out PATH]

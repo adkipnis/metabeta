@@ -1,7 +1,6 @@
 """Audit NUTS convergence diagnostics of the pre-computed baseline fits.
 
-Produces the numbers cited in the paper appendix paragraph "NUTS convergence
-diagnostics" (metabeta-paper/appendices/pymc.tex): per benchmark and budget
+Produces the NUTS convergence numbers cited in the paper: per benchmark and budget
 level (``nuts0`` < ``nuts1`` < ``nuts2``) the divergence prevalence, R-hat /
 tree-depth summaries, the fraction converged under the single ``nutsConverged``
 criterion and the share failing each of its checks (R-hat, bulk ESS, tail ESS,

@@ -73,8 +73,8 @@ dicts are available for NUTS-based methods.
 Results are printed to stdout and also written as markdown to
 metabeta/outputs/results/ablation/{family}_{size}.md (one file per model).
 The 'Average' row of every table follows the paper convention (PAPER_AVERAGE_EXCLUDE):
-it omits the rfx correlations, like Table 1; the paper tables C2-C4 are built from
-these markdown files by metabeta-paper/tools/build_ablation_tables.py.
+it omits the rfx correlations, like the oracle tables; the paper's ablation tables are
+built from these markdown files.
 
 Run from repo root:
     uv run python experiments/posthoc/ablation.py
@@ -412,11 +412,11 @@ def saveAblSummary(base: Path, summary: EvaluationSummary, diag: str) -> None:
         Path(f'{base}.diag.txt').write_text(diag)
 
 
-# Paper convention (matches experiments/evaluation/oracle_posterior.py::flattenActiveParams,
-# hence Table 1): the 'Average' row runs over fixed effects, rfx scales, rfx and sigma_eps;
+# Paper convention (matches experiments/evaluation/oracle_posterior.py::flattenActiveParams):
+# the 'Average' row runs over fixed effects, rfx scales, rfx and sigma_eps;
 # the rfx correlations are exempt because every method identifies them poorly, and their
 # up-to-q(q-1)/2 dimensions would otherwise dominate the dimension-weighted average. The
-# per-class Corr(RFX) row is still printed. Unlike Table 1, all datasets of the split are
+# per-class Corr(RFX) row is still printed. Unlike the oracle tables, all datasets of the split are
 # kept (no NUTS-convergence subset): the ablation scores against the ground truth.
 PAPER_AVERAGE_EXCLUDE = ('corr_rfx',)
 

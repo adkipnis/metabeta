@@ -14,7 +14,7 @@ salamanders enters with its key predictor only (mined), the rule the other two d
 with all 11 preprocessed predictors (d = 12, poisson-large submodel) IMH acceptance was 0.02-0.03
 even at default-like priors in the pilot, and that model is not reported.
 A third change, before any NUTS result: the grid is capped at the training hyper-prior range
-(simulation/prior.py, hypersample; App. F.3), because E1 showed the network extrapolating and IMH
+(simulation/prior.py, hypersample), because E1 showed the network extrapolating and IMH
 acceptance collapsing beyond it.  Points above the cap are dropped, not clipped, so the grid
 covers exactly the training range and differs per dataset.
 A fourth change, 2026-09-25, after the first full run (which mixed a correlated random slope for
@@ -58,7 +58,7 @@ Disagreement flag (key effect, per NUTS point): |median_MB - median_NUTS| / sd_N
 90% interval width ratio MB / NUTS outside [0.8, 1.25].
 
 Figures (slice choice fixed before the run): row 1 = key effect vs tau_beta at SD prior
-HN(tau_hn) in the main figure (prior_sensitivity.pdf) and Exp(1) in the appendix backup
+HN(tau_hn) in the main figure (prior_sensitivity.pdf) and Exp(1) in the backup figure
 (prior_sensitivity_exp1.pdf); row 2 (both figures) = random-intercept SD vs tau_sigma at
 Normal(0, tau_beta), tau_beta the grid value nearest the Bambi default 2.5 (2.16 / 2.16 / 1.42).
 Lines = MB (flow + IMH, the paper default) with markers shaded by IMH acceptance, dots = NUTS;
@@ -69,11 +69,11 @@ Stages (--stages, run in the order given):
   mb        MB0 (raw flow) and MB (flow + IMH) on all grid points, cached with per-batch
             wall-clock to outputs/data/e2-{ds}-{rfx}/mb_{device}.pt (loads the released checkpoint)
   analyze   MB cache + NUTS (and ADVI, if present) fits -> results/prior_sensitivity_{rfx}_{ds}.csv/.md
-            and the appendix table prior_sensitivity_{rfx}_agreement.md/.tex
+            and the agreement table prior_sensitivity_{rfx}_agreement.md/.tex
   evidence  Normal datasets only: IS log p(D) from the flow pool on all grid points vs Meng-Wong
             bridge sampling on the NUTS draws (experiments/posthoc/evidence.py)
   plot      prior_sensitivity_{rfx}.pdf (+ _main, _exp1; _bf after evidence)
-  paper     the appendix numbers over the Normal slope priors (the reported grid):
+  paper     the paper numbers over the Normal slope priors (the reported grid):
             prior_sensitivity_{rfx}_paper.md and the tables prior_grid_setup / prior_grid /
             prior_grid_diag (.tex), from the analyze and evidence CSVs and the MB cache
 
@@ -199,12 +199,11 @@ FIG_SD_FAMILY = {  # figure suffix -> row-1 SD family, at that family's NUTS sub
 BAMBI_TAU = 2.5  # row 2 and the Bayes-factor reference use the grid tau_beta nearest to this
 
 SD_MARKERS = {'halfnormal': 'o', 'exponential': 'D'}  # NUTS SD priors in figure row 2
-PAPER_NAMES = {  # (dataset, family) labels of the appendix tables
+PAPER_NAMES = {  # (dataset, family) labels of the paper tables
     'sleep': ('sleepstudy', 'Gaussian'),
     'cbpp': ('cbpp', 'Bernoulli'),
     'salamanders': ('Salamanders', 'Poisson'),
 }
-FIG_DIR = Path.home() / 'LaTeX' / 'metabeta-iclr' / 'figures'
 C_MB, C_NUTS = PALETTE[4], PALETTE[3]  # runtimes figure colours of MB and NUTS
 C_UNCONV = '0.6'  # NUTS points failing nutsConverged
 # IMH acceptance of the MB markers: sequential in MB's hue, light end cut so low values stay visible
@@ -225,7 +224,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--batch_size', type=int, default=None, help='Api refinement chunk size (bounds IMH memory)')
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--n_bridge', type=int, default=4000, help='bridge-sampling proposal draws')
-    parser.add_argument('--fig_dir', type=str, default=str(FIG_DIR))
+    parser.add_argument('--fig_dir', type=str, default=None, help='extra directory that also receives the figure PDFs')
     parser.add_argument('--dry_run', action='store_true', help='build grid and data, log the plan, write nothing')
     parser.add_argument('--verbosity', type=int, default=1)
     return parser.parse_args()
@@ -833,7 +832,7 @@ class PriorSensitivity:
             f'- NUTS sub-grid (points 0-{n_sub - 1}): all tau_beta x both ffx families x {meta["nuts_sd"]}\n'
             f'- disagreement flag: key |Δmedian| / sd_NUTS > {KEY_Z_MAX} or 90% width ratio outside '
             f'{list(WIDTH_RATIO_RANGE)}\n'
-            f'- figures (fixed before the run): row 1 at {meta["nuts_sd"]} (main: half-Normal, appendix: '
+            f'- figures (fixed before the run): row 1 at {meta["nuts_sd"]} (main: half-Normal, backup: '
             f'Exponential); row 2 at Normal(0, tau_beta = {meta["fig_tau_beta"]:.3g})\n'
             '- changes after the first metabeta run, before any NUTS result: draws per prior 1000 -> 4000; '
             'epil replaced by salamanders (no released Poisson submodel routes epil), with its key predictor '
@@ -1096,7 +1095,7 @@ class PriorSensitivity:
     # paper
 
     def paper(self) -> None:
-        """Numbers and tables of the appendix: Normal slope priors, NUTS-converged unless noted."""
+        """Numbers and tables for the paper: Normal slope priors, NUTS-converged unless noted."""
         if self.cfg.dry_run:
             logger.info('paper: from %s', [self.resultPath(f'_{n}.csv').name for n in self.data])
             return
@@ -1309,14 +1308,14 @@ class PriorSensitivity:
         if self.cfg.dry_run:
             logger.info(
                 'plot: %s from %s',
-                Path(self.cfg.fig_dir) / self.resultPath('.pdf').name,
+                self.resultPath('.pdf'),
                 [self.resultPath(f'_{n}.csv').name for n in names],
             )
             return
         plt.rcParams.update({'font.size': 13, 'axes.titlesize': 15, 'axes.labelsize': 14})
         for suffix, sd_family in FIG_SD_FAMILY.items():
             self._save(self._figure(names, sd_family), suffix)
-        # main text: key-effect row only; the 2 x 3 figures go to the appendix
+        # _main: key-effect row only, a compact version of the 2 x 3 figures
         self._save(self._figure(names, 'halfnormal', rows=1), '_main')
         normal = [n for n in names if self.meta[n]['lf'] == 0]
         if normal and all(self.resultPath(f'_evidence_{n}.csv').exists() for n in normal):
@@ -1460,7 +1459,8 @@ class PriorSensitivity:
 
     def _save(self, fig, suffix: str) -> None:
         path = self.resultPath(f'{suffix}.pdf')
-        for out in (Path(self.cfg.fig_dir) / path.name, path):
+        extra = [] if self.cfg.fig_dir is None else [Path(self.cfg.fig_dir) / path.name]
+        for out in (*extra, path):
             out.parent.mkdir(parents=True, exist_ok=True)
             fig.savefig(out, bbox_inches='tight', pad_inches=0.15, dpi=VECTOR_RASTER_DPI)
             logger.info('saved %s', out)

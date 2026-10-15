@@ -42,7 +42,7 @@ user gets, two are the components of the default one:
 
 Not timed here, and deliberately so: batching several datasets through one forward pass, and
 recomputing the analytical MAP/EB statistics that condition the summarizer instead of reading
-the precomputed ones the batch carries.  Both are one-line appendix statements — the fit is
+the precomputed ones the batch carries.  Both are one-line statements in the paper — the fit is
 data-only, so its cost is checkpoint-independent, and the batched cost of the default pipeline
 is what the oracle benchmark's time column reports.
 
