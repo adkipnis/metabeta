@@ -64,9 +64,13 @@ LAPLACE_METHODS = ('isLaplace', 'rbAttach')            # LaplaceImportanceSample
 # not taken from the Api's random_walk default or LocalMoves', so cached '+moves' refinements
 # keep their meaning when those change.
 MOVES_RW = LocalMoves(n_chains=500, burnin_per_dim=2.0, thin=5, n_inner=4, gate_ess=150.0)
+# '+moves250': the same with the 250 chains of the Api's GPU preset (RANDOM_WALK_DEFAULT['cuda']).
+MOVES_RW_250 = LocalMoves(n_chains=250, burnin_per_dim=2.0, thin=5, n_inner=4, gate_ess=150.0)
 IMH_MOVES = {
     'imhMarginal+moves': ('imhMarginal', MOVES_RW),
     'imhPM+moves': ('imhPM', MOVES_RW),
+    'imhMarginal+moves250': ('imhMarginal', MOVES_RW_250),
+    'imhPM+moves250': ('imhPM', MOVES_RW_250),
 }
 IMH_METHODS = ('imhMarginal', 'imhGlobal', 'imhLaplace', 'imhPM', *IMH_MOVES)   # MetropolisSampler
 SUPPORTED_METHODS = SNIS_METHODS + LAPLACE_METHODS + IMH_METHODS
