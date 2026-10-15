@@ -1,6 +1,6 @@
-"""Posterior quality in the data-poor / degenerate regime (the reviewer's n≪p and n≈p).
+"""Posterior quality in the data-poor / degenerate regime (n≪p and n≈p).
 
-The reviewer asks how the amortized posterior behaves when data are scarce relative to the
+This script asks how the amortized posterior behaves when data are scarce relative to the
 number of parameters, and whether it is still useful there.  In a hierarchical model "n vs p"
 is ambiguous, so we report it under the full range of defensible parameter counts:
 

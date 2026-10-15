@@ -1,6 +1,6 @@
 """Evidence check: is the mean marginal IS weight a usable estimate of log p(D)?
 
-The paper's outlook claims that, because the flow density is normalized and prior and
+The paper claims that, because the flow density is normalized and prior and
 marginal likelihood are evaluated exactly, the mean importance weight over the proposal
 pool is an unbiased estimate of the marginal likelihood (Gaussian outcomes), so Bayes
 factors cost a single batched forward pass. This script tests that claim on the Gaussian
@@ -39,7 +39,7 @@ GLMMs (--family bernoulli/poisson): no closed-form marginal exists, so
 Outputs: {out_dir}/{prefix}{size}_{split}_n{n_ds}.csv (per-dataset rows; prefix '' for Normal,
 '{family}_k{K}_' otherwise), .md (summary tables) and .png (diagnostic figure);
 --summarize-only additionally writes evidence_normal.tex / evidence_discrete.tex (converged
-references only) and evidence_paper.md (the numbers quoted in the appendix).
+references only) and evidence_paper.md (the numbers quoted in the paper).
 
 Run from the repo root:
     uv run python experiments/posthoc/evidence.py --sizes small --n-datasets 32
@@ -762,7 +762,7 @@ _TEX_COLUMNS = (
 
 
 def writeTex(out_dir: Path, split: str, pool_sizes: list[int]) -> Path | None:
-    """Appendix table (tab:ev) over all Normal sizes with a CSV in out_dir."""
+    """LaTeX table over all Normal sizes with a CSV in out_dir."""
     csvs = latestCsvs(out_dir, 'normal', split)
     if not csvs:
         return None
@@ -785,7 +785,7 @@ def writeTex(out_dir: Path, split: str, pool_sizes: list[int]) -> Path | None:
 
 
 def writeTexDiscrete(out_dir: Path, split: str, pool_sizes: list[int]) -> Path | None:
-    """Appendix table (tab:ev_discrete) over the Bernoulli and Poisson sizes in out_dir."""
+    """LaTeX table over the Bernoulli and Poisson sizes in out_dir."""
     blocks = {f: latestCsvs(out_dir, f, split) for f in ('bernoulli', 'poisson')}
     if not any(blocks.values()):
         return None
@@ -822,7 +822,7 @@ def _nearEdge(log_bf: pd.Series, tol: float = 0.2) -> pd.Series:
 
 
 def writePaperStats(out_dir: Path, split: str, pool_sizes: list[int]) -> Path | None:
-    """The numbers the appendix quotes (app:ev), per family and size over converged rows,
+    """The numbers the paper quotes, per family and size over converged rows,
     plus pooled counts; evidence_paper.md."""
     s_min, s_max = min(pool_sizes), max(pool_sizes)
     rows, pooled, frames = {}, {}, {}
@@ -891,7 +891,7 @@ def writePaperStats(out_dir: Path, split: str, pool_sizes: list[int]) -> Path | 
                 'agree IS': categoryAgreement(nested['logbf_is'], nested['logbf_ref']),
             }
     lines = [
-        '# Evidence check: numbers quoted in the appendix (app:ev)',
+        '# Evidence check: numbers quoted in the paper',
         '',
         f'Reference: {REFERENCE_TAG} thinned to {N_REF_DRAWS} draws; rows restricted to '
         'nutsConverged unless marked (all).',

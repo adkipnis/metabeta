@@ -8,6 +8,5 @@ excluded; the paper's d = n_fixed_effects + 1), n_random_effects (intercept incl
 family, family_detail, n_groups (number of grouping factors), source (pdf/code),
 source_ref (verbatim quote anchoring the extraction), confidence.
 
-Referenced in the paper as Appendix "A Survey of Published GLMM Analyses".
 Coverage claim: family in {Gaussian, Bernoulli, Poisson} and d <= 16 and q <= 5
 holds for 82.8% (~83%) of rows.

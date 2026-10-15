@@ -3,7 +3,7 @@ Oracle evaluation of the random-effect correlations only.
 
 The oracle tables (experiments/evaluation/oracle_posterior.py) average recovery and calibration
 over fixed effects, scales, random effects and the residual scale, and exempt the correlation
-parameters (paper: app:met). This script reports those exempted parameters on their own:
+parameters. This script reports those exempted parameters on their own:
 r / NRMSE / ECE / EACE over the lower-triangle correlation pairs, restricted to the datasets
 whose ground-truth correlation matrix is not the identity (q >= 2 and eta_rfx > 0) and — as
 in the oracle tables — to the datasets on which the NUTS reference (``nuts2``) converged.
