@@ -73,8 +73,9 @@ skipped entirely. Per-dataset acceptance rates and a suggested pool size are rep
 `result.safeguards`. If the suggestion exceeds the `n_samples` you requested, rerun with
 the larger value (or pass `refine=False` to keep the raw flow posterior). Where the IMH
 chains mix poorly (minimum bulk ESS below 150), typically because the flow lacks tail
-mass, `sample` follows them with random-walk moves on the same target, which widen
-intervals the IMH alone leaves too narrow (`imh_moves=False` turns this off).
+mass, `sample` warns that intervals may be too narrow. Pass `random_walk=True` to follow
+the IMH on those datasets with random-walk moves on the same target, which widen intervals
+the IMH alone leaves too narrow; `result.safeguards` records where they ran.
 On a MacBook (Apple M3 CPU), the refined posterior with 4,000 draws returns in a fraction of
 a second per dataset for all three outcome families at representative dataset sizes; on a
 GPU the same call takes about a tenth of a second.
