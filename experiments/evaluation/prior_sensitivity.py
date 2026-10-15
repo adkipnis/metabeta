@@ -117,6 +117,7 @@ from metabeta.utils.experiments import DATA_DIR, PREPROCESSED_DATA_DIR, REPO_ROO
 from metabeta.utils.fits import REFERENCE_TAG
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.plot import PALETTE, VECTOR_RASTER_DPI
+from metabeta.utils.posterior_eval import MOVES_RW
 from metabeta.utils.priors import bambiDefaultPriors
 from metabeta.utils.results import Proposal
 from metabeta.utils.sampling import setSeed
@@ -478,8 +479,9 @@ class PriorSensitivity:
                 for method, refine in METHODS.items():
                     setSeed(self.cfg.seed)
                     t0 = time.perf_counter()
+                    rw = {'random_walk': MOVES_RW} if refine else {}  # MB: the '+moves' RW
                     res = api.sample(
-                        data, formula=formula, priors=priors, n_samples=S, refine=refine
+                        data, formula=formula, priors=priors, n_samples=S, refine=refine, **rw
                     )
                     res.proposal.to('cpu')
                     wall = time.perf_counter() - t0
@@ -490,7 +492,7 @@ class PriorSensitivity:
                         'd_corr': p.d_corr,
                         'has_sigma_eps': p.has_sigma_eps,
                         'accept_rate': (res.safeguards or {}).get('accept_rate'),
-                        'moved': (res.safeguards or {}).get('moved'),  # IMH ESS gate
+                        'moved': (res.safeguards or {}).get('random_walk_ran'),
                         'map_z': (res.safeguards or {}).get('map_z'),
                         'route': res.routes[0],
                     }
