@@ -7,9 +7,9 @@ key-effect shift and 90% width ratio, flag) plus the 90% width ratio and |Δmedi
 every global parameter. The Api batches each (ffx family, SD family) block of priors in one
 call, as the prior-grid experiment does. Nothing is written to the experiment's data dirs.
 
-Variants are 'mb' (plain IMH, random_walk=False) or '+'-joined tokens: 'gate' (local moves where
-the IMH min bulk ESS < IMH_ESS_WARN), 'B<x>' (burn-in steps per active global dimension) and
-'K<n>' (IS² draws per group of the moves' target estimate).
+Variants are 'mb' (plain IMH, random_walk=False) or '+'-joined tokens: 'gate' (the '+moves' RW,
+posterior_eval.MOVES_RW: local moves where the IMH min bulk ESS < 150), 'B<x>' (burn-in steps per
+active global dimension) and 'K<n>' (IS² draws per group of the moves' target estimate).
 
     uv run python experiments/posthoc/imh_moves_real.py --variants mb gate gate+K2 --seeds 0 1
     uv run python experiments/posthoc/imh_moves_real.py --stage table
@@ -30,10 +30,10 @@ from metabeta.utils.experiments import REPO_ROOT
 sys.path.insert(0, str(REPO_ROOT / 'experiments' / 'evaluation'))
 from prior_sensitivity import DATASETS, PriorSensitivity  # noqa: E402
 
-from metabeta.models.api import IMH_ESS_WARN, Api  # noqa: E402
-from metabeta.posthoc.metropolis import LocalMoves  # noqa: E402
+from metabeta.models.api import Api  # noqa: E402
 from metabeta.utils.constants import LIKELIHOOD_FAMILIES  # noqa: E402
 from metabeta.utils.dataloader import sliceBatch, toDevice  # noqa: E402
+from metabeta.utils.posterior_eval import MOVES_RW  # noqa: E402
 from metabeta.utils.sampling import setSeed  # noqa: E402
 
 OUT = REPO_ROOT / 'metabeta' / 'outputs' / 'results' / 'imh_moves' / 'prior_grid_slope.csv'
@@ -59,7 +59,7 @@ def variantKwargs(name: str) -> dict:
     if name == 'mb':
         return {'random_walk': False}  # plain IMH
     moves = None
-    gated = LocalMoves(gate_ess=float(IMH_ESS_WARN))
+    gated = MOVES_RW  # the '+moves' RW; tokens override it
     for tok in name.split('+'):
         if tok == 'gate':
             moves = moves or gated
