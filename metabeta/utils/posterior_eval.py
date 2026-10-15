@@ -30,11 +30,10 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from metabeta.models.api import IMH_MOVES_DEFAULT
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler, weightsTag
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
-from metabeta.posthoc.metropolis import IS2_N_INNER, MetropolisSampler
+from metabeta.posthoc.metropolis import IS2_N_INNER, LocalMoves, MetropolisSampler
 from metabeta.utils.dataloader import sliceBatch, toDevice, trimBatchPadding
 from metabeta.utils.device import synchronizeDevice
 from metabeta.utils.evaluation import EvaluationSummary
@@ -60,11 +59,14 @@ FAM_LETTER = {0: 'n', 1: 'b', 2: 'p'}
 # the IMH family returns an equal-weight chain.
 SNIS_METHODS = ('is', 'isFull', 'isMarginal')          # ImportanceSampler
 LAPLACE_METHODS = ('isLaplace', 'rbAttach')            # LaplaceImportanceSampler (GLMM only)
-# '<imh method>+moves': that IMH followed by the Api's default local random-walk moves, on the
-# datasets whose IMH min bulk ESS is below its IMH_ESS_WARN (posthoc/metropolis.py, LocalMoves)
+# '<imh method>+moves': that IMH followed by local random-walk moves on the datasets whose IMH
+# min bulk ESS is below 150 (posthoc/metropolis.py, LocalMoves). Every setting is spelled out,
+# not taken from the Api's random_walk default or LocalMoves', so cached '+moves' refinements
+# keep their meaning when those change.
+MOVES_RW = LocalMoves(n_chains=500, burnin_per_dim=2.0, thin=5, n_inner=4, gate_ess=150.0)
 IMH_MOVES = {
-    'imhMarginal+moves': ('imhMarginal', IMH_MOVES_DEFAULT),
-    'imhPM+moves': ('imhPM', IMH_MOVES_DEFAULT),
+    'imhMarginal+moves': ('imhMarginal', MOVES_RW),
+    'imhPM+moves': ('imhPM', MOVES_RW),
 }
 IMH_METHODS = ('imhMarginal', 'imhGlobal', 'imhLaplace', 'imhPM', *IMH_MOVES)   # MetropolisSampler
 SUPPORTED_METHODS = SNIS_METHODS + LAPLACE_METHODS + IMH_METHODS
