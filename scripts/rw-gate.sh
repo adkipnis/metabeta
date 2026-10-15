@@ -24,7 +24,7 @@ TASK=${SLURM_ARRAY_TASK_ID:-0}
 
 source $HOME/.bashrc
 source $HOME/metabeta/.venv/bin/activate
-cd $HOME/metabeta-rw-gate
+cd $HOME/metabeta
 export PYTHONPATH=$PWD
 
 if [ "$TASK" -ge 24 ]; then
