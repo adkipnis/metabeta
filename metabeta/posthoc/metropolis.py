@@ -118,8 +118,9 @@ its target estimate and (GLMMs) its Laplace factors and IS² rfx draw, so the ch
 exact. `n_chains` chains start at random kept states (re-evaluated with the moves' own
 estimator), burn in for a number of steps that grows with the number of active global
 dimensions, then record every `thin`-th state. With
-`gate_ess` set, only datasets whose IMH min bulk ESS falls below it are moved (the Api's default
-refinement gates at its IMH_ESS_WARN). Supported for mode='marginal' and mode='laplace'.
+`gate_ess` set, only datasets whose IMH min bulk ESS falls below it are moved
+(Api.sample(random_walk=True) gates at its IMH_ESS_WARN). Supported for mode='marginal' and
+mode='laplace'.
 """
 
 import argparse
