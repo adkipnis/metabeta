@@ -217,3 +217,31 @@ def test_newton_backtracking_init_independence():
     )
     assert torch.isfinite(got_far).all()
     assert torch.allclose(got_far, got_cold, atol=0.05)
+
+
+def test_newton_hessian_singular_in_float32():
+    """A Poisson iterate on the η-clip plateau with a group-constant slope column of Z.
+
+    ZᵀWZ = e^10·ZᵀZ is then singular with norm ~1e6, and H's smallest eigenvalue is the vague
+    prior's curvature along its null direction, below the float32 rounding of the sum: the
+    float32-assembled H is indefinite. Real Poisson data (a group-level covariate with a random
+    slope, a warm start far below the counts) crashed the IMH's Cholesky this way.
+    """
+    g = torch.Generator().manual_seed(11)
+    b, m, n, d, q, s = 1, 32, 40, 1, 2, 4
+    X = torch.ones(b, m, n, d)
+    c = torch.rand(b, m, 1, generator=g) * 2.0 + 0.5  # slope covariate, constant per group
+    Z = torch.stack([torch.ones(b, m, n), c.expand(b, m, n)], dim=-1)
+    ffx = torch.full((b, s, d), 12.0)  # η = 12 > POISSON_ETA_CLIP_MAX at the cold start
+    sigma_rfx = torch.full((b, s, q), 20.0)
+    sigma_eps = torch.zeros(b, s)
+    y = torch.ones(b, m, n, 1)
+    mask_n = torch.ones(b, m, n, 1)
+    mask_m = torch.ones(b, m, 1)
+
+    modes, chol_H, _, _, decrement = laplaceRfxModes(
+        ffx, sigma_rfx, sigma_eps, y, X, Z, mask_n, mask_m, likelihood_family=2
+    )
+    assert torch.isfinite(modes).all() and torch.isfinite(decrement).all()
+    diag = chol_H.diagonal(dim1=-2, dim2=-1)
+    assert torch.isfinite(chol_H).all() and (diag > 0).all()
