@@ -189,7 +189,7 @@ class LocalMoves:
     only the datasets whose IMH min bulk ESS over the globals is below it (None: all).
     """
 
-    n_chains: int = 500
+    n_chains: int = 250
     burnin_per_dim: float = 2.0
     thin: int = 5
     n_inner: int = 4
