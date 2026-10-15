@@ -25,7 +25,7 @@ SPEC=${SETS[${SLURM_ARRAY_TASK_ID:-0}]}
 
 source $HOME/.bashrc
 source $HOME/metabeta/.venv/bin/activate
-cd $HOME/metabeta-rw-gate
+cd $HOME/metabeta
 export PYTHONPATH=$PWD
 
 python experiments/posthoc/rw_variants.py --device cuda --sources "${SPEC%%:*}" --sets "${SPEC##*:}" "$@"
