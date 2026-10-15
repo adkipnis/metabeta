@@ -38,7 +38,7 @@ imhPM        : pseudo-marginal IMH (Bernoulli/Poisson only; the GLMM default sin
                under-covered at large/huge acceptance 0.14–0.35). Added 2026-09-25.
 imhMarginal+moves, imhPM+moves : imhMarginal (Normal) / imhPM (Bernoulli/Poisson) followed by
                pseudo-marginal random-walk moves on the datasets whose IMH min bulk ESS is below
-               the Api's IMH_ESS_WARN (posthoc/metropolis.py, LocalMoves), for flow
+               150 (posthoc/metropolis.py, LocalMoves; utils/posterior_eval.py, MOVES_RW), for flow
                under-coverage the IMH cannot fix (it only revisits pool members).
 svgd         : SVGD with per-dim bandwidth + cosine LR decay — opt in with --include-svgd,
                off by default (too slow to be practically useful: ~40s/dataset, and gives
@@ -109,7 +109,6 @@ from metabeta.models.approximator import Approximator
 from metabeta.utils.evaluation import EvaluationSummary
 from metabeta.posthoc.importance import ImportanceSampler, weightsTag
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
-from metabeta.models.api import IMH_MOVES_DEFAULT
 from metabeta.posthoc.metropolis import IS2_N_INNER, MetropolisSampler, suggestPoolSize
 from metabeta.posthoc.warmnuts import WarmNuts, _stackProposals, needsEscalation
 from metabeta.utils.config import ApproximatorConfig
@@ -119,6 +118,7 @@ from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.padding import unpad
 from metabeta.utils.posterior_cache import loadProposalCache
+from metabeta.utils.posterior_eval import MOVES_RW
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.warmfit import cachePath, loadFit, saveFit
 
@@ -136,8 +136,8 @@ IMH_CONDITIONS = {
     'imhGlobal': ('global', 0, None),
     'imhLaplace': ('laplace', 0, None),
     'imhPM': ('laplace', IS2_N_INNER, None),
-    'imhMarginal+moves': ('marginal', 0, IMH_MOVES_DEFAULT),
-    'imhPM+moves': ('laplace', IS2_N_INNER, IMH_MOVES_DEFAULT),
+    'imhMarginal+moves': ('marginal', 0, MOVES_RW),
+    'imhPM+moves': ('laplace', IS2_N_INNER, MOVES_RW),
 }
 
 
