@@ -93,6 +93,8 @@ IMH_N_CHAINS = 4
 IMH_BURNIN = 25
 IMH_ACCEPT_WARN = 0.1
 IMH_ESS_WARN = 150
+# below it the random-walk moves narrow the gap but may not close it: exact MCMC is recommended
+IMH_ESS_NUTS = 10
 # sample(random_walk=True): random-walk moves after the IMH on the datasets IMH_ESS_WARN flags
 RANDOM_WALK_DEFAULT = LocalMoves(gate_ess=IMH_ESS_WARN)
 
@@ -383,8 +385,9 @@ class Api:
         not fix; datasets whose minimum bulk ESS over the global parameters falls below
         ``IMH_ESS_WARN`` are flagged with a warning.  ``random_walk=True`` continues the IMH
         on the flagged datasets with pseudo-marginal random-walk moves on the same target
-        (posthoc/metropolis.py, ``LocalMoves``; ``RANDOM_WALK_DEFAULT``); a ``LocalMoves``
-        instance sets them, and its own gate, explicitly.  Per dataset, the safeguards record
+        (posthoc/metropolis.py, ``LocalMoves``; ``RANDOM_WALK_DEFAULT``); below
+        ``IMH_ESS_NUTS`` they may not repair it fully, and exact MCMC is recommended there.  A
+        ``LocalMoves`` instance sets them, and its own gate, explicitly.  Per dataset, the safeguards record
         the flag ('ess_flag'), whether the moves ran ('random_walk_ran') and their acceptance
         ('random_walk_accept', NaN where they did not run).
 
@@ -916,22 +919,27 @@ class Api:
         if ess_flag.any():
             flagged = np.flatnonzero(ess_flag)
             e_vals = ', '.join(f'{ess_min[i]:.0f}' for i in flagged)
-            if ran[flagged].all():
-                advice = (
-                    'Random-walk moves on the same target ran there; check against exact MCMC '
-                    '(e.g. NUTS warm-started from this posterior) where it matters.'
+            todo, low = flagged[~ran[flagged]], flagged[ess_min[flagged] < IMH_ESS_NUTS]
+            advice = ''
+            if todo.size:
+                advice += (
+                    f'Re-run with random_walk=True to continue the IMH on {todo.tolist()} with '
+                    'random-walk moves on the same target, or use exact MCMC (e.g. NUTS '
+                    'warm-started from this posterior). '
                 )
-            else:
-                advice = (
-                    'Re-run with random_walk=True to continue the IMH with random-walk moves on '
-                    'the same target there, or use exact MCMC (e.g. NUTS warm-started from this '
-                    'posterior).'
+            if ran.any():
+                advice += f'Random-walk moves ran for {np.flatnonzero(ran).tolist()}. '
+            if low.size:
+                advice += (
+                    f'For {low.tolist()} (ESS < {IMH_ESS_NUTS:g}) random-walk moves narrow the '
+                    'gap but may not close it: check against exact MCMC there.'
                 )
             warnings.warn(
                 f'IMH effective sample size is low for dataset(s) {flagged.tolist()} '
                 f'(min bulk ESS over global parameters {e_vals} < {IMH_ESS_WARN:g}): the '
                 'chains revisit few distinct states, and the refined sample can be too narrow '
-                f'where the flow under-covers the posterior, which more draws do not fix. {advice}',
+                f'where the flow under-covers the posterior, which more draws do not fix. '
+                f'{advice.strip()}',
                 stacklevel=4,
             )
         return proposal, {
