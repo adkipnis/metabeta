@@ -36,18 +36,16 @@ GLMMs (--family bernoulli/poisson): no closed-form marginal exists, so
                pseudo-marginal IMH vs NUTS — does the pseudo-marginal chain target the
                exact posterior where the Laplace chain does not?
 
---t-only adds the estimator Api.sample(evidence=True) ships to an existing CSV, without
-rerunning NUTS or a bridge: per row (and per nested reduced fit), flow + IMH draws as above
-(IMH only: no random-walk moves), all on --device, then the IS evidence from a Student-t fitted
-to them (metabeta/posthoc/evidence.py, tEvidence), on the standardized scale like the bridges.
-Columns logev_t, k_t, eff_t, logev_t_red, k_t_red, logbf_t go to t/{stem}[_shard].csv and are
-joined onto {stem}.csv by idx, its own columns unchanged.
+--t-only adds the estimator of Api.sample(evidence=True) to an existing CSV without NUTS or
+bridges: flow + IMH draws as above (no random-walk moves) on --device, then IS from a Student-t
+fitted to them (posthoc/evidence.tEvidence), per row and nested reduced fit. Its T_COLUMNS go to
+t/{stem}[_shard].csv; --summarize-only joins them onto {stem}.csv by idx.
 
 Outputs: {out_dir}/{prefix}{size}_{split}_n{n_ds}.csv (per-dataset rows; prefix '' for Normal,
 '{family}_k{K}_' otherwise), .md (summary tables) and .png (diagnostic figure);
 --summarize-only additionally writes evidence_normal.tex / evidence_discrete.tex (converged
 references only) and evidence_paper.md (the numbers quoted in the paper), with the t estimator
-next to the flow pool where the CSVs carry it.
+where the CSVs carry it.
 
 Run from the repo root:
     uv run python experiments/posthoc/evidence.py --sizes small --n-datasets 32
@@ -58,7 +56,7 @@ Run from the repo root:
     # parallel shards (one process each), then merge + summarize
     uv run python experiments/posthoc/evidence.py --family bernoulli --sizes small --n-datasets 512 --shard 3 --n-shards 16
     uv run python experiments/posthoc/evidence.py --family bernoulli --sizes small --n-datasets 512 --summarize-only
-    # t estimator on the rows of an existing CSV (sharded alike), then joined by --summarize-only
+    # t estimator on the rows of an existing CSV (sharded alike), joined by --summarize-only
     uv run python experiments/posthoc/evidence.py --sizes small --n-datasets 512 --t-only --device cuda --shard 0 --n-shards 4
 """
 
@@ -540,9 +538,9 @@ def fitDataset(
 
 def tFit(
     model: Approximator, item: dict[str, np.ndarray], args: argparse.Namespace, seed: int
-) -> dict:
-    """fitDataset's flow + IMH draws on --device, then the t-proposal evidence on them with as
-    many t draws as the flow pool; log-evidence on the standardized scale of the bridges."""
+) -> dict[str, float]:
+    """tEvidence's log_ev, k and eff on fitDataset's flow + IMH draws, run on --device, with as
+    many t draws as the flow pool; log_ev on the standardized scale of the bridges."""
     lf = FAMILIES[args.family]
     s_max = max(args.pool_sizes)
     batch = toDevice(collateGrouped([item]), args.device)
@@ -550,13 +548,12 @@ def tFit(
     torch.manual_seed(seed)
     with torch.no_grad():
         proposal = model.estimate(batch, n_samples=s_max)
-    p_imh, accept = runImh(proposal, batch64, lf, args.n_inner if lf != 0 else 0)
+    p_imh, _ = runImh(proposal, batch64, lf, args.n_inner if lf != 0 else 0)
     gen = torch.Generator(device=args.device).manual_seed(seed)
     res = tEvidence(batch64, p_imh, lf, s_max, gen)
-    log_ev = float(res['log_ev'][0])
     if p_imh.has_sigma_eps:  # tEvidence moved it to the raw response scale
-        log_ev -= float(logJacobianStandardization(batch64)[0])
-    return {'logev': log_ev, 'k': float(res['k'][0]), 'eff': float(res['eff'][0]), 'accept': accept}
+        res['log_ev'] -= logJacobianStandardization(batch64).cpu().numpy()
+    return {k: float(v[0]) for k, v in res.items()}
 
 
 def jeffreys(log_bf: float) -> float:
@@ -878,6 +875,23 @@ def _nearEdge(log_bf: pd.Series, tol: float = 0.2) -> pd.Series:
     )
 
 
+def _nestedStats(nested: pd.DataFrame, logbf: str, k: str, k_red: str, tag: str) -> dict:
+    """Jeffreys agreement of one estimator's ln BF with the reference, and its disagreements
+    flagged by k̂ > 0.7 in the full or the reduced fit (fullk: the full fit only) or with a
+    reference ln BF near a category edge."""
+    ca, cb = nested[logbf].map(jeffreys), nested['logbf_ref'].map(jeffreys)
+    miss = ~((ca == cb) & ca.notna() & cb.notna())
+    full_k, edge = nested[k] > 0.7, _nearEdge(nested['logbf_ref'])
+    flag = full_k | (nested[k_red] > 0.7)
+    return {
+        f'agree {tag}': 1 - miss.mean(),
+        f'med |ΔlnBF| {tag}': (nested[logbf] - nested['logbf_ref']).abs().median(),
+        f'#disagree {tag}': int(miss.sum()),
+        f'#disagree {tag} flagged|edge': int((miss & (flag | edge)).sum()),
+        f'#disagree {tag} fullk|edge': int((miss & (full_k | edge)).sum()),
+    }
+
+
 def _pooledAgreement(frames: list[pd.DataFrame]) -> dict:
     """Nested Jeffreys agreement over the nested rows of several CSVs; t where all carry it."""
     nested = pd.concat([nestedRows(df) for df in frames])
@@ -933,34 +947,13 @@ def writePaperStats(out_dir: Path, split: str, pool_sizes: list[int]) -> Path | 
                     '#|Δt|>1 & k_t>0.7': int(((d_t > 1) & (k_t > 0.7)).sum()),
                 }
             if len(nested):
-                ca, cb = nested['logbf_is'].map(jeffreys), nested['logbf_ref'].map(jeffreys)
-                miss = ~((ca == cb) & ca.notna() & cb.notna())
-                full_k = nested[f'k_s{s_max}'] > 0.7
-                flag = full_k | (nested['k_red'] > 0.7)
-                edge = _nearEdge(nested['logbf_ref'])
-                r |= {
-                    'nested': len(nested),
-                    'agree IS': 1 - miss.mean(),
-                    'agree bridgeImh': categoryAgreement(
-                        nested['logbf_ref_imh'], nested['logbf_ref']
-                    ),
-                    'med |ΔlnBF|': (nested['logbf_is'] - nested['logbf_ref']).abs().median(),
-                    '#disagree': int(miss.sum()),
-                    '#disagree flagged|edge': int((miss & (flag | edge)).sum()),
-                    '#disagree fullk|edge': int((miss & (full_k | edge)).sum()),
-                }
+                r['nested'] = len(nested)
+                r['agree bridgeImh'] = categoryAgreement(
+                    nested['logbf_ref_imh'], nested['logbf_ref']
+                )
+                r |= _nestedStats(nested, 'logbf_is', f'k_s{s_max}', 'k_red', 'IS')
                 if 'logbf_t' in nested:
-                    ct = nested['logbf_t'].map(jeffreys)
-                    miss_t = ~((ct == cb) & ct.notna() & cb.notna())
-                    full_kt = nested['k_t'] > 0.7
-                    flag_t = full_kt | (nested['k_t_red'] > 0.7)
-                    r |= {
-                        'agree t': 1 - miss_t.mean(),
-                        'med |ΔlnBF| t': (nested['logbf_t'] - nested['logbf_ref']).abs().median(),
-                        '#disagree t': int(miss_t.sum()),
-                        '#disagree t flagged|edge': int((miss_t & (flag_t | edge)).sum()),
-                        '#disagree t fullk|edge': int((miss_t & (full_kt | edge)).sum()),
-                    }
+                    r |= _nestedStats(nested, 'logbf_t', 'k_t', 'k_t_red', 't')
             rows[f'{family} {size}'] = r
         fam = [v for (f, _), v in frames.items() if f == family]
         if not fam:
@@ -1130,52 +1123,33 @@ def runSize(size: str, args: argparse.Namespace) -> None:
 
 
 def runSizeT(size: str, args: argparse.Namespace) -> None:
-    """--t-only: tFit on the rows of the size's CSV (and the reduced model where the CSV has a
-    nested reference), with the seeds of runSize; written to t/ and joined by tJoin."""
-    seed = BEST_SEEDS[(args.family, size)]
-    ckpt = _ckpt_dir(args.family, size, seed) / f'{args.prefix}.pt'
+    """--t-only: tFit on the rows of the size's CSV, and on the reduced model where the CSV has a
+    nested reference, with runSize's seeds; written to t/ for tJoin."""
+    ckpt = _ckpt_dir(args.family, size, BEST_SEEDS[(args.family, size)]) / f'{args.prefix}.pt'
     col = Collection(DATA_DIR / f'{size}-{args.family[0]}-sampled' / f'{args.split}.npz')
     stem = f'{stemPrefix(args)}{size}_{args.split}_n{min(args.n_datasets, len(col))}'
-    ref = pd.read_csv(args.out_dir / f'{stem}.csv').set_index('idx')
-    nested = set(nestedRows(ref.reset_index())['idx'])
+    ref = pd.read_csv(args.out_dir / f'{stem}.csv')
     model, _ = loadModel(ckpt)
     model.to(args.device)
-    print(f'\n# t-only: {stem}, {len(ref)} rows ({len(nested)} nested), shard {args.shard}')
-
     rows = []
     t0 = time.perf_counter()
-    for i in ref.index[ref.index % args.n_shards == args.shard]:
-        t_i = time.perf_counter()
-        i = int(i)
+    for r in ref[ref['idx'] % args.n_shards == args.shard].itertuples():
+        i = int(r.idx)
         fit = tFit(model, col[i], args, seed=args.seed * 100_003 + i)
-        row = {'idx': i, 'logev_t': fit['logev'], 'k_t': fit['k'], 'eff_t': fit['eff']}
-        msg = ''
-        if i in nested:
+        row = {'idx': i, 'logev_t': fit['log_ev'], 'k_t': fit['k'], 'eff_t': fit['eff']}
+        msg = f'ds={i:3d}  t Δ={fit["log_ev"] - r.logev_bridge_nuts:+.3f}  k={fit["k"]:.2f}'
+        if pd.notna(r.logbf_ref):
             red = tFit(model, reducedItem(col[i]), args, seed=args.seed * 100_003 + i + 50_000)
-            row |= {
-                'logev_t_red': red['logev'],
-                'k_t_red': red['k'],
-                'logbf_t': fit['logev'] - red['logev'],
-            }
-            msg = f'  lnBF ref={ref.at[i, "logbf_ref"]:+.2f} t={row["logbf_t"]:+.2f} k_red={red["k"]:.2f}'
+            row |= {'logev_t_red': red['log_ev'], 'k_t_red': red['k']}
+            row['logbf_t'] = fit['log_ev'] - red['log_ev']
+            msg += f'  lnBF ref={r.logbf_ref:+.2f} t={row["logbf_t"]:+.2f}'
         rows.append(row)
-        print(
-            f'ds={i:3d}  t Δ={fit["logev"] - ref.at[i, "logev_bridge_nuts"]:+.3f}  k={fit["k"]:.2f}  '
-            f'acc={fit["accept"]:.2f}{msg}  [{time.perf_counter() - t_i:.1f}s]',
-            flush=True,
-        )
-
-    t_dir = args.out_dir / 't'
-    t_dir.mkdir(parents=True, exist_ok=True)
-    df = pd.DataFrame(rows, columns=['idx', *T_COLUMNS])
-    if args.n_shards > 1:
-        path = t_dir / f'{stem}_shard{args.shard}of{args.n_shards}.csv'
-        df.to_csv(path, index=False)
-        print(f'[saved] {path}  ({time.perf_counter() - t0:.0f}s)')
-        return
-    df.to_csv(t_dir / f'{stem}.csv', index=False)
-    tJoin(args.out_dir, stem)
-    print(f'[saved] {t_dir / stem}.csv, joined  ({time.perf_counter() - t0:.0f}s)')
+        print(msg, flush=True)
+    shard = '' if args.n_shards == 1 else f'_shard{args.shard}of{args.n_shards}'
+    path = args.out_dir / 't' / f'{stem}{shard}.csv'
+    path.parent.mkdir(exist_ok=True)
+    pd.DataFrame(rows, columns=['idx', *T_COLUMNS]).to_csv(path, index=False)
+    print(f'[saved] {path}  ({time.perf_counter() - t0:.0f}s)')
 
 
 def tJoin(out_dir: Path, stem: str) -> None:
@@ -1193,10 +1167,9 @@ def tJoin(out_dir: Path, stem: str) -> None:
     print(f'[joined] {t_path} -> {path.name}')
 
 
-def mergeShards(size: str, args: argparse.Namespace, directory: Path | None = None) -> None:
-    """Concatenate complete sets of shard CSVs in directory (default out_dir) into their
-    unsharded CSV there (incomplete: skipped)."""
-    directory = directory or args.out_dir
+def mergeShards(size: str, args: argparse.Namespace, directory: Path) -> None:
+    """Concatenate complete sets of shard CSVs in directory into their unsharded CSV there
+    (incomplete: skipped)."""
     shards: dict[tuple[str, int], list[Path]] = {}
     for path in directory.glob(f'{stemPrefix(args)}{size}_{args.split}_n*_shard*of*.csv'):
         base, tag = path.stem.rsplit('_shard', 1)
@@ -1212,7 +1185,7 @@ def mergeShards(size: str, args: argparse.Namespace, directory: Path | None = No
 
 
 def resummarize(size: str, args: argparse.Namespace) -> None:
-    mergeShards(size, args)
+    mergeShards(size, args, args.out_dir)
     mergeShards(size, args, args.out_dir / 't')
     paths = sorted(
         p
