@@ -38,6 +38,7 @@ from metabeta.utils.dataloader import (
     toDevice,
     trimBatchPadding,
 )
+from metabeta.utils.psis import psislw
 from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.utils.api import (
     JOINT_CHECKPOINT_VERSION,
@@ -416,7 +417,8 @@ class Api:
         response scale in ``RouterResult.evidence``; the log Bayes factor between two models of
         the same data is the difference of their ``log_evidence``.  It costs one more likelihood
         pass (posthoc/evidence.py), needs ``n_samples >= MIN_SAFEGUARD_SAMPLES`` and warns where
-        PSIS k̂ exceeds ``k_threshold``.
+        the PSIS k̂ of that pass or, with refinement, of the flow pool's weights exceeds
+        ``k_threshold``.
         """
 
         method = {True: 'imh', False: None}.get(refine, refine)
@@ -457,11 +459,15 @@ class Api:
                 k_threshold=k_threshold,
                 n_samples=n_samples,
                 moves=moves,
+                evidence=evidence,
             )
+        log_ev = None
+        if evidence:
+            pool_k = safeguards['psis_k'] if safeguards else None
+            log_ev = self._evidence(proposal, batch, k_threshold=k_threshold, pool_k=pool_k)
         if stats is not None and n_samples >= MIN_SAFEGUARD_SAMPLES:
             map_check = self._mapConsistency(proposal, stats, batch, threshold=map_z_threshold)
             safeguards = {**(safeguards or {}), **map_check}
-        log_ev = self._evidence(proposal, batch, k_threshold=k_threshold) if evidence else None
         diags = self._computeDiagnostics(proposal, batch) if diagnostics else None
         self._rescaleProposal(proposal, batch)
         prior_params: dict[str, np.ndarray] = {
@@ -754,6 +760,7 @@ class Api:
         k_threshold: float,
         n_samples: int,
         moves: LocalMoves | None = None,
+        evidence: bool = False,
     ) -> tuple[Proposal, dict[str, Any]]:
         """Refine the flow posterior ('imh' or 'is') and run the reliability checks.
 
@@ -768,6 +775,8 @@ class Api:
         below ``IMH_ESS_WARN`` triggers a warning.  The post-burn-in
         draws are trimmed to exactly ``n_samples``.  ``moves`` (``LocalMoves``) runs random-walk
         moves where its gate says; the ESS stays the IMH chains' (the gate's statistic).
+        ``evidence`` also reports the PSIS k̂ of the pool's weights ('psis_k', which 'is' always
+        reports), for the evidence check.
 
         'is' applies self-normalized importance sampling with PSIS smoothing; datasets
         with k̂ > ``k_threshold`` fall back to uniform weights (the raw flow globals, with
@@ -780,7 +789,9 @@ class Api:
         """
         lf = int(batch['likelihood_family'].flatten()[0].item())
         if method == 'imh':
-            return self._refineIMH(proposal, batch, lf=lf, n_samples=n_samples, moves=moves)
+            return self._refineIMH(
+                proposal, batch, lf=lf, n_samples=n_samples, moves=moves, evidence=evidence
+            )
 
         def _refineChunk(chunk_proposal: Proposal, chunk: dict[str, torch.Tensor]) -> Proposal:
             if lf == 0:
@@ -857,10 +868,12 @@ class Api:
         lf: int,
         n_samples: int,
         moves: LocalMoves | None = None,
+        evidence: bool = False,
     ) -> tuple[Proposal, dict[str, Any]]:
         """IMH-refine the flow posterior; see ``_refineAndCheck`` for the contract."""
         n_steps = proposal.n_samples // IMH_N_CHAINS
         move_diags: list[dict] = []
+        pool_k: list[np.ndarray] = []
 
         def _imhChunk(
             chunk_proposal: Proposal, chunk: dict[str, torch.Tensor]
@@ -879,6 +892,8 @@ class Api:
             refined, diag = sampler(chunk_proposal)
             if moves is not None:
                 move_diags.append(diag)
+            if evidence:
+                pool_k.append(psislw(diag['log_w'].detach().double().cpu().numpy())[1])
             return refined, diag['accept_rate']
 
         B = proposal.samples_g.shape[0]
@@ -973,7 +988,7 @@ class Api:
             'ess_flag': ess_flag,
             'random_walk_ran': ran,
             'random_walk_accept': rw_accept.numpy(),
-        }
+        } | ({'psis_k': np.concatenate(pool_k)} if evidence else {})
 
     def _mapConsistency(
         self,
@@ -1008,9 +1023,19 @@ class Api:
         }
 
     def _evidence(
-        self, proposal: Proposal, batch: dict[str, torch.Tensor], *, k_threshold: float
+        self,
+        proposal: Proposal,
+        batch: dict[str, torch.Tensor],
+        *,
+        k_threshold: float,
+        pool_k: np.ndarray | None,
     ) -> dict[str, Any]:
-        """log p(y) per dataset from the unrescaled posterior, chunked like the refinement."""
+        """log p(y) per dataset from the unrescaled posterior, chunked like the refinement.
+
+        A dataset is flagged where the PSIS k̂ of the t pass or of the flow pool's weights (pool_k,
+        None without refinement) exceeds k_threshold: the t is fitted to draws that inherit the
+        pool's gaps, which the t pass's own k̂ can miss.
+        """
         lf = int(batch['likelihood_family'].flatten()[0].item())
         B = proposal.samples_g.shape[0]
         chunk_size = self.batch_size or B
@@ -1023,20 +1048,23 @@ class Api:
         log_ev, psis_k, eff = (
             np.concatenate([p[k] for p in parts]) for k in ('log_ev', 'k', 'eff')
         )
-        flag = psis_k > k_threshold
+        k_max = psis_k if pool_k is None else np.maximum(psis_k, pool_k)
+        flag = k_max > k_threshold
         if flag.any():
             flagged = np.flatnonzero(flag)
-            k_vals = ', '.join(f'{psis_k[i]:.2f}' for i in flagged)
+            k_vals = ', '.join(f'{k_max[i]:.2f}' for i in flagged)
             warnings.warn(
                 f'Evidence reliability check failed for dataset(s) {flagged.tolist()} '
-                f'(PSIS k̂ = {k_vals} > {k_threshold:g}): the log-evidence and any Bayes factor '
-                'built on it may be inaccurate. Treat those values with caution and consider '
-                'bridge sampling on exact MCMC (e.g. NUTS) draws instead.',
+                f'(PSIS k̂ of the evidence pass or the flow pool = {k_vals} > {k_threshold:g}): '
+                'the log-evidence and any Bayes factor built on it may be inaccurate. Treat '
+                'those values with caution and consider bridge sampling on exact MCMC (e.g. NUTS) '
+                'draws instead.',
                 stacklevel=3,
             )
         return {
             'log_evidence': log_ev,
             'psis_k': psis_k,
+            'pool_psis_k': pool_k,
             'efficiency': eff,
             'psis_k_threshold': k_threshold,
             'psis_flag': flag,

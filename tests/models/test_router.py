@@ -1295,6 +1295,33 @@ def test_router_evidence_is_opt_in_and_flags_k_hat(tmp_path: Path):
         router.sample(batch, n_samples=8, evidence=True)
 
 
+def test_router_evidence_flags_the_flow_pool_k_hat(tmp_path: Path):
+    import metabeta.models.api as api_module
+
+    joint_path = tmp_path / 'joint.pt'
+    _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2, analytical_refinement='light')
+    router = Api(joint_path, warmup=False)
+    batch = _glmm_batch(d=4, q=2)
+    for refine in ('imh', 'is'):
+        ev = router.sample(batch, n_samples=64, refine=refine, evidence=True).evidence
+        assert ev['pool_psis_k'].shape == (1,)
+    ev = router.sample(batch, n_samples=64, refine=False, evidence=True).evidence
+    assert ev['pool_psis_k'] is None
+
+    # a pool k-hat above the threshold flags the evidence however good the t pass looks
+    def badPool(log_w: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        return log_w, np.full(log_w.shape[:-1], 2.0)
+
+    t_ok = {'log_ev': np.zeros(1), 'k': np.zeros(1), 'eff': np.ones(1)}
+    with (
+        mock.patch.object(api_module, 'psislw', badPool),
+        mock.patch.object(api_module, 'tEvidence', return_value=t_ok),
+        pytest.warns(UserWarning, match='Evidence reliability check failed'),
+    ):
+        ev = router.sample(batch, n_samples=64, evidence=True).evidence
+    assert ev['psis_flag'].all() and ev['psis_k'][0] == 0.0 and ev['pool_psis_k'][0] == 2.0
+
+
 def test_estimate_without_local_rejects_glmm_without_analytical_stats(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2)  # no analytical context

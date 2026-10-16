@@ -715,6 +715,7 @@ class MetropolisSampler:
             Post-burnin samples; n_chains * (n_steps - burnin) samples per dataset.
         diagnostics : dict
             'accept_rate' (b, n_chains) — fraction of proposals accepted post-burnin.
+            'log_w' (b, n_chains * n_steps) — the pool's log importance weights under the target.
             'suggested_n_samples' (b,) — advisory pool size reaching the
             sweep-calibrated effective-draw target at the measured acceptance
             (omitted when n_eff_target is None). Inference itself always runs at
@@ -786,7 +787,7 @@ class MetropolisSampler:
             )
         t1 = time.perf_counter()
         out.tpd = (proposal.tpd or 0.0) + (t1 - t0)
-        diagnostics = {'accept_rate': accept_rate, **move_diag}
+        diagnostics = {'accept_rate': accept_rate, 'log_w': log_w, **move_diag}
         if self.n_eff_target is not None:
             diagnostics['suggested_n_samples'] = suggestPoolSize(accept_rate, self.n_eff_target)
         return out, diagnostics
