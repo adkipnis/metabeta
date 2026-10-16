@@ -1,11 +1,7 @@
 #!/bin/bash
-# Build the pre-warmed PyTensor cache of one likelihood family for scripts/fit-ref.sh --warm.
-#
-# Usage (submit node):  sbatch scripts/warm-cache.sh --family n
-# Output:               ~/pytensor_cache_{family}.tar  (pass as --warm to fit-ref.sh)
-#
-# Runs scripts/warm_cache.py on small-{family}-sampled inside the campaign container with an
-# empty node-local compile directory and tars the result.
+# Tar the PyTensor compile directory of scripts/warm_cache.py on small-{family}-sampled to
+# ~/pytensor_cache_{family}.tar, for fit-ref.sh --warm:
+#   sbatch scripts/warm-cache.sh --family n
 
 #SBATCH --job-name=warm-cache
 #SBATCH --output=logs/warm/%j.out
