@@ -1271,6 +1271,38 @@ def test_router_random_walk_is_opt_in(tmp_path: Path):
             router.sample(batch, n_samples=64, refine=refine, random_walk=True)
 
 
+def test_router_evidence_is_opt_in_and_flags_k_hat(tmp_path: Path, monkeypatch):
+    import metabeta.models.api as api_module
+
+    joint_path = tmp_path / 'joint.pt'
+    _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2, analytical_refinement='light')
+    router = Api(joint_path, warmup=False)
+    batch = _glmm_batch(d=4, q=2)
+    calls: list[int] = []
+    t_evidence = api_module.tEvidence
+
+    def _counting(*args, **kwargs):
+        calls.append(1)
+        return t_evidence(*args, **kwargs)
+
+    monkeypatch.setattr(api_module, 'tEvidence', _counting)
+
+    assert router.sample(batch, n_samples=64).evidence is None
+    assert not calls  # no t fit unless asked for
+
+    ev = router.sample(batch, n_samples=64, evidence=True).evidence
+    assert len(calls) == 1
+    assert ev['log_evidence'].shape == ev['psis_k'].shape == ev['psis_flag'].shape == (1,)
+    assert np.isfinite(ev['log_evidence']).all()
+
+    with pytest.warns(UserWarning, match='Evidence reliability check failed'):
+        ev = router.sample(batch, n_samples=64, evidence=True, k_threshold=-np.inf).evidence
+    assert ev['psis_flag'].all()
+
+    with pytest.raises(ValueError, match='evidence=True needs n_samples'):
+        router.sample(batch, n_samples=8, evidence=True)
+
+
 def test_estimate_without_local_rejects_glmm_without_analytical_stats(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2)  # no analytical context

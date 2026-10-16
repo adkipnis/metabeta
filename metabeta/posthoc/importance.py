@@ -35,7 +35,8 @@ likelihood, mean_s exp(log_w_s) is an unbiased estimate of p(D) (exact for Norma
 marginal=True, Laplace-approximated in posthoc/laplace_glmm.py). It lives in the standardized
 data space, so it must be computed on *unrescaled* batches/proposals;
 `preprocessing.logJacobianStandardization` moves it to the raw response scale. Validated
-against bridge sampling in experiments/posthoc/evidence.py.
+against bridge sampling in experiments/posthoc/evidence.py. Api.sample(evidence=True) uses the
+t-proposal estimator of posthoc/evidence.py instead, which does not inherit the flow's coverage.
 
 Resample-move (ResampleMoveSampler, added for the 2026-07 post-log-det-fix ablation):
 systematic resampling on the PSIS-smoothed marginal weights followed by K vectorized

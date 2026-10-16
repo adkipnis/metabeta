@@ -113,6 +113,7 @@ from tabulate import tabulate
 
 from metabeta.evaluation.predictive import getPosteriorPredictive, psisLooNLL
 from metabeta.models.api import IMH_ACCEPT_WARN, IMH_ESS_WARN, PSIS_K_THRESHOLD
+from metabeta.posthoc.evidence import T_N_INNER, tEvidence
 from metabeta.posthoc.metropolis import IS2_N_INNER
 from metabeta.utils.api import coercePriors, parseFormula, resolveLikelihoodFamily
 from metabeta.utils.constants import FFX_FAMILIES, LIKELIHOOD_FAMILIES, SIGMA_FAMILIES
@@ -1088,11 +1089,11 @@ class PriorSensitivity:
     def evidence(self) -> None:
         """IS log p(D) on all points, batched over each Api call's priors on --device: from a t
         proposal fitted to the MB draws (IMH + random walk; the reported estimator,
-        evidence.tEvidence, its wall time per call recorded) and from the flow pool (MB0, one
-        forward pass; evidence.poolEvidence); GLMMs use the unbiased IS² weights. The bridge
-        stage's reference is merged in."""
+        metabeta.posthoc.evidence.tEvidence, its wall time per call recorded) and from the flow
+        pool (MB0, one forward pass; evidence.poolEvidence); GLMMs use the unbiased IS² weights.
+        The bridge stage's reference is merged in."""
         sys.path.insert(0, str(REPO_ROOT / 'experiments' / 'posthoc'))
-        from evidence import poolEvidence, tEvidence, toDouble
+        from evidence import poolEvidence, toDouble
 
         S = self.cfg.n_samples
         for name in self.data:
@@ -1377,9 +1378,6 @@ class PriorSensitivity:
                     + [r[c] - ref[c].item() for c in ('logev_t', 'logev_is', 'logev_bridge')]
                     + [r.k_t]
                 )
-        sys.path.insert(0, str(REPO_ROOT / 'experiments' / 'posthoc'))
-        from evidence import T_N_INNER
-
         weights = 'IS' if meta['lf'] == 0 else f'IS², K = {T_N_INNER} (t) / {IS2_N_INNER} (pool)'
         return [
             f'## {PAPER_NAMES[name][0]} evidence ({weights} vs bridge on the NUTS reference draws; '
