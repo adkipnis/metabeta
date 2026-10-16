@@ -83,7 +83,12 @@ from metabeta.posthoc.laplace_glmm import (  # noqa: E402
     LaplaceImportanceSampler,
     logMarginalLikelihoodAGQ,
 )
-from metabeta.posthoc.metropolis import IS2_N_INNER, MetropolisSampler  # noqa: E402
+from metabeta.posthoc.metropolis import (  # noqa: E402
+    IS2_N_INNER,
+    LocalMoves,
+    MetropolisSampler,
+    bulkEss,
+)
 from metabeta.utils.config import ApproximatorConfig  # noqa: E402
 from metabeta.utils.constants import hasSigmaEps  # noqa: E402
 from metabeta.utils.psis import psislw  # noqa: E402
@@ -91,6 +96,7 @@ from metabeta.utils.dataloader import Collection, collateGrouped, toDevice  # no
 from metabeta.utils.evaluation import NUTS_DIAG_KEYS, nutsConverged  # noqa: E402
 from metabeta.utils.fits import REFERENCE_TAG, loadFits  # noqa: E402
 from metabeta.utils.families import logProbCorrRfx  # noqa: E402
+from metabeta.utils.posterior_eval import MOVES_RW  # noqa: E402
 from metabeta.utils.preprocessing import logJacobianStandardization  # noqa: E402
 from metabeta.utils.regularization import (  # noqa: E402
     corrToLower,
@@ -119,7 +125,9 @@ ANALYTICAL_STATS = (
 COLOR = '#3B6FB6'
 # CSVs written while the legacy 'z' prior coordinates were still reported carry an `_r` infix
 LEGACY_COLUMNS = {'logev_is_r_': 'logev_is_', 'k_r_': 'k_', 'eff_r_': 'eff_', '_is_r': '_is'}
-T_COLUMNS = ('logev_t', 'k_t', 'eff_t', 'logev_t_red', 'k_t_red', 'logbf_t')  # --t-only
+# --t-only; ess/moved: runImh's min IMH bulk ESS and whether the moves ran
+T_COLUMNS = ('logev_t', 'k_t', 'eff_t', 'logev_t_red', 'k_t_red', 'logbf_t')
+T_COLUMNS += ('ess_t', 'moved_t', 'ess_t_red', 'moved_t_red')
 
 
 # fmt: off
@@ -142,6 +150,7 @@ def setup() -> argparse.Namespace:
     p.add_argument('--out-dir', type=Path, default=experimentResultsPath('evidence'))
     p.add_argument('--summarize-only', action='store_true', help='regenerate md/png/tex from existing CSVs without recomputing')
     p.add_argument('--t-only', action='store_true', help='add the t-proposal evidence to the rows of the existing CSV (no NUTS, no bridge)')
+    p.add_argument('--random-walk', action='store_true', help='--t-only: the paper\'s gated random-walk moves after the IMH (posterior_eval.MOVES_RW); writes t-rw/')
     return p.parse_args()
 # fmt: on
 
@@ -462,9 +471,15 @@ def poolEvidence(
 
 
 def runImh(
-    proposal: Proposal, batch64: dict[str, torch.Tensor], lf: int, n_inner: int = 0
-) -> tuple[Proposal, float]:
-    """Marginal IMH (Normal) or Laplace IMH, pseudo-marginal when n_inner > 0 (GLMMs)."""
+    proposal: Proposal,
+    batch64: dict[str, torch.Tensor],
+    lf: int,
+    n_inner: int = 0,
+    moves: LocalMoves | None = None,
+) -> tuple[Proposal, dict]:
+    """Marginal IMH (Normal) or Laplace IMH, pseudo-marginal when n_inner > 0 (GLMMs), followed by
+    the random-walk moves where their gate fires; for one dataset, its mean acceptance, the IMH
+    chains' min bulk ESS over the globals (the gate's statistic) and whether the moves ran."""
     n_steps = proposal.n_samples // IMH_CHAINS
     sampler = MetropolisSampler(
         batch64,
@@ -475,9 +490,15 @@ def runImh(
         likelihood_family=lf,
         n_eff_target=None,
         n_inner=n_inner,
+        moves=moves,
     )
     p_imh, diag = sampler(proposalDouble(proposal, IMH_CHAINS * n_steps))
-    return p_imh, float(diag['accept_rate'].mean())
+    ess = diag['ess'] if moves else bulkEss(p_imh.samples_g, IMH_CHAINS)
+    return p_imh, {
+        'accept': float(diag['accept_rate'].mean()),
+        'ess': float(np.nanmin(ess.numpy())),
+        'moved': bool(moves and diag['moved'][0]),
+    }
 
 
 def fidelity(p: Proposal, nuts: dict[str, np.ndarray], i: int, target: Target) -> dict:
@@ -520,27 +541,29 @@ def fitDataset(
     with torch.no_grad():
         proposal = model.estimate(toDevice(dict(batch), args.device), n_samples=max(pool_sizes))
     proposal.to('cpu')
-    p_imh, accept = runImh(proposal, batch64, lf, n_inner)
+    p_imh, imh = runImh(proposal, batch64, lf, n_inner)
     fit = {
         'batch': batch,
         'target': target,
         'proposal': proposal,
         'is': isEvidence(proposal, batch64, pool_sizes, lf, n_inner),
         'p_imh': p_imh,
-        'imh_accept': accept,
+        'imh_accept': imh['accept'],
     }
     if imh_bridge:
         fit['bridge_imh'] = bridge(target.logProb, target.fromProposal(p_imh), args.n_bridge, gen)
     if laplace_imh:
-        fit['p_imh_laplace'], fit['imh_accept_laplace'] = runImh(proposal, batch64, lf)
+        fit['p_imh_laplace'], imh_laplace = runImh(proposal, batch64, lf)
+        fit['imh_accept_laplace'] = imh_laplace['accept']
     return fit
 
 
 def tFit(
     model: Approximator, item: dict[str, np.ndarray], args: argparse.Namespace, seed: int
 ) -> dict[str, float]:
-    """tEvidence's log_ev, k and eff on fitDataset's flow + IMH draws, run on --device, with as
-    many t draws as the flow pool; log_ev on the standardized scale of the bridges."""
+    """tEvidence's log_ev, k and eff on fitDataset's flow + IMH draws (+ the paper's random-walk
+    moves with --random-walk), run on --device, with as many t draws as the flow pool; log_ev on
+    the standardized scale of the bridges. Also runImh's ESS and moves flag."""
     lf = FAMILIES[args.family]
     s_max = max(args.pool_sizes)
     batch = toDevice(collateGrouped([item]), args.device)
@@ -548,12 +571,13 @@ def tFit(
     torch.manual_seed(seed)
     with torch.no_grad():
         proposal = model.estimate(batch, n_samples=s_max)
-    p_imh, _ = runImh(proposal, batch64, lf, args.n_inner if lf != 0 else 0)
+    moves = MOVES_RW if args.random_walk else None
+    p_imh, imh = runImh(proposal, batch64, lf, args.n_inner if lf != 0 else 0, moves)
     gen = torch.Generator(device=args.device).manual_seed(seed)
     res = tEvidence(batch64, p_imh, lf, s_max, gen)
     if p_imh.has_sigma_eps:  # tEvidence moved it to the raw response scale
         res['log_ev'] -= logJacobianStandardization(batch64).cpu().numpy()
-    return {k: float(v[0]) for k, v in res.items()}
+    return {k: float(v[0]) for k, v in res.items()} | {'ess': imh['ess'], 'moved': imh['moved']}
 
 
 def jeffreys(log_bf: float) -> float:
@@ -1124,7 +1148,7 @@ def runSize(size: str, args: argparse.Namespace) -> None:
 
 def runSizeT(size: str, args: argparse.Namespace) -> None:
     """--t-only: tFit on the rows of the size's CSV, and on the reduced model where the CSV has a
-    nested reference, with runSize's seeds; written to t/ for tJoin."""
+    nested reference, with runSize's seeds; written to t/ (t-rw/ with --random-walk) for tJoin."""
     ckpt = _ckpt_dir(args.family, size, BEST_SEEDS[(args.family, size)]) / f'{args.prefix}.pt'
     col = Collection(DATA_DIR / f'{size}-{args.family[0]}-sampled' / f'{args.split}.npz')
     stem = f'{stemPrefix(args)}{size}_{args.split}_n{min(args.n_datasets, len(col))}'
@@ -1137,16 +1161,19 @@ def runSizeT(size: str, args: argparse.Namespace) -> None:
         i = int(r.idx)
         fit = tFit(model, col[i], args, seed=args.seed * 100_003 + i)
         row = {'idx': i, 'logev_t': fit['log_ev'], 'k_t': fit['k'], 'eff_t': fit['eff']}
+        row |= {'ess_t': fit['ess'], 'moved_t': fit['moved']}
         msg = f'ds={i:3d}  t Δ={fit["log_ev"] - r.logev_bridge_nuts:+.3f}  k={fit["k"]:.2f}'
+        msg += f'  ess={fit["ess"]:.0f}{" moved" if fit["moved"] else ""}'
         if pd.notna(r.logbf_ref):
             red = tFit(model, reducedItem(col[i]), args, seed=args.seed * 100_003 + i + 50_000)
             row |= {'logev_t_red': red['log_ev'], 'k_t_red': red['k']}
+            row |= {'ess_t_red': red['ess'], 'moved_t_red': red['moved']}
             row['logbf_t'] = fit['log_ev'] - red['log_ev']
             msg += f'  lnBF ref={r.logbf_ref:+.2f} t={row["logbf_t"]:+.2f}'
         rows.append(row)
         print(msg, flush=True)
     shard = '' if args.n_shards == 1 else f'_shard{args.shard}of{args.n_shards}'
-    path = args.out_dir / 't' / f'{stem}{shard}.csv'
+    path = args.out_dir / ('t-rw' if args.random_walk else 't') / f'{stem}{shard}.csv'
     path.parent.mkdir(exist_ok=True)
     pd.DataFrame(rows, columns=['idx', *T_COLUMNS]).to_csv(path, index=False)
     print(f'[saved] {path}  ({time.perf_counter() - t0:.0f}s)')
