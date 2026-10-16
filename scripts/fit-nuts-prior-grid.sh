@@ -44,44 +44,9 @@ done
     exit 1
 }
 
-SIF="$HOME/containers/python312.sif"
-VENV="$HOME/metabeta/.venv-apptainer"
-# outputs/data is symlinked to workspace storage; bind it so the link resolves in-container
-DATA_ROOT="/lustre/groups/hcai/workspace/alexander.kipnis/datasets"
 CONFIG="$HOME/metabeta/metabeta/outputs/data/e2-${DATASET}-${RFX}/config.yaml"
 
 mkdir -p logs/nuts-e2
-JOB_TMPDIR="$HOME/tmp/pytensor_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
-mkdir -p "$JOB_TMPDIR"
-trap 'rm -rf "$JOB_TMPDIR"' EXIT
-
-apptainer exec \
-  --bind "$HOME:$HOME" \
-  --bind "$DATA_ROOT:$DATA_ROOT" \
-  "$SIF" \
-  bash -lc "
-    set -euo pipefail
-
-    cd '$HOME/metabeta'
-    source '$VENV/bin/activate'
-
-    export OMP_NUM_THREADS=1
-    export MKL_NUM_THREADS=1
-    export OPENBLAS_NUM_THREADS=1
-    export NUMEXPR_NUM_THREADS=1
-
-    export TMPDIR="$JOB_TMPDIR"
-    export PYTENSOR_FLAGS='base_compiledir=$JOB_TMPDIR,cxx=/usr/bin/g++'
-
-    echo 'hostname:' \$(hostname)
-    echo 'SLURM_CPUS_PER_TASK:' ${SLURM_CPUS_PER_TASK}
-
-    cd '$HOME/metabeta/metabeta/simulation'
-
-    python fit.py \
-      --config '$CONFIG' \
-      --idx '${SLURM_ARRAY_TASK_ID}' \
-      --method '$METHOD' \
-      --level '$LEVEL' \
-      --partition test
-  "
+source "$HOME/metabeta/scripts/pymc-run.sh"
+runPymc python metabeta/simulation/fit.py --config "$CONFIG" --idx "$SLURM_ARRAY_TASK_ID" \
+    --method "$METHOD" --level "$LEVEL" --partition test
