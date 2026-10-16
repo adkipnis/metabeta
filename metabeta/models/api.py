@@ -412,13 +412,11 @@ class Api:
         ``map_z_threshold`` trigger a warning.  All checks are reported in
         ``RouterResult.safeguards``.
 
-        ``evidence=True`` also estimates each dataset's log marginal likelihood log p(y) on the
-        raw response scale for model comparison: the log Bayes factor between two models of the
-        same data is the difference of their ``RouterResult.evidence['log_evidence']``.  It
-        costs one more likelihood pass over ``n_samples`` fresh draws from a Student-t fitted to
-        the returned posterior draws (posthoc/evidence.py), so it is off by default and needs
-        ``n_samples >= MIN_SAFEGUARD_SAMPLES``; the returned posterior does not depend on it.
-        Datasets whose PSIS k̂ exceeds ``k_threshold`` trigger a warning.
+        ``evidence=True`` also returns each dataset's log marginal likelihood log p(y) on the raw
+        response scale in ``RouterResult.evidence``; the log Bayes factor between two models of
+        the same data is the difference of their ``log_evidence``.  It costs one more likelihood
+        pass (posthoc/evidence.py), needs ``n_samples >= MIN_SAFEGUARD_SAMPLES`` and warns where
+        PSIS k̂ exceeds ``k_threshold``.
         """
 
         method = {True: 'imh', False: None}.get(refine, refine)
@@ -428,10 +426,7 @@ class Api:
         if random_walk is not False and method != 'imh':
             raise ValueError("random_walk requires refine='imh'")
         if evidence and n_samples < MIN_SAFEGUARD_SAMPLES:
-            raise ValueError(
-                f'evidence=True needs n_samples >= {MIN_SAFEGUARD_SAMPLES} to fit the t proposal '
-                f'(got {n_samples})'
-            )
+            raise ValueError(f'evidence=True needs n_samples >= {MIN_SAFEGUARD_SAMPLES}')
         moves = None
         if method == 'imh' and random_walk:
             preset = RANDOM_WALK_DEFAULT['cuda' if self.device.type == 'cuda' else 'cpu']
@@ -1015,9 +1010,7 @@ class Api:
     def _evidence(
         self, proposal: Proposal, batch: dict[str, torch.Tensor], *, k_threshold: float
     ) -> dict[str, Any]:
-        """log p(y) per dataset on the raw response scale (posthoc/evidence.py) from the
-        unrescaled posterior, in chunks of ``self.batch_size`` like the refinement.  Datasets
-        whose PSIS k̂ exceeds ``k_threshold`` trigger a warning."""
+        """log p(y) per dataset from the unrescaled posterior, chunked like the refinement."""
         lf = int(batch['likelihood_family'].flatten()[0].item())
         B = proposal.samples_g.shape[0]
         chunk_size = self.batch_size or B
@@ -1036,10 +1029,9 @@ class Api:
             k_vals = ', '.join(f'{psis_k[i]:.2f}' for i in flagged)
             warnings.warn(
                 f'Evidence reliability check failed for dataset(s) {flagged.tolist()} '
-                f'(PSIS k̂ = {k_vals} > {k_threshold:g}): the t proposal fitted to the posterior '
-                'draws covers the posterior poorly there, so the log-evidence and any Bayes '
-                'factor built on it may be inaccurate. Treat those values with caution and '
-                'consider exact MCMC (e.g. NUTS) with bridge sampling instead.',
+                f'(PSIS k̂ = {k_vals} > {k_threshold:g}): the log-evidence and any Bayes factor '
+                'built on it may be inaccurate. Treat those values with caution and consider '
+                'bridge sampling on exact MCMC (e.g. NUTS) draws instead.',
                 stacklevel=3,
             )
         return {
