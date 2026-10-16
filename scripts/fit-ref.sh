@@ -1,19 +1,9 @@
 #!/bin/bash
-# Reference fits on the cluster: one SLURM array task per dataset, one method and budget
-# level per submission. Submits itself, then runs metabeta/simulation/fit.py per task.
-#
-# Usage (from the repo root on the submit node):
+# Reference fits: one SLURM array task per dataset, one method and level per submission.
+# Run from the repo root on the submit node, then metabeta/simulation/check.py.
 #   scripts/fit-ref.sh --method nuts --level 2 --data_id small-n-sampled
-#   scripts/fit-ref.sh --method advi --data_id small-n-sampled --partition valid
 #   scripts/fit-ref.sh --method pathfinder --level 1 --data_id small-n-sampled --idx 3 17 42
-#
-# Methods: nuts (levels 0|1|2, 4 cores), advi (both snapshots in one run), pathfinder
-# (levels 0|1), laplace; the last three use one core. --idx refits selected datasets only,
-# the default array covers datasets 0-511. --qos cpu_preemptible runs under the second user
-# cap (200 jobs) next to cpu_normal (100). --warm ~/pytensor_cache_{n|b|p}.tar (from
-# scripts/warm-cache.sh) starts every task from that PyTensor cache instead of an empty one,
-# so the recorded wall time is that of a user who has fitted one such GLMM before.
-# Afterwards: metabeta/simulation/check.py.
+# Levels: nuts 0|1|2, pathfinder 0|1. --qos cpu_preemptible has its own job cap (200, vs 100).
 
 set -euo pipefail
 
