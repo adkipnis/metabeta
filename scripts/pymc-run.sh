@@ -1,9 +1,7 @@
 #!/bin/bash
-# Sourced by the cluster scripts that fit with PyMC. Creates $PYTENSOR_DIR, an empty (cold)
-# node-local PyTensor compile directory that is purged when the sourcing script exits, and
-# runPymc, which runs a command from the repo root inside the campaign container with that
-# directory as compile cache and TMPDIR. Source it by absolute path: sbatch runs a copy of the
-# job script from its spool directory, so paths relative to $0 do not resolve.
+# Source by absolute path (sbatch runs a spooled copy of the job script). runPymc runs a command
+# from the repo root in the container, compiling into $PYTENSOR_DIR, a fresh /tmp directory
+# removed when the sourcing script exits.
 
 SIF="$HOME/containers/python312.sif"
 VENV="$HOME/metabeta/.venv-apptainer"
