@@ -37,7 +37,8 @@ GLMMs (--family bernoulli/poisson): no closed-form marginal exists, so
                exact posterior where the Laplace chain does not?
 
 --t-only adds the estimator of Api.sample(evidence=True) to an existing CSV without NUTS or
-bridges: flow + IMH draws as above (no random-walk moves) on --device, then IS from a Student-t
+bridges: flow + IMH draws as above plus the paper's random-walk moves where the IMH min bulk ESS
+is below 150 (posterior_eval.MOVES_RW, the Api's ESS flag), on --device, then IS from a Student-t
 fitted to them (posthoc/evidence.tEvidence), per row and nested reduced fit. Its T_COLUMNS go to
 t/{stem}[_shard].csv; --summarize-only joins them onto {stem}.csv by idx.
 
@@ -150,7 +151,6 @@ def setup() -> argparse.Namespace:
     p.add_argument('--out-dir', type=Path, default=experimentResultsPath('evidence'))
     p.add_argument('--summarize-only', action='store_true', help='regenerate md/png/tex from existing CSVs without recomputing')
     p.add_argument('--t-only', action='store_true', help='add the t-proposal evidence to the rows of the existing CSV (no NUTS, no bridge)')
-    p.add_argument('--random-walk', action='store_true', help='--t-only: the paper\'s gated random-walk moves after the IMH (posterior_eval.MOVES_RW); writes t-rw/')
     return p.parse_args()
 # fmt: on
 
@@ -478,8 +478,8 @@ def runImh(
     moves: LocalMoves | None = None,
 ) -> tuple[Proposal, dict]:
     """Marginal IMH (Normal) or Laplace IMH, pseudo-marginal when n_inner > 0 (GLMMs), followed by
-    the random-walk moves where their gate fires; for one dataset, its mean acceptance, the IMH
-    chains' min bulk ESS over the globals (the gate's statistic) and whether the moves ran."""
+    the random-walk moves (if given) where their gate fires; for one dataset, its mean acceptance,
+    the IMH chains' min bulk ESS over the globals (the gate's statistic) and whether moves ran."""
     n_steps = proposal.n_samples // IMH_CHAINS
     sampler = MetropolisSampler(
         batch64,
@@ -561,9 +561,9 @@ def fitDataset(
 def tFit(
     model: Approximator, item: dict[str, np.ndarray], args: argparse.Namespace, seed: int
 ) -> dict[str, float]:
-    """tEvidence's log_ev, k and eff on fitDataset's flow + IMH draws (+ the paper's random-walk
-    moves with --random-walk), run on --device, with as many t draws as the flow pool; log_ev on
-    the standardized scale of the bridges. Also runImh's ESS and moves flag."""
+    """tEvidence's log_ev, k and eff on fitDataset's flow + IMH draws and the paper's gated
+    random-walk moves, run on --device, with as many t draws as the flow pool; log_ev on the
+    standardized scale of the bridges. Also runImh's ESS and moves flag."""
     lf = FAMILIES[args.family]
     s_max = max(args.pool_sizes)
     batch = toDevice(collateGrouped([item]), args.device)
@@ -571,8 +571,7 @@ def tFit(
     torch.manual_seed(seed)
     with torch.no_grad():
         proposal = model.estimate(batch, n_samples=s_max)
-    moves = MOVES_RW if args.random_walk else None
-    p_imh, imh = runImh(proposal, batch64, lf, args.n_inner if lf != 0 else 0, moves)
+    p_imh, imh = runImh(proposal, batch64, lf, args.n_inner if lf != 0 else 0, MOVES_RW)
     gen = torch.Generator(device=args.device).manual_seed(seed)
     res = tEvidence(batch64, p_imh, lf, s_max, gen)
     if p_imh.has_sigma_eps:  # tEvidence moved it to the raw response scale
@@ -1148,7 +1147,7 @@ def runSize(size: str, args: argparse.Namespace) -> None:
 
 def runSizeT(size: str, args: argparse.Namespace) -> None:
     """--t-only: tFit on the rows of the size's CSV, and on the reduced model where the CSV has a
-    nested reference, with runSize's seeds; written to t/ (t-rw/ with --random-walk) for tJoin."""
+    nested reference, with runSize's seeds; written to t/ for tJoin."""
     ckpt = _ckpt_dir(args.family, size, BEST_SEEDS[(args.family, size)]) / f'{args.prefix}.pt'
     col = Collection(DATA_DIR / f'{size}-{args.family[0]}-sampled' / f'{args.split}.npz')
     stem = f'{stemPrefix(args)}{size}_{args.split}_n{min(args.n_datasets, len(col))}'
@@ -1173,7 +1172,7 @@ def runSizeT(size: str, args: argparse.Namespace) -> None:
         rows.append(row)
         print(msg, flush=True)
     shard = '' if args.n_shards == 1 else f'_shard{args.shard}of{args.n_shards}'
-    path = args.out_dir / ('t-rw' if args.random_walk else 't') / f'{stem}{shard}.csv'
+    path = args.out_dir / 't' / f'{stem}{shard}.csv'
     path.parent.mkdir(exist_ok=True)
     pd.DataFrame(rows, columns=['idx', *T_COLUMNS]).to_csv(path, index=False)
     print(f'[saved] {path}  ({time.perf_counter() - t0:.0f}s)')
