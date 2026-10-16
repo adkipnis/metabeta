@@ -19,6 +19,7 @@ from tabulate import tabulate
 from metabeta.datasets.preprocessor import DataPreprocessor, PreprocessReport
 from metabeta.evaluation import predictive as _predictive
 from metabeta.models.approximator import Approximator
+from metabeta.posthoc.evidence import tEvidence
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
 from metabeta.posthoc.metropolis import (
@@ -156,6 +157,7 @@ class RouterResult:
     batch: 'dict[str, torch.Tensor] | None' = None
     ns: np.ndarray | None = None
     safeguards: dict[str, Any] | None = None
+    evidence: dict[str, Any] | None = None
 
 
 class Api:
@@ -367,6 +369,7 @@ class Api:
         k_threshold: float = PSIS_K_THRESHOLD,
         map_z_threshold: float = MAP_Z_THRESHOLD,
         random_walk: LocalMoves | bool = False,
+        evidence: bool = False,
         **prepare_kwargs: Any,
     ) -> RouterResult:
         """Sample from the posterior, routing each dataset to the smallest compatible submodel.
@@ -408,6 +411,14 @@ class Api:
         datasets whose maximum |posterior mean − MAP| / posterior SD exceeds
         ``map_z_threshold`` trigger a warning.  All checks are reported in
         ``RouterResult.safeguards``.
+
+        ``evidence=True`` also estimates each dataset's log marginal likelihood log p(y) on the
+        raw response scale for model comparison: the log Bayes factor between two models of the
+        same data is the difference of their ``RouterResult.evidence['log_evidence']``.  It
+        costs one more likelihood pass over ``n_samples`` fresh draws from a Student-t fitted to
+        the returned posterior draws (posthoc/evidence.py), so it is off by default and needs
+        ``n_samples >= MIN_SAFEGUARD_SAMPLES``; the returned posterior does not depend on it.
+        Datasets whose PSIS k̂ exceeds ``k_threshold`` trigger a warning.
         """
 
         method = {True: 'imh', False: None}.get(refine, refine)
@@ -416,6 +427,11 @@ class Api:
         do_refine = method is not None and n_samples >= MIN_SAFEGUARD_SAMPLES
         if random_walk is not False and method != 'imh':
             raise ValueError("random_walk requires refine='imh'")
+        if evidence and n_samples < MIN_SAFEGUARD_SAMPLES:
+            raise ValueError(
+                f'evidence=True needs n_samples >= {MIN_SAFEGUARD_SAMPLES} to fit the t proposal '
+                f'(got {n_samples})'
+            )
         moves = None
         if method == 'imh' and random_walk:
             preset = RANDOM_WALK_DEFAULT['cuda' if self.device.type == 'cuda' else 'cpu']
@@ -450,6 +466,7 @@ class Api:
         if stats is not None and n_samples >= MIN_SAFEGUARD_SAMPLES:
             map_check = self._mapConsistency(proposal, stats, batch, threshold=map_z_threshold)
             safeguards = {**(safeguards or {}), **map_check}
+        log_ev = self._evidence(proposal, batch, k_threshold=k_threshold) if evidence else None
         diags = self._computeDiagnostics(proposal, batch) if diagnostics else None
         self._rescaleProposal(proposal, batch)
         prior_params: dict[str, np.ndarray] = {
@@ -475,6 +492,7 @@ class Api:
             batch=batch if diagnostics else None,
             ns=ns_arr,
             safeguards=safeguards,
+            evidence=log_ev,
         )
 
     def _warmupSubmodel(self, entry: dict) -> None:
@@ -992,6 +1010,44 @@ class Api:
             'map_z': map_z,
             'map_z_threshold': threshold,
             'map_z_flag': flag,
+        }
+
+    def _evidence(
+        self, proposal: Proposal, batch: dict[str, torch.Tensor], *, k_threshold: float
+    ) -> dict[str, Any]:
+        """log p(y) per dataset on the raw response scale (posthoc/evidence.py) from the
+        unrescaled posterior, in chunks of ``self.batch_size`` like the refinement.  Datasets
+        whose PSIS k̂ exceeds ``k_threshold`` trigger a warning."""
+        lf = int(batch['likelihood_family'].flatten()[0].item())
+        B = proposal.samples_g.shape[0]
+        chunk_size = self.batch_size or B
+        parts = []
+        for start in range(0, B, chunk_size):
+            end = min(start + chunk_size, B)
+            chunk = trimBatchPadding(sliceBatch(batch, start, end))
+            base_chunk = proposal.slice_b(start, end).resizeGroups(chunk['mask_n'].shape[1])
+            parts.append(tEvidence(chunk, base_chunk, lf, proposal.n_samples))
+        log_ev, psis_k, eff = (
+            np.concatenate([p[k] for p in parts]) for k in ('log_ev', 'k', 'eff')
+        )
+        flag = psis_k > k_threshold
+        if flag.any():
+            flagged = np.flatnonzero(flag)
+            k_vals = ', '.join(f'{psis_k[i]:.2f}' for i in flagged)
+            warnings.warn(
+                f'Evidence reliability check failed for dataset(s) {flagged.tolist()} '
+                f'(PSIS k̂ = {k_vals} > {k_threshold:g}): the t proposal fitted to the posterior '
+                'draws covers the posterior poorly there, so the log-evidence and any Bayes '
+                'factor built on it may be inaccurate. Treat those values with caution and '
+                'consider exact MCMC (e.g. NUTS) with bridge sampling instead.',
+                stacklevel=3,
+            )
+        return {
+            'log_evidence': log_ev,
+            'psis_k': psis_k,
+            'efficiency': eff,
+            'psis_k_threshold': k_threshold,
+            'psis_flag': flag,
         }
 
     def _rescaleProposal(self, proposal: Proposal, batch: dict[str, torch.Tensor]) -> None:

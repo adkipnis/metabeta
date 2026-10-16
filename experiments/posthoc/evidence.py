@@ -69,6 +69,7 @@ sys.path.insert(0, str(REPO_ROOT / 'scripts'))
 from build_ckpt import BEST_SEEDS, _ckpt_dir  # noqa: E402
 
 from metabeta.models.approximator import Approximator  # noqa: E402
+from metabeta.posthoc.evidence import isSummary  # noqa: E402
 from metabeta.posthoc.importance import ImportanceSampler  # noqa: E402
 from metabeta.posthoc.laplace_glmm import (  # noqa: E402
     LaplaceImportanceSampler,
@@ -97,9 +98,6 @@ SIZES = ('small', 'medium', 'large', 'huge')
 FAMILIES = {'normal': 0, 'bernoulli': 1, 'poisson': 2}
 TARGET_CHUNK = 1000  # bridge-target draws per AGQ pass (bounds the (m, n, s) intermediates)
 JEFFREYS_EDGES = np.log([3.0, 10.0, 30.0, 100.0])  # ln BF thresholds (Jeffreys, natural log)
-T_NU = 5  # dof of the t proposal fitted to posterior draws (tEvidence)
-# IS² draws per group in tEvidence: as accurate as K = 8 on the prior grid, and faster
-T_N_INNER = 4
 # test.npz keys that collateStats packs into batch['stats']
 ANALYTICAL_STATS = (
     'beta_est',
@@ -437,17 +435,6 @@ def isEvidence(
     return res
 
 
-def _isSummary(lw: torch.Tensor) -> dict[str, np.ndarray]:
-    """IS log-evidence, PSIS k and efficiency per row of log weights (b, S) on the cpu."""
-    lw_psis, k = psislw(lw.numpy())
-    w = torch.softmax(torch.as_tensor(lw_psis), -1)
-    return {
-        'log_ev': (torch.logsumexp(lw, -1) - math.log(lw.shape[-1])).numpy(),
-        'k': np.asarray(k, dtype=float),
-        'eff': (1.0 / (lw.shape[-1] * (w**2).sum(-1))).numpy(),
-    }
-
-
 def poolEvidence(
     batch64: dict[str, torch.Tensor], flow: Proposal, lf: int, n_inner: int
 ) -> dict[str, np.ndarray]:
@@ -461,116 +448,7 @@ def poolEvidence(
             batch64, n_inner=n_inner, corr_prior=True, likelihood_family=lf
         )
     ll, lp = sampler.unnormalizedPosterior(flow)
-    return _isSummary((ll + lp - flow.log_prob_g).cpu())
-
-
-def tEvidence(
-    batch64: dict[str, torch.Tensor],
-    posterior: Proposal,
-    lf: int,
-    n_draws: int,
-    gen: torch.Generator,
-) -> dict[str, np.ndarray]:
-    """IS log-evidence, PSIS k and efficiency per dataset, (b,) each, from n_draws of a
-    multivariate t (T_NU dof) fitted to each dataset's posterior draws (MB: IMH + random walk) in
-    u = (β, log σ_rfx[, log σ_eps][, z_corr]); the datasets of one batch share d, q and the LKJ
-    switch (one prior grid block, or a single dataset). Runs on the batch's device.
-
-    The flow pool under-covers the posterior where the IMH's ESS is low, and its IS evidence errs
-    there by up to 1 nat; a t fitted to the refined draws covers the posterior with heavier tails
-    (Geweke 1989, Econometrica 57:1317), and IS is unbiased for any proposal. GLMMs use IS²
-    weights (T_N_INNER draws per group), their Laplace mode search seeded at the per-group median
-    of the posterior rfx draws.
-    """
-    dt, dev = torch.float64, batch64['X'].device
-    b, m = batch64['X'].shape[:2]
-    d_max, q_max = batch64['X'].shape[-1], batch64['Z'].shape[-1]
-    d_i, q_i = int(batch64['mask_d'][0].sum()), int(batch64['mask_q'][0].sum())
-    eta = batch64['eta_rfx'].to(dt)  # (b,)
-    corr = bool(eta[0] > 0) and q_i >= 2
-    if (
-        (batch64['mask_d'].sum(-1) != d_i).any()
-        or (batch64['mask_q'].sum(-1) != q_i).any()
-        or ((eta > 0) != (eta[0] > 0)).any()
-    ):
-        raise ValueError('tEvidence: the datasets of one batch must share d, q and the LKJ switch')
-    eps = int(posterior.has_sigma_eps)
-    dc_i, dc_max = (q_i * (q_i - 1) // 2 if corr else 0), posterior.d_corr
-    sl_sig = slice(d_i, d_i + q_i + eps)
-
-    # posterior draws in u, (b, s, p)
-    parts = [
-        posterior.ffx[..., :d_i].to(dt),
-        posterior.sigma_rfx[..., :q_i].to(dt).clamp_min(1e-8).log(),
-    ]
-    if eps:
-        parts.append(posterior.sigma_eps.to(dt).clamp_min(1e-8).log().unsqueeze(-1))
-    if corr:
-        parts.append(corrToUnconstrained(posterior.corr_rfx[..., :q_i, :q_i].to(dt)))
-    u_post = torch.cat(parts, -1)
-    p = u_post.shape[-1]
-
-    # one t per dataset and n_draws fresh draws from it, (b, S, p)
-    mu = u_post.mean(1, keepdim=True)  # (b, 1, p)
-    c = u_post - mu
-    cov = c.mT @ c / (u_post.shape[1] - 1) + 1e-6 * torch.eye(p, dtype=dt, device=dev)
-    L = torch.linalg.cholesky(cov)  # (b, p, p)
-    z = torch.randn(b, n_draws, p, generator=gen, dtype=dt, device=dev)
-    chi2 = torch.randn(b, n_draws, T_NU, generator=gen, dtype=dt, device=dev).square().sum(-1)
-    u = mu + (z @ L.mT) * (T_NU / chi2).sqrt().unsqueeze(-1)
-    maha = torch.linalg.solve_triangular(L, (u - mu).mT, upper=False).square().sum(-2)  # (b, S)
-    log_t = (
-        math.lgamma((T_NU + p) / 2)
-        - math.lgamma(T_NU / 2)
-        - p / 2 * math.log(T_NU * math.pi)
-        - L.diagonal(dim1=-2, dim2=-1).log().sum(-1, keepdim=True)
-        - (T_NU + p) / 2 * torch.log1p(maha / T_NU)
-    )
-
-    # the draws in the batch's padded constrained layout; the far t tails reach correlations
-    # that round to ±1, outside the LKJ support: density 0 there
-    g = u.new_zeros(b, n_draws, d_max + q_max + eps + dc_max)
-    g[..., :d_i] = u[..., :d_i]
-    sigmas = u[..., sl_sig].exp()
-    g[..., d_max : d_max + q_i] = sigmas[..., :q_i]
-    if eps:
-        g[..., d_max + q_max] = sigmas[..., -1]
-    supported = torch.ones(b, n_draws, dtype=torch.bool, device=dev)
-    if corr:
-        z_corr = u[..., sl_sig.stop :]
-        supported = D.constraints.corr_cholesky.check(unconstrainedToCholesky(z_corr, q_i))
-        z_corr = torch.where(supported.unsqueeze(-1), z_corr, 0.0)
-        L_corr = unconstrainedToCholesky(z_corr, q_i)
-        off = d_max + q_max + eps
-        g[..., off : off + dc_i] = corrToLower(L_corr @ L_corr.mT)
-    rfx = g.new_zeros(b, m, n_draws, q_max)
-    if lf != 0:  # Laplace mode-search seed
-        rfx = posterior.rfx.to(dt).median(dim=2, keepdim=True).values.expand_as(rfx)
-    proposal = Proposal(
-        {
-            'global': {'samples': g, 'log_prob': g.new_zeros(b, n_draws)},
-            'local': {'samples': rfx, 'log_prob': g.new_zeros(b, m, n_draws)},
-        },
-        has_sigma_eps=bool(eps),
-        d_corr=dc_max,
-    )
-
-    # log p(y, θ) in u: exact marginal (Normal) or IS² (GLMMs), |dσ/d log σ|, LKJ over z
-    if lf == 0:
-        sampler = ImportanceSampler(batch64, marginal=True, corr_prior=False)
-    else:
-        sampler = LaplaceImportanceSampler(
-            batch64, n_inner=T_N_INNER, corr_prior=False, likelihood_family=lf
-        )
-    ll, lp = sampler.unnormalizedPosterior(proposal)
-    log_joint = ll + lp + u[..., sl_sig].sum(-1)
-    if corr:
-        z_pad = u.new_zeros(b, n_draws, dc_max)
-        z_pad[..., :dc_i] = z_corr
-        q_active = torch.full((b,), q_i, dtype=torch.long, device=dev)
-        log_joint = log_joint + logProbCorrRfx(z_pad, q_max, eta, q_active=q_active)
-    log_joint = torch.nan_to_num(log_joint, nan=-math.inf, posinf=-math.inf)
-    return _isSummary((torch.where(supported, log_joint, -math.inf) - log_t).cpu())
+    return isSummary((ll + lp - flow.log_prob_g).cpu())
 
 
 def runImh(
