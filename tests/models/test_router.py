@@ -1,5 +1,6 @@
 from collections import OrderedDict
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -1271,27 +1272,18 @@ def test_router_random_walk_is_opt_in(tmp_path: Path):
             router.sample(batch, n_samples=64, refine=refine, random_walk=True)
 
 
-def test_router_evidence_is_opt_in_and_flags_k_hat(tmp_path: Path, monkeypatch):
+def test_router_evidence_is_opt_in_and_flags_k_hat(tmp_path: Path):
     import metabeta.models.api as api_module
 
     joint_path = tmp_path / 'joint.pt'
     _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2, analytical_refinement='light')
     router = Api(joint_path, warmup=False)
     batch = _glmm_batch(d=4, q=2)
-    calls: list[int] = []
-    t_evidence = api_module.tEvidence
-
-    def _counting(*args, **kwargs):
-        calls.append(1)
-        return t_evidence(*args, **kwargs)
-
-    monkeypatch.setattr(api_module, 'tEvidence', _counting)
-
-    assert router.sample(batch, n_samples=64).evidence is None
-    assert not calls  # no t fit unless asked for
-
-    ev = router.sample(batch, n_samples=64, evidence=True).evidence
-    assert len(calls) == 1
+    with mock.patch.object(api_module, 'tEvidence', wraps=api_module.tEvidence) as t_evidence:
+        assert router.sample(batch, n_samples=64).evidence is None
+        t_evidence.assert_not_called()  # no t fit unless asked for
+        ev = router.sample(batch, n_samples=64, evidence=True).evidence
+        t_evidence.assert_called_once()
     assert ev['log_evidence'].shape == ev['psis_k'].shape == ev['psis_flag'].shape == (1,)
     assert np.isfinite(ev['log_evidence']).all()
 

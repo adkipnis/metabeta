@@ -1,16 +1,11 @@
 """
-posthoc/evidence.py — the log marginal likelihood log p(y) from a Student-t importance function.
+posthoc/evidence.py — log p(y) by importance sampling (IS) from a Student-t importance function.
 
-The flow-pool IS evidence (posthoc/importance.py) inherits the flow's coverage: where the flow
-under-covers the posterior, its weights degenerate and the estimate errs. Here the importance
-function is a multivariate t fitted per dataset to the refined posterior draws (IMH, optionally
-with random-walk moves): its heavier tails cover the posterior (Geweke 1989, Econometrica
-57:1317), and IS is unbiased for any proposal that does. Normal outcomes use the exact
-rfx-marginal likelihood, GLMMs its unbiased IS² estimate.
-
-The weights are evaluated on the standardized data the posterior lives in, so batch and draws
-must be unrescaled; logJacobianStandardization moves the result to the raw response scale, where
-a log Bayes factor between two models of the same data is the difference of their log-evidences.
+The flow-pool IS evidence (posthoc/importance.py) errs where the flow under-covers the
+posterior; a multivariate t fitted per dataset to the refined draws covers it with heavier tails
+(Geweke 1989, Econometrica 57:1317). The weights live on the standardized data, so batch and
+draws must be unrescaled; the result is moved to the raw response scale, where a log Bayes factor
+between two models of the same data is the difference of their log-evidences.
 """
 
 import math
@@ -52,25 +47,20 @@ def tEvidence(
 ) -> dict[str, np.ndarray]:
     """log p(y) on the raw response scale, PSIS k and IS efficiency per dataset, (b,) each, from
     n_draws of a multivariate t (T_NU dof) fitted to each dataset's posterior draws in
-    u = (β, log σ_rfx[, log σ_eps][, z_corr]). Batch and posterior are unrescaled and on one
-    device, where it runs in float64; gen=None draws from the global generator.
-
-    The t's dimension follows each dataset's d, q and LKJ switch, so datasets are processed in
-    groups that share them; a batch of one structure is a single pass. GLMMs use IS² weights
-    (T_N_INNER draws per group), their Laplace mode search seeded at the per-group median of the
-    posterior rfx draws.
+    u = (β, log σ_rfx[, log σ_eps][, z_corr]); runs in float64 on the batch's device. Datasets
+    are processed in groups sharing d, q and the LKJ switch, which fix the t's dimension. GLMMs
+    use IS² weights (T_N_INNER draws per group), their Laplace mode search seeded at the
+    per-group median of the posterior rfx draws.
     """
     batch = {
         k: v.double() if torch.is_tensor(v) and v.is_floating_point() else v
         for k, v in batch.items()
     }
     q = batch['mask_q'].sum(-1)
-    corr = (batch['eta_rfx'] > 0) & (q >= 2)
-    structure = torch.stack([batch['mask_d'].sum(-1), q, corr.long()], -1)
-    groups = structure.unique(dim=0, return_inverse=True)[1]
-    out = {k: np.empty(len(groups)) for k in ('log_ev', 'k', 'eff')}
-    for g in groups.unique():
-        sel = groups == g
+    structure = torch.stack([batch['mask_d'].sum(-1), q, (batch['eta_rfx'] > 0) & (q >= 2)], -1)
+    out = {k: np.empty(len(q)) for k in ('log_ev', 'k', 'eff')}
+    for key in structure.unique(dim=0):
+        sel = (structure == key).all(-1)
         sel_np = sel.cpu().numpy()
         res = _tEvidenceBlock(subsetBatch(batch, sel_np), posterior, sel, lf, n_draws, gen)
         for k in out:
@@ -94,7 +84,7 @@ def _tEvidenceBlock(
     b, m = batch64['X'].shape[:2]
     d_max, q_max = batch64['X'].shape[-1], batch64['Z'].shape[-1]
     d_i, q_i = int(batch64['mask_d'][0].sum()), int(batch64['mask_q'][0].sum())
-    eta = batch64['eta_rfx'].to(dt)  # (b,)
+    eta = batch64['eta_rfx']  # (b,)
     corr = bool(eta[0] > 0) and q_i >= 2
     eps = int(posterior.has_sigma_eps)
     dc_i, dc_max = (q_i * (q_i - 1) // 2 if corr else 0), posterior.d_corr
