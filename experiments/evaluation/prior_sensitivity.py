@@ -211,12 +211,16 @@ PAPER_NAMES = {  # (dataset, family) labels of the paper tables
     'salamanders': ('Salamanders', 'Poisson'),
 }
 C_MB, C_NUTS = PALETTE[4], PALETTE[3]  # runtimes figure colours of MB and NUTS
-C_UNCONV = '0.6'  # NUTS points failing nutsConverged
 # IMH acceptance of the MB markers: sequential in MB's hue, light end cut so low values stay visible
 ACCEPT_CMAP = mcolors.LinearSegmentedColormap.from_list(
     'accept', plt.get_cmap('Purples')(np.linspace(0.3, 1.0, 256))
 )
 ACCEPT_NORM = mcolors.Normalize(0.0, 1.0)
+# all figures span the full text width (5.5 in) at a 9 in canvas, so text prints at ~7 pt
+FIG_RC = {'font.size': 11.5, 'axes.titlesize': 11.5, 'axes.labelsize': 11.5, 'legend.fontsize': 10}
+FIG_W, PANEL_H = 9.0, 2.8
+YLABEL_X = -0.25  # y-label offset in axes coordinates, the same in every panel
+LEGEND_H = 0.2  # inches below the panels for a figure's shared legend
 
 
 # fmt: off
@@ -1212,7 +1216,7 @@ class PriorSensitivity:
                 f'{_pad(f"{cost.sum() * NUTS_CHAINS / 3600:.1f}", 4)} \\\\'
             )
             agree_rows.append(rf'    \multirow{{2}}{{*}}{{\texttt{{{label}}}}}')
-            for method, model in (('MB', r'\texttt{MB}'), ('MB0', r'\MBz{}')):
+            for method, model in (('MB0', r'\MBz{}'), ('MB', r'\texttt{MB}')):
                 g = df[(df.method == method) & df.point.isin(conv)]
                 flags = int(g.flagged.astype(bool).sum())
                 cells = [
@@ -1410,18 +1414,17 @@ class PriorSensitivity:
                 [self.resultPath(f'_{n}.csv').name for n in names],
             )
             return
-        plt.rcParams.update({'font.size': 13, 'axes.titlesize': 15, 'axes.labelsize': 14})
-        for suffix, sd_family in FIG_SD_FAMILY.items():
-            self._save(self._figure(names, sd_family), suffix)
-        # _main: key-effect row only, a compact version of the 2 x 3 figures
-        self._save(self._figure(names, 'halfnormal', rows=1), '_main')
+        with plt.rc_context(FIG_RC):
+            for suffix, sd_family in FIG_SD_FAMILY.items():
+                self._save(self._figure(names, sd_family), suffix)
+            # _main: key-effect row only, a compact version of the 2 x 3 figures
+            self._save(self._figure(names, 'halfnormal', rows=1), '_main')
         if all(self.resultPath(f'_evidence_{n}.csv').exists() for n in names):
             self.plotEvidence()
 
     def _figure(self, names: list[str], sd_family: str, rows: int = 2):
-        fig, axes = plt.subplots(
-            rows, len(names), figsize=(4.4 * len(names), 3.8 * rows), squeeze=False
-        )
+        height = PANEL_H * rows + LEGEND_H
+        fig, axes = plt.subplots(rows, len(names), figsize=(FIG_W, height), squeeze=False)
         for c, name in enumerate(names):
             df = pd.read_csv(self.resultPath(f'_{name}.csv'))
             meta = self.meta[name]
@@ -1431,14 +1434,18 @@ class PriorSensitivity:
             if rows == 2:
                 self._panelTauSigma(axes[1, c], df, 'sd_Intercept', meta['fig_tau_beta'])
                 axes[1, c].set_ylabel(r'$\sigma_{\mathrm{Intercept}}$')
+            label, family = PAPER_NAMES[name]
             sd_label = {'halfnormal': 'HN', 'exponential': 'Exp'}[sd_family]
-            axes[0, c].set_title(f'{DATASETS[name]["title"]}, SD prior {sd_label}({sd_prior[1]:g})')
+            sd_title = '' if rows == 1 else f', SD prior {sd_label}({sd_prior[1]:g})'  # _main: in the caption
+            axes[0, c].set_title(f'{label} ({family}){sd_title}')
             axes[0, c].set_ylabel(DATASETS[name]['key_label'])
-        axes[0, 0].legend(
+            for ax in axes[:, c]:
+                ax.yaxis.set_label_coords(YLABEL_X, 0.5)
+        fig.legend(
             [Line2D([], [], color=C_MB, ls='-'), Line2D([], [], color=C_NUTS, marker='o', ls=''),
-             Line2D([], [], color=C_UNCONV, marker='o', mfc='white', ls='')],
-            ['MB, Normal', 'NUTS, Normal', 'NUTS, not converged'],
-            fontsize=10, loc='best',
+             Line2D([], [], color=C_NUTS, marker='o', mfc='white', ls='')],
+            ['MB', 'NUTS', 'NUTS, not converged'],
+            loc='lower center', ncol=3, frameon=False, handlelength=1.4, columnspacing=1.0,
         )  # fmt: skip
         if rows == 2:
             sd_ls = {'halfnormal': '-', 'halfstudent': '--', 'exponential': ':'}
@@ -1446,12 +1453,14 @@ class PriorSensitivity:
                 [Line2D([], [], color=C_MB, ls=ls) for ls in sd_ls.values()]
                 + [Line2D([], [], color=C_NUTS, marker=mk, ls='') for mk in SD_MARKERS.values()],
                 ['MB, half-Normal', 'MB, half-Student-t', 'MB, Exponential', 'NUTS, half-Normal', 'NUTS, Exponential'],
-                fontsize=10, loc='best',
+                loc='best',
             )  # fmt: skip
-        fig.tight_layout(rect=(0, 0, 0.93, 1))
-        cax = fig.add_axes((0.945, 0.25 if rows == 2 else 0.18, 0.012, 0.5 if rows == 2 else 0.68))
+        bottom = LEGEND_H / height
+        fig.tight_layout(rect=(0, bottom, 0.93, 1))
+        ax_box = axes[-1, -1].get_position()  # the colorbar spans the panels' height
+        cax = fig.add_axes((0.945, ax_box.y0, 0.012, axes[0, -1].get_position().y1 - ax_box.y0))
         cbar = fig.colorbar(plt.cm.ScalarMappable(norm=ACCEPT_NORM, cmap=ACCEPT_CMAP), cax=cax)
-        cbar.set_label('MB: IMH acceptance')
+        cbar.set_label('IMH acceptance')
         cbar.ax.axhline(IMH_ACCEPT_WARN, color='0.2', lw=1.2)  # the Api's warning threshold
         return fig
 
@@ -1462,13 +1471,13 @@ class PriorSensitivity:
 
     @staticmethod
     def _nutsDots(ax, nu: pd.DataFrame, x: pd.Series, key: str, marker: str, mfc: str) -> None:
-        """NUTS median and 90% interval; points failing nutsConverged hollow grey."""
-        for conv, color, face in ((True, C_NUTS, mfc), (False, C_UNCONV, 'white')):
+        """NUTS median and 90% interval; points failing nutsConverged hollow."""
+        for conv, face in ((True, mfc), (False, 'white')):
             sel = nu.nuts_converged.astype(bool) == conv
             n = nu[sel]
             yerr = [n[f'{key}_q50'] - n[f'{key}_q05'], n[f'{key}_q95'] - n[f'{key}_q50']]
             ax.errorbar(
-                x[sel], n[f'{key}_q50'], yerr=yerr, fmt=marker, color=color, mfc=face, ms=4.5, lw=1
+                x[sel], n[f'{key}_q50'], yerr=yerr, fmt=marker, color=C_NUTS, mfc=face, ms=4.5, lw=1
             )
 
     def _panelTauBeta(self, ax, df: pd.DataFrame, key: str, sd_prior: tuple[str, float]) -> None:
@@ -1516,8 +1525,12 @@ class PriorSensitivity:
         ax.grid(True, alpha=0.3)
 
     def plotEvidence(self) -> None:
+        with plt.rc_context(FIG_RC):
+            self._plotEvidence()
+
+    def _plotEvidence(self) -> None:
         names = list(self.data)
-        fig, axes = plt.subplots(1, len(names), figsize=(5.2 * len(names), 4.0), squeeze=False)
+        fig, axes = plt.subplots(1, len(names), figsize=(FIG_W, PANEL_H + LEGEND_H), squeeze=False)
         for ax, name in zip(axes[0], names):
             ev = pd.read_csv(self.resultPath(f'_evidence_{name}.csv'))
             meta = self.meta[name]
@@ -1528,30 +1541,32 @@ class PriorSensitivity:
                 & np.isclose(ev.tau_sigma, ts)
                 & np.isclose(ev.tau_beta, tb)
             ]
-            for (sfam, stau), color in zip(meta['nuts_sd'].items(), (C_MB, PALETTE[0])):
+            for (sfam, stau), ls in zip(meta['nuts_sd'].items(), ('-', ':')):  # HN, Exp(1)
                 sl = ev[(ev.sigma_family == sfam) & np.isclose(ev.tau_sigma, stau)]
                 sl = sl.sort_values('tau_beta')
-                ax.plot(sl.tau_beta, sl.logev_t - ref.logev_t.item(), color=color, lw=1.6,
-                        label=f'MB t-IS, normal, {sfam}({stau:g})')  # fmt: skip
-                conv = sl.nuts_converged.astype(bool)  # unconverged references hollow grey
-                for sel, color, face in ((conv, C_NUTS, C_NUTS), (~conv, C_UNCONV, 'white')):
+                ax.plot(sl.tau_beta, sl.logev_t - ref.logev_t.item(), color=C_MB, ls=ls, lw=1.6)
+                conv = sl.nuts_converged.astype(bool)  # unconverged references hollow
+                for sel, face in ((conv, C_NUTS), (~conv, 'white')):
                     ax.plot(sl.tau_beta[sel], sl.logev_bridge[sel] - ref.logev_bridge.item(),
-                            marker='o', color=color, mfc=face, ls='', ms=4.5)  # fmt: skip
-            ax.plot(
-                [],
-                [],
-                marker='o',
-                color=C_NUTS,
-                ls='',
-                ms=4.5,
-                label='bridge sampling on NUTS draws',
-            )
+                            marker='o', color=C_NUTS, mfc=face, ls='', ms=4.5)  # fmt: skip
             ax.axhline(0.0, color='0.5', lw=0.8)
+            ax.plot(tb, 0.0, marker='*', mfc='white', mec='k', mew=0.9, ms=11, ls='', zorder=4)  # reference
             self._axis(ax, ev.tau_beta, r'$\tau_\beta$')
-            ax.set_ylabel(rf'$\ln \mathrm{{BF}}$ vs Normal({tb:.3g}), HN({ts:g})')
-            ax.set_title(DATASETS[name]['title'])
-            ax.legend(fontsize=8)
-        fig.tight_layout()
+            ax.set_ylabel(r'$\ln \mathrm{BF}$')
+            ax.yaxis.set_label_coords(YLABEL_X, 0.5)
+            label, family = PAPER_NAMES[name]
+            ax.set_title(f'{label} ({family})')
+        # one legend for all panels: the half-Normal SD scale is each panel's reference scale
+        fig.legend(
+            [Line2D([], [], color=C_MB, lw=1.6), Line2D([], [], color=C_MB, ls=':', lw=1.6),
+             Line2D([], [], color=C_NUTS, marker='o', ls='', ms=4.5),
+             Line2D([], [], color=C_NUTS, marker='o', mfc='white', ls='', ms=4.5),
+             Line2D([], [], marker='*', mfc='white', mec='k', mew=0.9, ls='', ms=11)],
+            ['MB, HN SD prior', 'MB, Exp(1) SD prior', 'NUTS (bridge sampling)',
+             'NUTS, not converged', 'reference prior'],
+            loc='lower center', ncol=5, frameon=False, handlelength=1.4, columnspacing=1.0,
+        )  # fmt: skip
+        fig.tight_layout(rect=(0, LEGEND_H / (PANEL_H + LEGEND_H), 1, 1))
         self._save(fig, '_bf')
 
     def _save(self, fig, suffix: str) -> None:
