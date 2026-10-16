@@ -1442,10 +1442,9 @@ class PriorSensitivity:
             for ax in axes[:, c]:
                 ax.yaxis.set_label_coords(YLABEL_X, 0.5)
         fig.legend(
-            [Line2D([], [], color=C_MB, ls='-'), Line2D([], [], color=C_NUTS, marker='o', ls=''),
-             Line2D([], [], color=C_NUTS, marker='o', mfc='white', ls='')],
-            ['MB', 'NUTS', 'NUTS, not converged'],
-            loc='lower center', ncol=3, frameon=False, handlelength=1.4, columnspacing=1.0,
+            [Line2D([], [], color=C_MB, ls='-'), Line2D([], [], color=C_NUTS, marker='o', ls='')],
+            ['MB', 'NUTS'],
+            loc='lower center', ncol=2, frameon=False, handlelength=1.4, columnspacing=1.0,
         )  # fmt: skip
         if rows == 2:
             sd_ls = {'halfnormal': '-', 'halfstudent': '--', 'exponential': ':'}
@@ -1471,14 +1470,9 @@ class PriorSensitivity:
 
     @staticmethod
     def _nutsDots(ax, nu: pd.DataFrame, x: pd.Series, key: str, marker: str, mfc: str) -> None:
-        """NUTS median and 90% interval; points failing nutsConverged hollow."""
-        for conv, face in ((True, mfc), (False, 'white')):
-            sel = nu.nuts_converged.astype(bool) == conv
-            n = nu[sel]
-            yerr = [n[f'{key}_q50'] - n[f'{key}_q05'], n[f'{key}_q95'] - n[f'{key}_q50']]
-            ax.errorbar(
-                x[sel], n[f'{key}_q50'], yerr=yerr, fmt=marker, color=C_NUTS, mfc=face, ms=4.5, lw=1
-            )
+        """NUTS median and 90% interval."""
+        yerr = [nu[f'{key}_q50'] - nu[f'{key}_q05'], nu[f'{key}_q95'] - nu[f'{key}_q50']]
+        ax.errorbar(x, nu[f'{key}_q50'], yerr=yerr, fmt=marker, color=C_NUTS, mfc=mfc, ms=4.5, lw=1)
 
     def _panelTauBeta(self, ax, df: pd.DataFrame, key: str, sd_prior: tuple[str, float]) -> None:
         # Normal slope priors only; the Student-t results are reported in the addendum tables
@@ -1545,10 +1539,8 @@ class PriorSensitivity:
                 sl = ev[(ev.sigma_family == sfam) & np.isclose(ev.tau_sigma, stau)]
                 sl = sl.sort_values('tau_beta')
                 ax.plot(sl.tau_beta, sl.logev_t - ref.logev_t.item(), color=C_MB, ls=ls, lw=1.6)
-                conv = sl.nuts_converged.astype(bool)  # unconverged references hollow
-                for sel, face in ((conv, C_NUTS), (~conv, 'white')):
-                    ax.plot(sl.tau_beta[sel], sl.logev_bridge[sel] - ref.logev_bridge.item(),
-                            marker='o', color=C_NUTS, mfc=face, ls='', ms=4.5)  # fmt: skip
+                ax.plot(sl.tau_beta, sl.logev_bridge - ref.logev_bridge.item(),
+                        marker='o', color=C_NUTS, ls='', ms=4.5)  # fmt: skip
             ax.axhline(0.0, color='0.5', lw=0.8)
             ax.plot(tb, 0.0, marker='*', mfc='white', mec='k', mew=0.9, ms=11, ls='', zorder=4)  # reference
             self._axis(ax, ev.tau_beta, r'$\tau_\beta$')
@@ -1560,11 +1552,9 @@ class PriorSensitivity:
         fig.legend(
             [Line2D([], [], color=C_MB, lw=1.6), Line2D([], [], color=C_MB, ls=':', lw=1.6),
              Line2D([], [], color=C_NUTS, marker='o', ls='', ms=4.5),
-             Line2D([], [], color=C_NUTS, marker='o', mfc='white', ls='', ms=4.5),
              Line2D([], [], marker='*', mfc='white', mec='k', mew=0.9, ls='', ms=11)],
-            ['MB, HN SD prior', 'MB, Exp(1) SD prior', 'NUTS (bridge sampling)',
-             'NUTS, not converged', 'reference prior'],
-            loc='lower center', ncol=5, frameon=False, handlelength=1.4, columnspacing=1.0,
+            ['MB, HN SD prior', 'MB, Exp(1) SD prior', 'NUTS (bridge sampling)', 'reference prior'],
+            loc='lower center', ncol=4, frameon=False, handlelength=1.4, columnspacing=1.0,
         )  # fmt: skip
         fig.tight_layout(rect=(0, LEGEND_H / (PANEL_H + LEGEND_H), 1, 1))
         self._save(fig, '_bf')
