@@ -126,9 +126,9 @@ ANALYTICAL_STATS = (
 COLOR = '#3B6FB6'
 # CSVs written while the legacy 'z' prior coordinates were still reported carry an `_r` infix
 LEGACY_COLUMNS = {'logev_is_r_': 'logev_is_', 'k_r_': 'k_', 'eff_r_': 'eff_', '_is_r': '_is'}
-# --t-only; ess/moved: runImh's min IMH bulk ESS and whether the moves ran
+# --t-only; ess/moved/kpool: runImh's min IMH bulk ESS, whether the moves ran, the pool's k̂
 T_COLUMNS = ('logev_t', 'k_t', 'eff_t', 'logev_t_red', 'k_t_red', 'logbf_t')
-T_COLUMNS += ('ess_t', 'moved_t', 'ess_t_red', 'moved_t_red')
+T_COLUMNS += ('ess_t', 'moved_t', 'kpool_t', 'ess_t_red', 'moved_t_red', 'kpool_t_red')
 
 
 # fmt: off
@@ -195,6 +195,10 @@ def loadCsv(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path)
     for old, new in LEGACY_COLUMNS.items():
         df.columns = [c.replace(old, new) for c in df.columns]
+    # the t estimate is flagged by its own pass's k̂ or its pool's, as in the Api
+    if 'logev_t' in df:
+        df['kflag_t'] = np.maximum(df['k_t'], df['kpool_t'])
+        df['kflag_t_red'] = np.maximum(df['k_t_red'], df['kpool_t_red'])
     return df
 
 
@@ -479,7 +483,8 @@ def runImh(
 ) -> tuple[Proposal, dict]:
     """Marginal IMH (Normal) or Laplace IMH, pseudo-marginal when n_inner > 0 (GLMMs), followed by
     the random-walk moves (if given) where their gate fires; for one dataset, its mean acceptance,
-    the IMH chains' min bulk ESS over the globals (the gate's statistic) and whether moves ran."""
+    the IMH chains' min bulk ESS over the globals (the gate's statistic), whether moves ran and
+    the PSIS k̂ of the pool's weights."""
     n_steps = proposal.n_samples // IMH_CHAINS
     sampler = MetropolisSampler(
         batch64,
@@ -498,6 +503,7 @@ def runImh(
         'accept': float(diag['accept_rate'].mean()),
         'ess': float(np.nanmin(ess.numpy())),
         'moved': bool(moves and diag['moved'][0]),
+        'pool_k': float(psislw(diag['log_w'].detach().double().cpu().numpy())[1][0]),
     }
 
 
@@ -576,7 +582,8 @@ def tFit(
     res = tEvidence(batch64, p_imh, lf, s_max, gen)
     if p_imh.has_sigma_eps:  # tEvidence moved it to the raw response scale
         res['log_ev'] -= logJacobianStandardization(batch64).cpu().numpy()
-    return {k: float(v[0]) for k, v in res.items()} | {'ess': imh['ess'], 'moved': imh['moved']}
+    out = {k: float(v[0]) for k, v in res.items()}
+    return out | {k: imh[k] for k in ('ess', 'moved', 'pool_k')}
 
 
 def jeffreys(log_bf: float) -> float:
@@ -802,17 +809,17 @@ def latestCsvs(out_dir: Path, family: str, split: str) -> dict[str, Path]:
 
 
 def _texRows(df: pd.DataFrame, pool_sizes: list[int], head: str, blank: str) -> list[str]:
-    """Table rows of one family and size, converged rows only: the flow pool at the largest S, and
-    the t proposal (S cell '$t$') where the CSV carries it."""
+    """Table rows of one family and size, converged rows only, by source: the flow pool at the
+    largest S ('pool') and the t proposal ('$t$', flagged by kflag_t) where the CSV carries it."""
     df = convergedRows(df)
     ref = df['logev_bridge_nuts']
     nested = nestedRows(df)
     s_max = max(pool_sizes)
-    rows = [(s_max, f'logev_is_s{s_max}', f'k_s{s_max}', 'logbf_is')]
+    rows = [('pool', f'logev_is_s{s_max}', f'k_s{s_max}', 'logbf_is')]
     if 'logev_t' in df:
-        rows.append(('$t$', 'logev_t', 'k_t', 'logbf_t'))
+        rows.append(('$t$', 'logev_t', 'kflag_t', 'logbf_t'))
     lines = []
-    for s, logev, k, logbf in rows:
+    for source, logev, k, logbf in rows:
         d = (df[logev] - ref).abs()
         frac_k = (df[k] > 0.7).mean()
         nested_cells = ' & & '
@@ -821,7 +828,7 @@ def _texRows(df: pd.DataFrame, pool_sizes: list[int], head: str, blank: str) -> 
             bf = (nested[logbf] - nested['logbf_ref']).abs().median()
             nested_cells = f'{len(nested)} & ${agree:.2f}$ & ${bf:.3f}$'
         lines.append(
-            f'{head} & {s} & ${d.median():.3f}$ & ${d.quantile(0.9):.3f}$ & '
+            f'{head} & {source} & ${d.median():.3f}$ & ${d.quantile(0.9):.3f}$ & '
             f'${frac_k:.2f}$ & {nested_cells} \\\\'
         )
         head = blank
@@ -829,7 +836,7 @@ def _texRows(df: pd.DataFrame, pool_sizes: list[int], head: str, blank: str) -> 
 
 
 _TEX_COLUMNS = (
-    r'$\#\mathrm{ds}$ & $\#\mathrm{corr}$ & $S$ & $\mathrm{med}\,|\Delta|$ & '
+    r'$\#\mathrm{ds}$ & $\#\mathrm{corr}$ & $\mathrm{source}$ & $\mathrm{med}\,|\Delta|$ & '
     r'$q_{90}\,|\Delta|$ & $\mathrm{frac}\,\hat k>0.7$ & $\#\mathrm{nested}$ & '
     r'$\mathrm{BF\ cat.\ agree}$ & $\mathrm{med}\,|\Delta\ln \mathrm{BF}|$ \\'
 )
@@ -841,7 +848,7 @@ def writeTex(out_dir: Path, split: str, pool_sizes: list[int]) -> Path | None:
     if not csvs:
         return None
     lines = [
-        r'\begin{tabular}{lrr r cc c r cc}',
+        r'\begin{tabular}{lrr l cc c r cc}',
         r'    \toprule',
         r'    $\mathrm{regime}$ & ' + _TEX_COLUMNS,
         r'    \midrule',
@@ -864,7 +871,7 @@ def writeTexDiscrete(out_dir: Path, split: str, pool_sizes: list[int]) -> Path |
     if not any(blocks.values()):
         return None
     lines = [
-        r'\begin{tabular}{llrr r cc c r cc}',
+        r'\begin{tabular}{llrr l cc c r cc}',
         r'    \toprule',
         r'    $\mathrm{family}$ & $\mathrm{regime}$ & ' + _TEX_COLUMNS,
         r'    \midrule',
@@ -958,13 +965,13 @@ def writePaperStats(out_dir: Path, split: str, pool_sizes: list[int]) -> Path | 
                 r['Laplace med'] = lap.median()
                 r['Laplace frac>0.3'] = (lap > 0.3).mean()
             if 'logev_t' in df:
-                d_t, k_t = (df['logev_t'] - ref).abs(), df['k_t']
+                d_t, k_t = (df['logev_t'] - ref).abs(), df['kflag_t']
                 r |= {
                     'med t': d_t.median(),
                     'q90 t': d_t.quantile(0.9),
-                    'frac k_t>0.7': (k_t > 0.7).mean(),
+                    'frac kflag_t>0.7': (k_t > 0.7).mean(),
                     '#|Δt|>1': int((d_t > 1).sum()),
-                    '#|Δt|>1 & k_t>0.7': int(((d_t > 1) & (k_t > 0.7)).sum()),
+                    '#|Δt|>1 & kflag_t>0.7': int(((d_t > 1) & (k_t > 0.7)).sum()),
                 }
             if len(nested):
                 r['nested'] = len(nested)
@@ -973,7 +980,7 @@ def writePaperStats(out_dir: Path, split: str, pool_sizes: list[int]) -> Path | 
                 )
                 r |= _nestedStats(nested, 'logbf_is', f'k_s{s_max}', 'k_red', 'IS')
                 if 'logbf_t' in nested:
-                    r |= _nestedStats(nested, 'logbf_t', 'k_t', 'k_t_red', 't')
+                    r |= _nestedStats(nested, 'logbf_t', 'kflag_t', 'kflag_t_red', 't')
             rows[f'{family} {size}'] = r
         fam = [v for (f, _), v in frames.items() if f == family]
         if not fam:
@@ -1157,13 +1164,13 @@ def runSizeT(size: str, args: argparse.Namespace) -> None:
         i = int(r.idx)
         fit = tFit(model, col[i], args, seed=args.seed * 100_003 + i)
         row = {'idx': i, 'logev_t': fit['log_ev'], 'k_t': fit['k'], 'eff_t': fit['eff']}
-        row |= {'ess_t': fit['ess'], 'moved_t': fit['moved']}
+        row |= {'ess_t': fit['ess'], 'moved_t': fit['moved'], 'kpool_t': fit['pool_k']}
         msg = f'ds={i:3d}  t Δ={fit["log_ev"] - r.logev_bridge_nuts:+.3f}  k={fit["k"]:.2f}'
-        msg += f'  ess={fit["ess"]:.0f}{" moved" if fit["moved"] else ""}'
+        msg += f'  pool k={fit["pool_k"]:.2f}  ess={fit["ess"]:.0f}'
         if pd.notna(r.logbf_ref):
             red = tFit(model, reducedItem(col[i]), args, seed=args.seed * 100_003 + i + 50_000)
-            row |= {'logev_t_red': red['log_ev'], 'k_t_red': red['k']}
-            row |= {'ess_t_red': red['ess'], 'moved_t_red': red['moved']}
+            row |= {'logev_t_red': red['log_ev'], 'k_t_red': red['k'], 'ess_t_red': red['ess']}
+            row |= {'moved_t_red': red['moved'], 'kpool_t_red': red['pool_k']}
             row['logbf_t'] = fit['log_ev'] - red['log_ev']
             msg += f'  lnBF ref={r.logbf_ref:+.2f} t={row["logbf_t"]:+.2f}'
         rows.append(row)
