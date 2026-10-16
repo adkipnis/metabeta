@@ -802,16 +802,13 @@ def latestCsvs(out_dir: Path, family: str, split: str) -> dict[str, Path]:
 
 
 def _texRows(df: pd.DataFrame, pool_sizes: list[int], head: str, blank: str) -> list[str]:
-    """Table rows of one family and size, converged rows only: the flow pool at the smallest and
-    largest S, and the t proposal (S cell '$t$') where the CSV carries it."""
+    """Table rows of one family and size, converged rows only: the flow pool at the largest S, and
+    the t proposal (S cell '$t$') where the CSV carries it."""
     df = convergedRows(df)
     ref = df['logev_bridge_nuts']
     nested = nestedRows(df)
-    s_min, s_max = min(pool_sizes), max(pool_sizes)
-    rows = [
-        (s_min, f'logev_is_s{s_min}', f'k_s{s_min}', None),
-        (s_max, f'logev_is_s{s_max}', f'k_s{s_max}', 'logbf_is'),
-    ]
+    s_max = max(pool_sizes)
+    rows = [(s_max, f'logev_is_s{s_max}', f'k_s{s_max}', 'logbf_is')]
     if 'logev_t' in df:
         rows.append(('$t$', 'logev_t', 'k_t', 'logbf_t'))
     lines = []
@@ -819,7 +816,7 @@ def _texRows(df: pd.DataFrame, pool_sizes: list[int], head: str, blank: str) -> 
         d = (df[logev] - ref).abs()
         frac_k = (df[k] > 0.7).mean()
         nested_cells = ' & & '
-        if logbf and len(nested):
+        if len(nested):
             agree = categoryAgreement(nested[logbf], nested['logbf_ref'])
             bf = (nested[logbf] - nested['logbf_ref']).abs().median()
             nested_cells = f'{len(nested)} & ${agree:.2f}$ & ${bf:.3f}$'
