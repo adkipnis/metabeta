@@ -115,50 +115,8 @@ case "$FAM_NAME" in
     *) echo "Unknown family letter: $FAM_NAME (use n, b, or p)" >&2; exit 1 ;;
 esac
 
-SIF="$HOME/containers/python312.sif"
-VENV="$HOME/metabeta/.venv-apptainer"
-# outputs/data is symlinked to workspace storage; bind it so the link resolves in-container
-DATA_ROOT="/lustre/groups/hcai/workspace/alexander.kipnis/datasets"
-
-# node-local compile directory; empty (cold) unless a warm cache is unpacked into it
-JOB_TMPDIR="${SLURM_TMPDIR:-/tmp}/pytensor_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
-mkdir -p "$JOB_TMPDIR"
-trap 'rm -rf "$JOB_TMPDIR"' EXIT
-[[ -n "$WARM" ]] && tar xf "$WARM" -C "$JOB_TMPDIR"
-
-apptainer exec \
-  --bind "$HOME:$HOME" \
-  --bind "$DATA_ROOT:$DATA_ROOT" \
-  --bind /tmp:/tmp \
-  "$SIF" \
-  bash -lc "
-    set -euo pipefail
-
-    cd '$HOME/metabeta'
-    source '$VENV/bin/activate'
-
-    export OMP_NUM_THREADS=1
-    export MKL_NUM_THREADS=1
-    export OPENBLAS_NUM_THREADS=1
-    export NUMEXPR_NUM_THREADS=1
-
-    export TMPDIR="$JOB_TMPDIR"
-    export PYTENSOR_FLAGS='base_compiledir=$JOB_TMPDIR,cxx=/usr/bin/g++'
-
-    echo 'hostname:' \$(hostname)
-    echo 'python:' \$(command -v python)
-    python --version
-    echo 'PYTENSOR_FLAGS:' \$PYTENSOR_FLAGS
-    echo 'SLURM_CPUS_PER_TASK:' ${SLURM_CPUS_PER_TASK}
-    echo 'Fitting dataset idx:' '$FIT_IDX'
-    echo 'warm cache:' '${WARM:-none}'
-
-    python metabeta/simulation/fit.py \
-      --size '$SIZE' \
-      --family '$FAMILY' \
-      --ds_type '$DS_TYPE' \
-      --partition '$PARTITION' \
-      --method '$METHOD' \
-      --level '$LEVEL' \
-      --idx '$FIT_IDX'
-  "
+source "$HOME/metabeta/scripts/pymc-run.sh"
+[[ -n "$WARM" ]] && tar xf "$WARM" -C "$PYTENSOR_DIR"
+echo "warm cache: ${WARM:-none}"
+runPymc python metabeta/simulation/fit.py --size "$SIZE" --family "$FAMILY" --ds_type "$DS_TYPE" \
+    --partition "$PARTITION" --method "$METHOD" --level "$LEVEL" --idx "$FIT_IDX"
