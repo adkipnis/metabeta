@@ -7,12 +7,13 @@ from torch.nn import functional as F
 from metabeta.models.transformers import SetTransformer
 from metabeta.models.normalizingflows import CouplingFlow
 from metabeta.utils.regularization import (
-    getConstrainers,
-    softplus,
+    constrainGlobals,
     corrToLower,
     corrToUnconstrained,
-    corrLowerToUnconstrained,
+    globalMask,
     logDetJacobianCorr,
+    softplus,
+    unconstrainGlobals,
     unconstrainedToCholesky,
 )
 from metabeta.utils.config import ApproximatorConfig, SummarizerConfig, PosteriorConfig
@@ -28,7 +29,6 @@ from metabeta.analytical.lmm.gaussian_local import (
 
 logger = logging.getLogger(__name__)
 
-constrainSigma, unconstrainSigma, _ = getConstrainers(method='softplus')
 CLAMP = 20.0
 
 
@@ -197,15 +197,7 @@ class Approximator(nn.Module):
             if mask_l.shape[-1] == 1:  # handle 1D local params for flow
                 mask_l = F.pad(mask_l, (0, 1))
             return mask_l
-        masks = [data['mask_d'][..., : self.d_ffx], data['mask_q'][..., : self.d_rfx]]
-        if self.has_sigma_eps:
-            masks.append(torch.ones_like(data['mask_d'][..., 0:1]))
-        if self.d_corr > 0:
-            mask_corr = data['mask_corr'][..., : self.d_corr]
-            if 'eta_rfx' in data:  # this breaks earlier models
-                mask_corr = mask_corr & (data['eta_rfx'].unsqueeze(-1) > 0)
-            masks.append(mask_corr)
-        return torch.cat(masks, dim=-1)
+        return globalMask(data, self.d_ffx, self.d_rfx, self.has_sigma_eps, self.d_corr)
 
     def _dataStatistics(self, data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         """Compute sufficient statistics: GLS/GLMM β̂, σ̂, BLUPs.
@@ -384,8 +376,9 @@ class Approximator(nn.Module):
         d, q = self.d_ffx, self.d_rfx
         q_var = q + 1  # sigma_rfx (q) + sigma_eps (1); lf==0 always has sigma_eps
         beta = gp[..., :d]
-        sigma_rfx = constrainSigma(gp[..., d : d + q])
-        sigma_eps = constrainSigma(gp[..., d + q : d + q + 1]).squeeze(-1)
+        # padding from mask_q, not from a zero draw (see constrainGlobals)
+        sigma_rfx = softplus(gp[..., d : d + q]) * data['mask_q'][..., None, :q].to(gp.dtype)
+        sigma_eps = softplus(gp[..., d + q])
         corr_rfx = None
         if self.d_corr > 0:
             z_corr = gp[..., d + q_var : d + q_var + self.d_corr]
@@ -415,20 +408,7 @@ class Approximator(nn.Module):
         """constrain target parameters"""
         if local:
             return targets
-        targets = targets.clone()
-        d = self.d_ffx
-        q_var = self.d_rfx + (1 if self.has_sigma_eps else 0)
-
-        # project sigma block R+ → R
-        sigmas = targets[..., d : d + q_var]
-        targets[..., d : d + q_var] = unconstrainSigma(sigmas)
-        # project corr lower triangle (-1,1) → R
-        if self.d_corr > 0:
-            r_corr = targets[..., d + q_var : d + q_var + self.d_corr]
-            targets[..., d + q_var : d + q_var + self.d_corr] = corrLowerToUnconstrained(
-                r_corr, self.d_rfx
-            )
-        return targets
+        return unconstrainGlobals(targets, self.d_ffx, self.d_rfx, self.has_sigma_eps, self.d_corr)
 
     def _postprocess(self, proposed: dict[str, dict[str, torch.Tensor]], mask_g: torch.Tensor):
         """reverse _preprocess for samples; mask_g marks the active global dims"""
@@ -447,31 +427,21 @@ class Approximator(nn.Module):
         _debug_corr: dict | None = None  # DEBUG: Jacobian diagnostics
         if 'global' in proposed:
             samples = proposed['global']['samples']
-            log_sigmas = samples[..., d : d + q_var].clone()
-            # padding comes from mask_g, not from log_sigma == 0 (the masked constrainers' rule):
-            # an active float32 draw lands on exactly 0 about once per few million draws, and
-            # would become sigma = 0 with its Jacobian dropped
-            active = mask_g[..., d : d + q_var].unsqueeze(-2).to(log_sigmas.dtype)
-            log_det = F.logsigmoid(log_sigmas) * active
-            log_prob_g = proposed['global']['log_prob'] - log_det.sum(dim=-1)
-            sigmas = softplus(log_sigmas) * active
-            samples_out = [samples[..., :d], sigmas]
+            samples_out, log_det = constrainGlobals(
+                samples, mask_g, d, q, self.has_sigma_eps, d_corr
+            )
+            log_prob_g = proposed['global']['log_prob'] - log_det
             if d_corr > 0:
                 z_corr = samples[..., d + q_var : d + q_var + d_corr]
                 ldj_corr = logDetJacobianCorr(z_corr, q)  # DEBUG
-                log_prob_g_pre = log_prob_g  # DEBUG
-                log_prob_g = log_prob_g - ldj_corr
                 _debug_corr = {  # DEBUG
                     'ldj_corr_mean': ldj_corr.mean().item(),
-                    'log_prob_g_pre_corr': log_prob_g_pre.mean().item(),
+                    'log_prob_g_pre_corr': (log_prob_g + ldj_corr).mean().item(),
                     'log_prob_g_post_corr': log_prob_g.mean().item(),
                     'z_corr_norm_mean': z_corr.norm(dim=-1).mean().item(),
                 }
-                L_corr = unconstrainedToCholesky(z_corr, q)
-                r_corr = corrToLower(L_corr @ L_corr.mT)
-                samples_out.append(r_corr)
             proposed['global']['log_prob'] = log_prob_g
-            proposed['global']['samples'] = torch.cat(samples_out, dim=-1)
+            proposed['global']['samples'] = samples_out
         proposal = Proposal(proposed, has_sigma_eps=self.has_sigma_eps, d_corr=d_corr)
         proposal.debug_stats = _debug_corr  # DEBUG
         return proposal
