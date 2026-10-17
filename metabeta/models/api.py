@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,7 +26,6 @@ from metabeta.posthoc.metropolis import (
     IS2_N_INNER,
     LocalMoves,
     MetropolisSampler,
-    bulkEss,
     suggestPoolSize,
 )
 from metabeta.utils.config import ApproximatorConfig
@@ -459,7 +458,6 @@ class Api:
                 k_threshold=k_threshold,
                 n_samples=n_samples,
                 moves=moves,
-                evidence=evidence,
             )
         log_ev = None
         if evidence:
@@ -751,6 +749,32 @@ class Api:
         proposal = model.estimate(batch, n_samples=n_samples, stats=stats, local=local)
         return proposal, stats
 
+    def _mapChunks(
+        self,
+        fn: Callable[[Proposal, dict[str, torch.Tensor]], Any],
+        proposal: Proposal,
+        batch: dict[str, torch.Tensor],
+    ) -> list[Any]:
+        """fn(proposal chunk, batch chunk) per chunk of ``self.batch_size`` datasets (when set),
+        each trimmed to its own padding; one call on the whole batch when it fits."""
+        B = proposal.samples_g.shape[0]
+        chunk_size = self.batch_size or B
+        if chunk_size >= B:
+            return [fn(proposal, batch)]
+        out = []
+        for start in range(0, B, chunk_size):
+            end = min(start + chunk_size, B)
+            chunk = trimBatchPadding(sliceBatch(batch, start, end))
+            base_chunk = proposal.slice_b(start, end).resizeGroups(chunk['mask_n'].shape[1])
+            out.append(fn(base_chunk, chunk))
+        return out
+
+    @staticmethod
+    def _joinChunks(chunks: list[Proposal], batch: dict[str, torch.Tensor]) -> Proposal:
+        if len(chunks) == 1:
+            return chunks[0]
+        return concatProposalsBatch(chunks).resizeGroups(batch['mask_n'].shape[1])
+
     def _refineAndCheck(
         self,
         proposal: Proposal,
@@ -760,7 +784,6 @@ class Api:
         k_threshold: float,
         n_samples: int,
         moves: LocalMoves | None = None,
-        evidence: bool = False,
     ) -> tuple[Proposal, dict[str, Any]]:
         """Refine the flow posterior ('imh' or 'is') and run the reliability checks.
 
@@ -774,9 +797,9 @@ class Api:
         parameter are reported; mean acceptance below ``IMH_ACCEPT_WARN`` or a minimum ESS
         below ``IMH_ESS_WARN`` triggers a warning.  The post-burn-in
         draws are trimmed to exactly ``n_samples``.  ``moves`` (``LocalMoves``) runs random-walk
-        moves where its gate says; the ESS stays the IMH chains' (the gate's statistic).
-        ``evidence`` also reports the PSIS k̂ of the pool's weights ('psis_k', which 'is' always
-        reports), for the evidence check.
+        moves where its gate says; the ESS stays the IMH chains' (the gate's statistic).  Both
+        methods report the PSIS k̂ of the pool's weights ('psis_k'), which the evidence check
+        reuses.
 
         'is' applies self-normalized importance sampling with PSIS smoothing; datasets
         with k̂ > ``k_threshold`` fall back to uniform weights (the raw flow globals, with
@@ -789,9 +812,7 @@ class Api:
         """
         lf = int(batch['likelihood_family'].flatten()[0].item())
         if method == 'imh':
-            return self._refineIMH(
-                proposal, batch, lf=lf, n_samples=n_samples, moves=moves, evidence=evidence
-            )
+            return self._refineIMH(proposal, batch, lf=lf, n_samples=n_samples, moves=moves)
 
         def _refineChunk(chunk_proposal: Proposal, chunk: dict[str, torch.Tensor]) -> Proposal:
             if lf == 0:
@@ -815,18 +836,7 @@ class Api:
             return sampler(chunk_proposal)
 
         B = proposal.samples_g.shape[0]
-        chunk_size = self.batch_size or B
-        if chunk_size >= B:
-            proposal = _refineChunk(proposal, batch)
-        else:
-            chunks = []
-            for start in range(0, B, chunk_size):
-                end = min(start + chunk_size, B)
-                chunk = trimBatchPadding(sliceBatch(batch, start, end))
-                base_chunk = proposal.slice_b(start, end).resizeGroups(chunk['mask_n'].shape[1])
-                chunks.append(_refineChunk(base_chunk, chunk))
-            proposal = concatProposalsBatch(chunks).resizeGroups(batch['mask_n'].shape[1])
-
+        proposal = self._joinChunks(self._mapChunks(_refineChunk, proposal, batch), batch)
         psis_k = proposal.is_results['pareto_k'].detach().float().cpu().numpy().copy()
         fallback = proposal.is_results['fallback'].detach().cpu().numpy().copy()
 
@@ -868,16 +878,13 @@ class Api:
         lf: int,
         n_samples: int,
         moves: LocalMoves | None = None,
-        evidence: bool = False,
     ) -> tuple[Proposal, dict[str, Any]]:
         """IMH-refine the flow posterior; see ``_refineAndCheck`` for the contract."""
         n_steps = proposal.n_samples // IMH_N_CHAINS
-        move_diags: list[dict] = []
-        pool_k: list[np.ndarray] = []
 
         def _imhChunk(
             chunk_proposal: Proposal, chunk: dict[str, torch.Tensor]
-        ) -> tuple[Proposal, torch.Tensor]:
+        ) -> tuple[Proposal, dict[str, Any]]:
             sampler = MetropolisSampler(
                 chunk,
                 n_chains=IMH_N_CHAINS,
@@ -889,39 +896,19 @@ class Api:
                 n_inner=0 if lf == 0 else IS2_N_INNER,
                 moves=moves,
             )
-            refined, diag = sampler(chunk_proposal)
-            if moves is not None:
-                move_diags.append(diag)
-            if evidence:
-                pool_k.append(psislw(diag['log_w'].detach().double().cpu().numpy())[1])
-            return refined, diag['accept_rate']
+            return sampler(chunk_proposal)
 
-        B = proposal.samples_g.shape[0]
-        chunk_size = self.batch_size or B
-        if chunk_size >= B:
-            proposal, accept = _imhChunk(proposal, batch)
-        else:
-            chunks, accepts = [], []
-            for start in range(0, B, chunk_size):
-                end = min(start + chunk_size, B)
-                chunk = trimBatchPadding(sliceBatch(batch, start, end))
-                base_chunk = proposal.slice_b(start, end).resizeGroups(chunk['mask_n'].shape[1])
-                refined, acc = _imhChunk(base_chunk, chunk)
-                chunks.append(refined)
-                accepts.append(acc)
-            proposal = concatProposalsBatch(chunks).resizeGroups(batch['mask_n'].shape[1])
-            accept = torch.cat(accepts, dim=0)
-
-        # bulk ESS over the IMH chains before trimming (the trim cuts into the last chain)
-        if moves is None:
-            ess = bulkEss(proposal.samples_g, IMH_N_CHAINS)  # (B, D_g), NaN = padding
-            ran = torch.zeros(B, dtype=torch.bool)
-            rw_accept = torch.full((B,), float('nan'), dtype=torch.float64)
-        else:  # the sampler's: the moves replace the IMH chains
-            ess = torch.cat([d['ess'] for d in move_diags])
-            ran = torch.cat([d['moved'] for d in move_diags])
-            rw_accept = torch.cat([d['move_accept'] for d in move_diags])
-        ran, ess = ran.numpy(), ess.numpy()
+        parts = self._mapChunks(_imhChunk, proposal, batch)
+        proposal = self._joinChunks([p for p, _ in parts], batch)
+        accept, ess, ran, rw_accept = (
+            torch.cat([diag[k] for _, diag in parts])
+            for k in ('accept_rate', 'ess', 'moved', 'move_accept')
+        )
+        pool_k = np.concatenate(
+            [psislw(diag['log_w'].cpu().double().numpy())[1] for _, diag in parts]
+        )
+        B = accept.shape[0]
+        ran, ess = ran.numpy(), ess.numpy()  # ess (B, D_g): the IMH chains', NaN = padding
         with warnings.catch_warnings():
             warnings.simplefilter('ignore', RuntimeWarning)  # all-NaN rows
             ess_min = np.nanmin(ess, axis=1)
@@ -988,7 +975,8 @@ class Api:
             'ess_flag': ess_flag,
             'random_walk_ran': ran,
             'random_walk_accept': rw_accept.numpy(),
-        } | ({'psis_k': np.concatenate(pool_k)} if evidence else {})
+            'psis_k': pool_k,
+        }
 
     def _mapConsistency(
         self,
@@ -1037,14 +1025,9 @@ class Api:
         pool's gaps, which the t pass's own k̂ can miss.
         """
         lf = int(batch['likelihood_family'].flatten()[0].item())
-        B = proposal.samples_g.shape[0]
-        chunk_size = self.batch_size or B
-        parts = []
-        for start in range(0, B, chunk_size):
-            end = min(start + chunk_size, B)
-            chunk = trimBatchPadding(sliceBatch(batch, start, end))
-            base_chunk = proposal.slice_b(start, end).resizeGroups(chunk['mask_n'].shape[1])
-            parts.append(tEvidence(chunk, base_chunk, lf, proposal.n_samples))
+        parts = self._mapChunks(
+            lambda p, chunk: tEvidence(chunk, p, lf, proposal.n_samples), proposal, batch
+        )
         log_ev, psis_k, eff = (
             np.concatenate([p[k] for p in parts]) for k in ('log_ev', 'k', 'eff')
         )
