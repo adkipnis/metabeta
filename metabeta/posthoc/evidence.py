@@ -8,6 +8,8 @@ draws must be unrescaled; the result is moved to the raw response scale, where a
 between two models of the same data is the difference of their log-evidences.
 """
 
+from __future__ import annotations
+
 import math
 
 import numpy as np
@@ -62,7 +64,8 @@ def tEvidence(
     for key in structure.unique(dim=0):
         sel = (structure == key).all(-1)
         sel_np = sel.cpu().numpy()
-        res = _tEvidenceBlock(subsetBatch(batch, sel_np), posterior, sel, lf, n_draws, gen)
+        block = batch if sel_np.all() else subsetBatch(batch, sel_np)
+        res = _tEvidenceBlock(block, posterior, sel, lf, n_draws, gen)
         for k in out:
             out[k][sel_np] = res[k]
     if posterior.has_sigma_eps:
@@ -135,9 +138,11 @@ def _tEvidenceBlock(
         L_corr = unconstrainedToCholesky(z_corr, q_i)
         off = d_max + q_max + eps
         g[..., off : off + dc_i] = corrToLower(L_corr @ L_corr.mT)
-    rfx = g.new_zeros(b, m, n_draws, q_max)
-    if lf != 0:  # Laplace mode-search seed
-        rfx = posterior.rfx[sel].to(dt).median(dim=2, keepdim=True).values.expand_as(rfx)
+    if lf == 0:  # the marginal target ignores the rfx
+        rfx = g.new_zeros(b, m, n_draws, q_max)
+    else:  # Laplace mode-search seed
+        rfx = posterior.rfx[sel].to(dt).median(dim=2, keepdim=True).values
+        rfx = rfx.expand(b, m, n_draws, q_max)
     proposal = Proposal(
         {
             'global': {'samples': g, 'log_prob': g.new_zeros(b, n_draws)},
