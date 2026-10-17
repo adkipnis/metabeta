@@ -103,9 +103,9 @@ from metabeta.utils.config import ApproximatorConfig  # noqa: E402
 from metabeta.utils.constants import hasSigmaEps  # noqa: E402
 from metabeta.utils.psis import psislw  # noqa: E402
 from metabeta.utils.dataloader import Collection, collateGrouped, toDevice  # noqa: E402
-from metabeta.utils.evaluation import NUTS_DIAG_KEYS, nutsConverged  # noqa: E402
+from metabeta.utils.evaluation import NUTS_DIAG_KEYS, nutsConverged, simulatorClipped  # noqa: E402
 from metabeta.utils.fits import REFERENCE_TAG, loadFits  # noqa: E402
-from metabeta.utils.families import POISSON_ETA_CLIP_MAX, logProbCorrRfx  # noqa: E402
+from metabeta.utils.families import logProbCorrRfx  # noqa: E402
 from metabeta.utils.posterior_eval import MOVES_RW  # noqa: E402
 from metabeta.utils.preprocessing import logJacobianStandardization  # noqa: E402
 from metabeta.utils.regularization import (  # noqa: E402
@@ -1227,12 +1227,6 @@ def runSizeT(size: str, args: argparse.Namespace) -> None:
     print(f'[saved] {path}  ({time.perf_counter() - t0:.0f}s)')
 
 
-def etaClipped(item: dict[str, np.ndarray]) -> bool:
-    """Whether the simulator clipped η at POISSON_ETA_CLIP_MAX for an observation of the item."""
-    eta = item['X'] @ item['ffx'] + (item['Z'] * item['rfx'][item['groups'].astype(int)]).sum(-1)
-    return bool(eta.max() > POISSON_ETA_CLIP_MAX)
-
-
 def runSizeRef(size: str, args: argparse.Namespace) -> None:
     """--ref-only: REF_COLUMNS on the rows of the size's CSV, written to ref/ for the join. The
     bridges get fresh generators with runSize's seeds (+50_000 for the reduced model)."""
@@ -1245,6 +1239,7 @@ def runSizeRef(size: str, args: argparse.Namespace) -> None:
     ref = pd.read_csv(args.out_dir / f'{stem}.csv', float_precision='round_trip')
     d_corr = loadModel(ckpt)[0].d_corr
     nuts = loadNuts(npz_path, n_ds) if lf != 0 else None
+    clipped = simulatorClipped(npz_path)
     rows = []
     t0 = time.perf_counter()
     for r in ref[ref['idx'] % args.n_shards == args.shard].itertuples():
@@ -1252,7 +1247,7 @@ def runSizeRef(size: str, args: argparse.Namespace) -> None:
         seed = args.seed * 100_003 + i
         batch64 = toDouble(collateGrouped([item]))
         target = Target(batch64, d_corr, lf)
-        row = {'idx': i, 'eta_clipped': lf == 2 and etaClipped(item)}
+        row = {'idx': i, 'eta_clipped': bool(clipped[i])}
         row |= {'logev_ref': r.logev_bridge_nuts, 'logev_ref_swap': r.logev_bridge_nuts_swap}
         if lf != 0:
             u = target.fromNuts(nuts, i)

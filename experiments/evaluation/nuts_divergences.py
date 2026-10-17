@@ -31,6 +31,7 @@ from metabeta.utils.evaluation import (
     RHAT_MAX,
     EvaluationSummary,
     nutsChecks,
+    simulatorClipped,
 )
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR
 from metabeta.utils.fits import fitPath, loadFits
@@ -62,13 +63,15 @@ def setup() -> argparse.Namespace:
 
 
 def loadDiagnostics(path: Path, tag: str) -> dict[str, np.ndarray] | None:
-    """Read only the diagnostic members of test.{tag}.npz (plus EXTRA_KEYS from test.npz)."""
+    """Read only the diagnostic members of test.{tag}.npz (plus EXTRA_KEYS from test.npz), for
+    the datasets the simulator did not clip (utils.evaluation.simulatorClipped)."""
     if not (path.exists() and fitPath(path, tag).exists()):
         return None
     diag = loadFits(path, tag, keys=[f'{tag}_{k}' for k in DIAG_KEYS])
     with np.load(path, allow_pickle=True) as f:
         diag.update({k: f[k] for k in EXTRA_KEYS if k in f.files})
-    return diag
+    keep = ~simulatorClipped(path)
+    return {k: np.asarray(v)[keep] for k, v in diag.items()}
 
 
 def _paramStat(arr: np.ndarray, fn) -> np.ndarray:

@@ -6,7 +6,8 @@ over fixed effects, scales, random effects and the residual scale, and exempt th
 parameters. This script reports those exempted parameters on their own:
 r / NRMSE / ECE / EACE over the lower-triangle correlation pairs, restricted to the datasets
 whose ground-truth correlation matrix is not the identity (q >= 2 and eta_rfx > 0) and — as
-in the oracle tables — to the datasets on which the NUTS reference (``nuts2``) converged.
+in the oracle tables — to the datasets on which the NUTS reference (``nuts2``) converged and the
+simulator did not clip.
 
 Efficiency: reuses the cached MB samples and post-hoc refinements written by oracle_posterior.py
 (same cache keys), streams one reference method's fit tensors at a time, and computes only the
@@ -44,7 +45,7 @@ from metabeta.evaluation.summary import EST_TYPE, _averageOverAlpha
 from metabeta.plotting.recovery import _plotRecovery
 from metabeta.utils.dataloader import subsetBatch
 from metabeta.utils.device import setDevice
-from metabeta.utils.evaluation import referenceConverged, subsetProposal
+from metabeta.utils.evaluation import referenceConverged, simulatorClipped, subsetProposal
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR
 from metabeta.utils.fits import fitPath
 from metabeta.utils.logger import setupLogging
@@ -203,7 +204,7 @@ def evaluateRegime(
     sel = correlatedMask(data_batch)
     n_corr = int(sel.sum())
     conv = referenceConverged(data_path)
-    conv_mask = None if conv is None else conv[cap_mask]
+    conv_mask = None if conv is None else (conv & ~simulatorClipped(data_path))[cap_mask]
     if conv_mask is not None:
         sel &= conv_mask
         logger.info(
