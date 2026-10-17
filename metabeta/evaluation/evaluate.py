@@ -123,7 +123,8 @@ def setup() -> argparse.Namespace:
     )
     parser.add_argument(
         '--all_datasets', action=argparse.BooleanOptionalAction, default=False,
-        help='Evaluate every dataset instead of only those where the nuts2 reference converged',
+        help='Evaluate every dataset instead of only those where the nuts2 reference converged '
+        '(simulator-clipped Poisson datasets stay out either way)',
     )
     parser.add_argument(
         '--pred_coverage', action=argparse.BooleanOptionalAction, default=False,
