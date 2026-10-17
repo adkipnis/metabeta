@@ -235,7 +235,6 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--batch_size', type=int, default=None, help='Api refinement chunk size (bounds IMH memory)')
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--n_bridge', type=int, default=4000, help='bridge-sampling proposal draws')
-    parser.add_argument('--points', nargs='+', type=int, default=None, help='evidence stage on these grid points only (default: all)')
     parser.add_argument('--fig_dir', type=str, default=None, help='extra directory that also receives the figure PDFs')
     parser.add_argument('--dry_run', action='store_true', help='build grid and data, log the plan, write nothing')
     parser.add_argument('--verbosity', type=int, default=1)
@@ -1133,8 +1132,6 @@ class PriorSensitivity:
             for block in mb['blocks']:
                 pool, tev, wall_t = estimators(block)
                 for j, point in enumerate(block['points']):
-                    if self.cfg.points is not None and point not in self.cfg.points:
-                        continue
                     row = self.rowBase(name, point, 'MB0') | {
                         'logev_is': pool['log_ev'][j],
                         'psis_k': pool['k'][j],
@@ -1417,8 +1414,8 @@ class PriorSensitivity:
                 self._save(self._figure(names, sd_family), suffix)
             # _main: key-effect row only, a compact version of the 2 x 3 figures
             self._save(self._figure(names, 'halfnormal', rows=1), '_main')
-        if all(self.resultPath(f'_evidence_{n}.csv').exists() for n in names):
-            self.plotEvidence()
+            if all(self.resultPath(f'_evidence_{n}.csv').exists() for n in names):
+                self.plotEvidence()
 
     def _figure(self, names: list[str], sd_family: str, rows: int = 2):
         height = PANEL_H * rows + LEGEND_H
@@ -1517,10 +1514,6 @@ class PriorSensitivity:
         ax.grid(True, alpha=0.3)
 
     def plotEvidence(self) -> None:
-        with plt.rc_context(FIG_RC):
-            self._plotEvidence()
-
-    def _plotEvidence(self) -> None:
         names = list(self.data)
         fig, axes = plt.subplots(1, len(names), figsize=(FIG_W, PANEL_H + LEGEND_H), squeeze=False)
         for ax, name in zip(axes[0], names):
