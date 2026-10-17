@@ -17,8 +17,8 @@ Per dataset (standardized space — the space the flow density lives in):
                The unnormalized target reuses ImportanceSampler.unnormalizedPosterior
                (marginal likelihood + priors) in unconstrained coordinates.
   bridgeImh  : the same bridge on MB-IMH draws (flow + independence MH, exact marginal
-               target) — validates the IMH-bridge that serves as the reference for the
-               reduced model in the nested comparison, where no NUTS draws exist.
+               target) — validates the IMH-bridge that served as the reference for the
+               reduced model in the nested comparison until --ref-only added NUTS draws.
   nested     : for datasets with q >= 2, the same data is also fit without the random
                slope (random intercept only, slope kept as a fixed effect). ln BF from IS
                vs. bridge reference; Jeffreys category agreement.
@@ -42,6 +42,12 @@ is below 150 (posterior_eval.MOVES_RW, the Api's ESS flag), on --device, then IS
 fitted to them (posthoc/evidence.tEvidence), per row and nested reduced fit. Its T_COLUMNS go to
 t/{stem}[_shard].csv; --summarize-only joins them onto {stem}.csv by idx.
 
+--ref-only adds the references the summaries use (REF_COLUMNS, ref/{stem}[_shard].csv, joined
+alike): the reduced model's bridge on its own NUTS draws (evidence_nuts.py) instead of MB-IMH
+draws; for GLMMs with q >= 3, the full-model bridge redone with agqNodes' resolved rule, and
+per GLMM row the quadrature's resolution; per Poisson row whether the simulator clipped η
+(those rows leave the tables: NUTS fits the unclipped likelihood the flow never saw).
+
 Outputs: {out_dir}/{prefix}{size}_{split}_n{n_ds}.csv (per-dataset rows; prefix '' for Normal,
 '{family}_k{K}_' otherwise), .md (summary tables) and .png (diagnostic figure);
 --summarize-only additionally writes evidence_normal.tex / evidence_discrete.tex (converged
@@ -59,6 +65,8 @@ Run from the repo root:
     uv run python experiments/posthoc/evidence.py --family bernoulli --sizes small --n-datasets 512 --summarize-only
     # t estimator on the rows of an existing CSV (sharded alike), joined by --summarize-only
     uv run python experiments/posthoc/evidence.py --sizes small --n-datasets 512 --t-only --device cuda --shard 0 --n-shards 4
+    # references on the rows of an existing CSV, after evidence_nuts.py (scripts/evidence-array.sh --ref-only)
+    uv run python experiments/posthoc/evidence.py --family poisson --sizes huge --n-datasets 512 --ref-only --shard 0 --n-shards 64
 """
 
 import argparse
@@ -76,6 +84,7 @@ from metabeta.utils.experiments import DATA_DIR, REPO_ROOT, experimentResultsPat
 
 sys.path.insert(0, str(REPO_ROOT / 'scripts'))
 from build_ckpt import BEST_SEEDS, _ckpt_dir  # noqa: E402
+from evidence_nuts import outPath as nutsRedPath  # noqa: E402
 
 from metabeta.models.approximator import Approximator  # noqa: E402
 from metabeta.posthoc.evidence import isSummary, tEvidence  # noqa: E402
@@ -96,7 +105,7 @@ from metabeta.utils.psis import psislw  # noqa: E402
 from metabeta.utils.dataloader import Collection, collateGrouped, toDevice  # noqa: E402
 from metabeta.utils.evaluation import NUTS_DIAG_KEYS, nutsConverged  # noqa: E402
 from metabeta.utils.fits import REFERENCE_TAG, loadFits  # noqa: E402
-from metabeta.utils.families import logProbCorrRfx  # noqa: E402
+from metabeta.utils.families import POISSON_ETA_CLIP_MAX, logProbCorrRfx  # noqa: E402
 from metabeta.utils.posterior_eval import MOVES_RW  # noqa: E402
 from metabeta.utils.preprocessing import logJacobianStandardization  # noqa: E402
 from metabeta.utils.regularization import (  # noqa: E402
@@ -109,6 +118,7 @@ from metabeta.utils.results import Proposal  # noqa: E402
 IMH_CHAINS = 4
 IMH_BURNIN = 25
 N_REF_DRAWS = 4000  # reference draws per dataset: level 2 thinned like the composite NUTS fit
+NUTS_DRAWS = ('ffx', 'sigma_rfx', 'sigma_eps', 'corr_rfx')  # global draw fields of a NUTS fit
 SIZES = ('small', 'medium', 'large', 'huge')
 FAMILIES = {'normal': 0, 'bernoulli': 1, 'poisson': 2}
 TARGET_CHUNK = 1000  # bridge-target draws per AGQ pass (bounds the (m, n, s) intermediates)
@@ -129,6 +139,10 @@ LEGACY_COLUMNS = {'logev_is_r_': 'logev_is_', 'k_r_': 'k_', 'eff_r_': 'eff_', '_
 # --t-only; ess/moved/kpool: runImh's min IMH bulk ESS, whether the moves ran, the pool's k̂
 T_COLUMNS = ('logev_t', 'k_t', 'eff_t', 'logev_t_red', 'k_t_red', 'logbf_t')
 T_COLUMNS += ('ess_t', 'moved_t', 'kpool_t', 'ess_t_red', 'moved_t_red', 'kpool_t_red')
+# --ref-only; logev_ref equals logev_bridge_nuts where the bridge target is unchanged (Normal, q <= 2)
+REF_COLUMNS = ('eta_clipped', 'logev_ref', 'logev_ref_swap', 'agq_err')
+REF_COLUMNS += ('logev_ref_red', 'logev_ref_red_swap', 'nuts_red_converged')
+REF_COLUMNS += ('nuts_red_max_rhat', 'nuts_red_min_ess', 'nuts_red_div')
 
 
 # fmt: off
@@ -151,6 +165,7 @@ def setup() -> argparse.Namespace:
     p.add_argument('--out-dir', type=Path, default=experimentResultsPath('evidence'))
     p.add_argument('--summarize-only', action='store_true', help='regenerate md/png/tex from existing CSVs without recomputing')
     p.add_argument('--t-only', action='store_true', help='add the t-proposal evidence to the rows of the existing CSV (no NUTS, no bridge)')
+    p.add_argument('--ref-only', action='store_true', help='add REF_COLUMNS to the rows of the existing CSV (needs evidence_nuts.py fits)')
     return p.parse_args()
 # fmt: on
 
@@ -169,26 +184,27 @@ def loadModel(ckpt: Path) -> tuple[Approximator, int]:
 
 
 def loadNuts(npz_path: Path, n_ds: int) -> dict[str, np.ndarray]:
-    """Global draws (standardized space) and diagnostics of the NUTS reference (REFERENCE_TAG)
-    for the first n_ds datasets, under ``nuts_*`` keys.
+    """Global draws (standardized space, thinRef) and diagnostics of the NUTS reference
+    (REFERENCE_TAG) for the first n_ds datasets, under ``nuts_*`` keys.
 
-    Draws are thinned to N_REF_DRAWS with the composite fit's stride (fit.py, _composite),
-    which keeps every chain, so the two bridge halves are still chains 0-1 and 2-3.
     ``nuts_converged`` is the convergence criterion of the paper. Every key is read once;
     the rfx draws (GBs) are never touched.
     """
     tag = REFERENCE_TAG
-    draws = ('ffx', 'sigma_rfx', 'sigma_eps', 'corr_rfx')
-    keys = [f'{tag}_{k}' for k in (*draws, *NUTS_DIAG_KEYS)]
+    keys = [f'{tag}_{k}' for k in (*NUTS_DRAWS, *NUTS_DIAG_KEYS)]
     fits = {k: v[:n_ds] for k, v in loadFits(npz_path, tag, keys=keys).items()}
     out = {'nuts_converged': nutsConverged(fits, tag)}
     for k, v in fits.items():
         field = k[len(tag) + 1 :]
-        if field in draws:
-            axis = 2 if field == 'corr_rfx' else -1  # corr: (b, 1, s, q, q), else (b, ..., s)
-            v = v.take(np.arange(0, v.shape[axis], v.shape[axis] // N_REF_DRAWS), axis=axis)
-        out[f'nuts_{field}'] = v
+        out[f'nuts_{field}'] = thinRef(v, field) if field in NUTS_DRAWS else v
     return out
+
+
+def thinRef(v: np.ndarray, field: str) -> np.ndarray:
+    """NUTS draws of one field thinned to N_REF_DRAWS with the composite fit's stride (fit.py,
+    _composite), which keeps every chain, so the two bridge halves are still chains 0-1 and 2-3."""
+    axis = 2 if field == 'corr_rfx' else -1  # corr: (b, 1, s, q, q), else (b, ..., s)
+    return v.take(np.arange(0, v.shape[axis], v.shape[axis] // N_REF_DRAWS), axis=axis)
 
 
 def loadCsv(path: Path) -> pd.DataFrame:
@@ -199,6 +215,17 @@ def loadCsv(path: Path) -> pd.DataFrame:
     if 'logev_t' in df:
         df['kflag_t'] = np.maximum(df['k_t'], df['kpool_t'])
         df['kflag_t_red'] = np.maximum(df['k_t_red'], df['kpool_t_red'])
+    # once --ref-only ran, the summaries compare against its references (nested: only where the
+    # reduced model's NUTS converged); the first references stay as *_v1
+    if 'logev_ref' in df:
+        df['logev_bridge_nuts_v1'], df['logbf_ref_v1'] = df['logev_bridge_nuts'], df['logbf_ref']
+        df['logev_bridge_nuts'], df['logev_bridge_nuts_swap'] = (
+            df['logev_ref'],
+            df['logev_ref_swap'],
+        )
+        df['logbf_ref'] = df['logev_ref'] - df['logev_ref_red'].where(
+            df['nuts_red_converged'].eq(True)
+        )
     return df
 
 
@@ -249,9 +276,10 @@ def reducedItem(item: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
 
 
 def agqNodes(q: int) -> int:
-    """Gauss-Hermite nodes per rfx dim: ≤ ~150 tensor-product nodes, ≥ 3 per dim; at q = 2 the
-    12-node rule is exact to ~1e-7 nats per group (tests/utils/test_is2.py)."""
-    return {1: 20, 2: 12, 3: 5, 4: 4}.get(q, 3)
+    """Gauss-Hermite nodes per rfx dim: at q = 2 the 12-node rule is exact to ~1e-7 nats per
+    group (tests/utils/test_is2.py); at q >= 3 the rule with two nodes more agrees on the
+    unclipped oracle rows checked (agq_err in --ref-only records the difference per row)."""
+    return {1: 20, 2: 12, 3: 9, 4: 7}.get(q, 5)
 
 
 class Target:
@@ -264,7 +292,11 @@ class Target:
     """
 
     def __init__(
-        self, batch64: dict[str, torch.Tensor], d_corr_model: int, likelihood_family: int
+        self,
+        batch64: dict[str, torch.Tensor],
+        d_corr_model: int,
+        likelihood_family: int,
+        n_nodes: int | None = None,  # AGQ nodes per rfx dim; default agqNodes(q_i)
     ) -> None:
         self.lf = likelihood_family
         self.has_eps = hasSigmaEps(likelihood_family)
@@ -277,6 +309,7 @@ class Target:
         self.d_corr_max = d_corr_model
         self.d_i = int(batch64['mask_d'].sum())
         self.q_i = int(batch64['mask_q'].sum())
+        self.n_nodes = agqNodes(self.q_i) if n_nodes is None else n_nodes
         self.eta = batch64['eta_rfx'].double()  # (1,)
         self.corr = bool(self.eta.item() > 0) and self.q_i >= 2
         self.d_corr_i = self.q_i * (self.q_i - 1) // 2 if self.corr else 0
@@ -325,7 +358,7 @@ class Target:
             is_.mask_n,
             is_.mask_m,
             self.lf,
-            n_nodes=agqNodes(self.q_i),
+            n_nodes=self.n_nodes,
             L_corr=is_._getLCorr(p),
         )
         return (ll + lp)[0]
@@ -781,8 +814,12 @@ def plot(df: pd.DataFrame, pool_sizes: list[int], path: Path, label: str) -> Non
 
 
 def convergedRows(df: pd.DataFrame) -> pd.DataFrame:
-    """Rows whose NUTS reference converged (all rows for CSVs without the column)."""
-    return df[df['nuts_converged'].astype(bool)] if 'nuts_converged' in df else df
+    """Rows whose NUTS reference converged (all rows for CSVs without the column), without the
+    Poisson rows whose simulation clipped η (eta_clipped, --ref-only)."""
+    keep = df['nuts_converged'].astype(bool) if 'nuts_converged' in df else df['idx'] >= 0
+    if 'eta_clipped' in df:
+        keep &= ~df['eta_clipped'].astype(bool)
+    return df[keep]
 
 
 def writeOutputs(df: pd.DataFrame, pool_sizes: list[int], out_dir: Path, stem: str, label: str):
@@ -948,6 +985,8 @@ def writePaperStats(out_dir: Path, split: str, pool_sizes: list[int]) -> Path | 
             nested = nestedRows(df)
             r = {
                 'converged': f'{len(df)}/{len(full)}',
+                'clipped': int(full['eta_clipped'].sum()) if 'eta_clipped' in full else 0,
+                'agq_err max': df['agq_err'].max() if 'agq_err' in df else np.nan,
                 'swap floor med': (ref - df['logev_bridge_nuts_swap']).abs().median(),
                 f'med S={s_min}': d_min.median(),
                 f'med S={s_max}': d.median(),
@@ -973,6 +1012,11 @@ def writePaperStats(out_dir: Path, split: str, pool_sizes: list[int]) -> Path | 
                     '#|Δt|>1': int((d_t > 1).sum()),
                     '#|Δt|>1 & kflag_t>0.7': int(((d_t > 1) & (k_t > 0.7)).sum()),
                 }
+            if 'logbf_ref_v1' in df:  # nested rows left out: the reduced model's NUTS failed
+                lost = df['logbf_ref_v1'].notna() & df['logbf_ref'].isna()
+                r['nested NUTS failed'] = int(lost.sum())
+                swap = nested['logev_ref_red'] - nested['logev_ref_red_swap']
+                r['swap floor red med'] = swap.abs().median()
             if len(nested):
                 r['nested'] = len(nested)
                 r['agree bridgeImh'] = categoryAgreement(
@@ -997,7 +1041,8 @@ def writePaperStats(out_dir: Path, split: str, pool_sizes: list[int]) -> Path | 
         '# Evidence check: numbers quoted in the paper',
         '',
         f'Reference: {REFERENCE_TAG} thinned to {N_REF_DRAWS} draws; rows restricted to '
-        'nutsConverged unless marked (all).',
+        'nutsConverged unless marked (all), without Poisson rows whose simulation clipped η. '
+        'Nested reference: bridges on NUTS draws of both models where --ref-only ran.',
         '',
         _table(rows),
         '',
@@ -1151,7 +1196,7 @@ def runSize(size: str, args: argparse.Namespace) -> None:
 
 def runSizeT(size: str, args: argparse.Namespace) -> None:
     """--t-only: tFit on the rows of the size's CSV, and on the reduced model where the CSV has a
-    nested reference, with runSize's seeds; written to t/ for tJoin."""
+    nested reference, with runSize's seeds; written to t/ for joinColumns."""
     ckpt = _ckpt_dir(args.family, size, BEST_SEEDS[(args.family, size)]) / f'{args.prefix}.pt'
     col = Collection(DATA_DIR / f'{size}-{args.family[0]}-sampled' / f'{args.split}.npz')
     stem = f'{stemPrefix(args)}{size}_{args.split}_n{min(args.n_datasets, len(col))}'
@@ -1182,19 +1227,91 @@ def runSizeT(size: str, args: argparse.Namespace) -> None:
     print(f'[saved] {path}  ({time.perf_counter() - t0:.0f}s)')
 
 
-def tJoin(out_dir: Path, stem: str) -> None:
-    """Join t/{stem}.csv onto {stem}.csv by idx, replacing earlier t columns; the CSV's own
-    columns are read and written at round-trip precision and checked to come back unchanged."""
-    t_path, path = out_dir / 't' / f'{stem}.csv', out_dir / f'{stem}.csv'
-    if not t_path.exists():
+def etaClipped(item: dict[str, np.ndarray]) -> bool:
+    """Whether the simulator clipped η at POISSON_ETA_CLIP_MAX for an observation of the item."""
+    eta = item['X'] @ item['ffx'] + (item['Z'] * item['rfx'][item['groups'].astype(int)]).sum(-1)
+    return bool(eta.max() > POISSON_ETA_CLIP_MAX)
+
+
+def runSizeRef(size: str, args: argparse.Namespace) -> None:
+    """--ref-only: REF_COLUMNS on the rows of the size's CSV, written to ref/ for the join. The
+    bridges get fresh generators with runSize's seeds (+50_000 for the reduced model)."""
+    lf = FAMILIES[args.family]
+    ckpt = _ckpt_dir(args.family, size, BEST_SEEDS[(args.family, size)]) / f'{args.prefix}.pt'
+    npz_path = DATA_DIR / f'{size}-{args.family[0]}-sampled' / f'{args.split}.npz'
+    col = Collection(npz_path, permute=False)
+    n_ds = min(args.n_datasets, len(col))
+    stem = f'{stemPrefix(args)}{size}_{args.split}_n{n_ds}'
+    ref = pd.read_csv(args.out_dir / f'{stem}.csv', float_precision='round_trip')
+    d_corr = loadModel(ckpt)[0].d_corr
+    nuts = loadNuts(npz_path, n_ds) if lf != 0 else None
+    rows = []
+    t0 = time.perf_counter()
+    for r in ref[ref['idx'] % args.n_shards == args.shard].itertuples():
+        i, item = int(r.idx), col[int(r.idx)]
+        seed = args.seed * 100_003 + i
+        batch64 = toDouble(collateGrouped([item]))
+        target = Target(batch64, d_corr, lf)
+        row = {'idx': i, 'eta_clipped': lf == 2 and etaClipped(item)}
+        row |= {'logev_ref': r.logev_bridge_nuts, 'logev_ref_swap': r.logev_bridge_nuts_swap}
+        if lf != 0:
+            u = target.fromNuts(nuts, i)
+            # resolution: target at agqNodes vs two nodes more, at 64 reference draws
+            fine = Target(batch64, d_corr, lf, n_nodes=target.n_nodes + 2)
+            u64 = u[:: len(u) // 64]
+            row['agq_err'] = float((fine.logProb(u64) - target.logProb(u64)).abs().median())
+            if target.q_i >= 3:  # agqNodes changed for these: redo the bridge
+                br = bridge(target.logProb, u, args.n_bridge, torch.Generator().manual_seed(seed))
+                row['logev_ref'], row['logev_ref_swap'] = br['log_ev'], br['log_ev_swap']
+        path = nutsRedPath(args.family, size, i)
+        if path.exists():
+            z = np.load(path)
+            red = Target(toDouble(collateGrouped([reducedItem(item)])), d_corr, lf)
+            draws = {f'nuts_{f}': thinRef(z[f'nuts2_{f}'][None], f) for f in NUTS_DRAWS}
+            gen = torch.Generator().manual_seed(seed + 50_000)
+            br = bridge(red.logProb, red.fromNuts(draws, 0), args.n_bridge, gen)
+            diag = {f'nuts2_{k}': z[f'nuts2_{k}'][None] for k in NUTS_DIAG_KEYS}
+            ess = z['nuts2_ess']
+            row |= {
+                'logev_ref_red': br['log_ev'],
+                'logev_ref_red_swap': br['log_ev_swap'],
+                'nuts_red_converged': bool(nutsConverged(diag, 'nuts2')[0]),
+                'nuts_red_max_rhat': float(np.nanmax(z['nuts2_rhat'])),
+                'nuts_red_min_ess': float(np.nanmin(np.where(ess > 0, ess, np.nan))),
+                'nuts_red_div': int(z['nuts2_divergences'].sum()),
+            }
+        rows.append(row)
+        print(
+            f'ds={i:3d} q={target.q_i}  ref Δ={row["logev_ref"] - r.logev_bridge_nuts:+.3f}  '
+            f'agq_err={row.get("agq_err", np.nan):.1e}  clipped={int(row["eta_clipped"])}'
+            + (
+                f'  lnBF ref={row["logev_ref"] - row["logev_ref_red"]:+.2f} (was {r.logbf_ref:+.2f})'
+                if 'logev_ref_red' in row
+                else ''
+            ),
+            flush=True,
+        )
+    shard = '' if args.n_shards == 1 else f'_shard{args.shard}of{args.n_shards}'
+    path = args.out_dir / 'ref' / f'{stem}{shard}.csv'
+    path.parent.mkdir(exist_ok=True)
+    pd.DataFrame(rows, columns=['idx', *REF_COLUMNS]).to_csv(path, index=False)
+    print(f'[saved] {path}  ({time.perf_counter() - t0:.0f}s)')
+
+
+def joinColumns(out_dir: Path, stem: str, sub: str, columns: tuple[str, ...]) -> None:
+    """Join {sub}/{stem}.csv onto {stem}.csv by idx, replacing earlier copies of its columns; the
+    CSV's own columns are read and written at round-trip precision and checked to come back
+    unchanged."""
+    sub_path, path = out_dir / sub / f'{stem}.csv', out_dir / f'{stem}.csv'
+    if not sub_path.exists():
         return
     df = pd.read_csv(path, float_precision='round_trip')
-    df = df.drop(columns=list(T_COLUMNS), errors='ignore')
-    t = pd.read_csv(t_path, float_precision='round_trip')
-    df.merge(t, on='idx', how='left', validate='one_to_one').to_csv(path, index=False)
+    df = df.drop(columns=list(columns), errors='ignore')
+    new = pd.read_csv(sub_path, float_precision='round_trip')
+    df.merge(new, on='idx', how='left', validate='one_to_one').to_csv(path, index=False)
     back = pd.read_csv(path, float_precision='round_trip')[df.columns]
     pd.testing.assert_frame_equal(back, df, check_exact=True)
-    print(f'[joined] {t_path} -> {path.name}')
+    print(f'[joined] {sub_path} -> {path.name}')
 
 
 def mergeShards(size: str, args: argparse.Namespace, directory: Path) -> None:
@@ -1217,6 +1334,7 @@ def mergeShards(size: str, args: argparse.Namespace, directory: Path) -> None:
 def resummarize(size: str, args: argparse.Namespace) -> None:
     mergeShards(size, args, args.out_dir)
     mergeShards(size, args, args.out_dir / 't')
+    mergeShards(size, args, args.out_dir / 'ref')
     paths = sorted(
         p
         for p in args.out_dir.glob(f'{stemPrefix(args)}{size}_{args.split}_n*.csv')
@@ -1225,7 +1343,8 @@ def resummarize(size: str, args: argparse.Namespace) -> None:
     if not paths:
         print(f'[skip] no CSV for {size} in {args.out_dir}')
         return
-    tJoin(args.out_dir, paths[-1].stem)
+    joinColumns(args.out_dir, paths[-1].stem, 't', T_COLUMNS)
+    joinColumns(args.out_dir, paths[-1].stem, 'ref', REF_COLUMNS)
     df = loadCsv(paths[-1])
     label = f'{args.family.capitalize()} ({size}), {args.split}, n={len(df)}'
     writeOutputs(df, sorted(args.pool_sizes), args.out_dir, paths[-1].stem, label)
@@ -1237,7 +1356,7 @@ def main() -> None:
         if args.summarize_only:
             resummarize(size, args)
         else:
-            (runSizeT if args.t_only else runSize)(size, args)
+            (runSizeT if args.t_only else runSizeRef if args.ref_only else runSize)(size, args)
     # the combined tables span all sizes with a CSV in out_dir; assemble them only in the
     # summarize-only pass so parallel per-size runs do not race on the same file
     if args.summarize_only:
