@@ -1267,7 +1267,11 @@ def runSizeRef(size: str, args: argparse.Namespace) -> None:
         if path.exists():
             z = np.load(path)
             red = Target(toDouble(collateGrouped([reducedItem(item)])), d_corr, lf)
-            draws = {f'nuts_{f}': thinRef(z[f'nuts2_{f}'][None], f) for f in NUTS_DRAWS}
+            draws = {
+                f'nuts_{f}': thinRef(z[f'nuts2_{f}'][None], f)
+                for f in NUTS_DRAWS
+                if f'nuts2_{f}' in z
+            }
             gen = torch.Generator().manual_seed(seed + 50_000)
             br = bridge(red.logProb, red.fromNuts(draws, 0), args.n_bridge, gen)
             diag = {f'nuts2_{k}': z[f'nuts2_{k}'][None] for k in NUTS_DIAG_KEYS}
