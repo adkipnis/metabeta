@@ -50,8 +50,8 @@ per GLMM row the quadrature's resolution; per Poisson row whether the simulator 
 
 Outputs: {out_dir}/{prefix}{size}_{split}_n{n_ds}.csv (per-dataset rows; prefix '' for Normal,
 '{family}_k{K}_' otherwise), .md (summary tables) and .png (diagnostic figure);
---summarize-only additionally writes evidence_normal.tex / evidence_discrete.tex (converged
-references only) and evidence_paper.md (the numbers quoted in the paper), with the t estimator
+--summarize-only additionally writes evidence.tex (all families, converged references
+only) and evidence_paper.md (the numbers quoted in the paper), with the t estimator
 where the CSVs carry it.
 
 Run from the repo root:
@@ -846,24 +846,25 @@ def latestCsvs(out_dir: Path, family: str, split: str) -> dict[str, Path]:
 
 
 def _texRows(df: pd.DataFrame, pool_sizes: list[int], head: str, blank: str) -> list[str]:
-    """Table rows of one family and size, converged rows only, by source: the flow pool at the
-    largest S ('pool') and the t proposal ('$t$', flagged by kflag_t) where the CSV carries it."""
+    """Table rows of one family and size, converged rows only, by source: the flow pool's IMH
+    weights at the largest S ('IMH') and the t proposal ('$t$', flagged by kflag_t) where the CSV
+    carries it."""
     df = convergedRows(df)
     ref = df['logev_bridge_nuts']
     nested = nestedRows(df)
     s_max = max(pool_sizes)
-    rows = [('pool', f'logev_is_s{s_max}', f'k_s{s_max}', 'logbf_is')]
+    rows = [('IMH', f'logev_is_s{s_max}', f'k_s{s_max}', 'logbf_is')]
     if 'logev_t' in df:
         rows.append(('$t$', 'logev_t', 'kflag_t', 'logbf_t'))
     lines = []
     for source, logev, k, logbf in rows:
         d = (df[logev] - ref).abs()
         frac_k = (df[k] > 0.7).mean()
-        nested_cells = ' & & '
+        nested_cells = ' & '
         if len(nested):
             agree = categoryAgreement(nested[logbf], nested['logbf_ref'])
             bf = (nested[logbf] - nested['logbf_ref']).abs().median()
-            nested_cells = f'{len(nested)} & ${agree:.2f}$ & ${bf:.3f}$'
+            nested_cells = f'${agree:.2f}$ & ${bf:.3f}$'
         lines.append(
             f'{head} & {source} & ${d.median():.3f}$ & ${d.quantile(0.9):.3f}$ & '
             f'${frac_k:.2f}$ & {nested_cells} \\\\'
@@ -873,42 +874,21 @@ def _texRows(df: pd.DataFrame, pool_sizes: list[int], head: str, blank: str) -> 
 
 
 _TEX_COLUMNS = (
-    r'$\#\mathrm{ds}$ & $\#\mathrm{corr}$ & $\mathrm{source}$ & $\mathrm{med}\,|\Delta|$ & '
-    r'$q_{90}\,|\Delta|$ & $\mathrm{frac}\,\hat k>0.7$ & $\#\mathrm{nested}$ & '
-    r'$\mathrm{BF\ cat.\ agree}$ & $\mathrm{med}\,|\Delta\ln \mathrm{BF}|$ \\'
+    r'$\mathrm{source}$ & $\mathrm{med}\,|\Delta|$ & $q_{90}\,|\Delta|$ & '
+    r'$\mathrm{frac}\,\hat k>0.7$ & $\mathrm{BF\ cat.\ agree}$ & $\mathrm{med}\,|\Delta\ln \mathrm{BF}|$ \\'
 )
 
 
+TEX_FAMILIES = {'normal': 'Gaussian', 'bernoulli': 'Bernoulli', 'poisson': 'Poisson'}
+
+
 def writeTex(out_dir: Path, split: str, pool_sizes: list[int]) -> Path | None:
-    """LaTeX table over all Normal sizes with a CSV in out_dir."""
-    csvs = latestCsvs(out_dir, 'normal', split)
-    if not csvs:
-        return None
-    lines = [
-        r'\begin{tabular}{lrr l cc c r cc}',
-        r'    \toprule',
-        r'    $\mathrm{regime}$ & ' + _TEX_COLUMNS,
-        r'    \midrule',
-    ]
-    for size, path in csvs.items():
-        df = convergedRows(loadCsv(path))
-        head = f'    \\texttt{{{size}}} & {len(df)} & {int(df["corr_active"].sum())}'
-        lines += _texRows(df, pool_sizes, head, '     &  & ')
-        lines.append(r'    \midrule')
-    lines[-1] = r'    \bottomrule'
-    lines.append(r'\end{tabular}')
-    path = out_dir / 'evidence_normal.tex'
-    path.write_text('\n'.join(lines) + '\n')
-    return path
-
-
-def writeTexDiscrete(out_dir: Path, split: str, pool_sizes: list[int]) -> Path | None:
-    """LaTeX table over the Bernoulli and Poisson sizes in out_dir."""
-    blocks = {f: latestCsvs(out_dir, f, split) for f in ('bernoulli', 'poisson')}
+    """LaTeX table over all families and sizes with a CSV in out_dir."""
+    blocks = {f: latestCsvs(out_dir, f, split) for f in TEX_FAMILIES}
     if not any(blocks.values()):
         return None
     lines = [
-        r'\begin{tabular}{llrr l cc c r cc}',
+        r'\begin{tabular}{ll l cc c cc}',
         r'    \toprule',
         r'    $\mathrm{family}$ & $\mathrm{regime}$ & ' + _TEX_COLUMNS,
         r'    \midrule',
@@ -916,17 +896,17 @@ def writeTexDiscrete(out_dir: Path, split: str, pool_sizes: list[int]) -> Path |
     for family, csvs in blocks.items():
         if not csvs:
             continue
-        name = family.capitalize()
+        name = TEX_FAMILIES[family]
         for size, path in csvs.items():
             df = convergedRows(loadCsv(path))
-            head = f'    {name} & \\texttt{{{size}}} & {len(df)} & {int(df["corr_active"].sum())}'
-            lines += _texRows(df, pool_sizes, head, '     &  &  &  ')
+            head = f'    {name} & \\texttt{{{size}}}'
+            lines += _texRows(df, pool_sizes, head, '     & ')
             lines.append(r'    \midrule')
             name = ''
         lines[-1] = r'    \midrule\midrule'
     lines[-1] = r'    \bottomrule'
     lines.append(r'\end{tabular}')
-    path = out_dir / 'evidence_discrete.tex'
+    path = out_dir / 'evidence.tex'
     path.write_text('\n'.join(lines) + '\n')
     return path
 
@@ -1360,7 +1340,7 @@ def main() -> None:
     # summarize-only pass so parallel per-size runs do not race on the same file
     if args.summarize_only:
         pool_sizes = sorted(args.pool_sizes)
-        for write in (writeTex, writeTexDiscrete, writePaperStats):
+        for write in (writeTex, writePaperStats):
             path = write(args.out_dir, args.split, pool_sizes)
             if path is not None:
                 print(f'[saved] {path}')
