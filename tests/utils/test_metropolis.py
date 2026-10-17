@@ -1,5 +1,6 @@
 """Tests for posthoc/metropolis.py: the advisory pool-size suggestion and the bulk ESS."""
 
+import pytest
 import torch
 
 from metabeta.posthoc.metropolis import (
@@ -76,6 +77,13 @@ def test_bulk_ess_sticky_chain_and_padding():
     assert torch.isnan(ess[1])
 
 
+@pytest.mark.parametrize('T', [1, 2, 3])
+def test_bulk_ess_is_nan_for_chains_too_short_to_split(T):
+    """Fewer than 4 draws per chain leave no autocorrelation estimate: NaN, not a crash (every
+    IMH run reports the ESS)."""
+    assert torch.isnan(bulkEss(torch.randn(2, 4 * T, 3), 4)).all()
+
+
 # ---------------------------------------------------------------------------
 # Local moves: coordinates and Jacobian
 # ---------------------------------------------------------------------------
@@ -83,26 +91,20 @@ def test_bulk_ess_sticky_chain_and_padding():
 
 def _globalsLayout():
     """d = 3 (last ffx padded), q = 2, sigma_eps, one corr dim; one dataset."""
-    import types
-
-    from metabeta.posthoc.metropolis import MetropolisSampler
-
-    sampler = types.SimpleNamespace(has_sigma_eps=True)
-    for name in ('_unconstrain', '_constrain', '_activeGlobals'):
-        setattr(sampler, name, getattr(MetropolisSampler, name).__get__(sampler))
-    data = {
+    return {
         'mask_d': torch.tensor([[True, True, False]]),
         'mask_q': torch.tensor([[True, True]]),
         'mask_corr': torch.tensor([[True]]),
         'eta_rfx': torch.tensor([1.0]),
     }
-    return sampler, data
 
 
 def test_local_move_coordinates_round_trip_with_exact_jacobian():
-    sampler, data = _globalsLayout()
+    from metabeta.utils.regularization import constrainGlobals, globalMask, unconstrainGlobals
+
+    data = _globalsLayout()
     d, q, d_corr = 3, 2, 1
-    active = sampler._activeGlobals(data, d, q, d_corr)
+    active = globalMask(data, d, q, True, d_corr)
     assert active.tolist() == [[True, True, False, True, True, True, True]]
     gen = torch.Generator().manual_seed(0)
     sg = torch.cat(
@@ -114,8 +116,8 @@ def test_local_move_coordinates_round_trip_with_exact_jacobian():
         ],
         dim=-1,
     )
-    u = sampler._unconstrain(sg, d, q, d_corr)
-    back, ldj = sampler._constrain(u, sg[:, :1], active, d, q, d_corr)
+    u = unconstrainGlobals(sg, d, q, True, d_corr)
+    back, ldj = constrainGlobals(u, active, d, q, True, d_corr)
     assert torch.allclose(back, sg, atol=1e-10)
     # log |dθ/du| over the active dims, by autograd
     idx = active[0].nonzero().squeeze(-1)
@@ -124,7 +126,7 @@ def test_local_move_coordinates_round_trip_with_exact_jacobian():
         def f(x, k=k):
             full = u[:, k : k + 1].clone()
             full[0, 0, idx] = x
-            return sampler._constrain(full, sg[:, :1], active, d, q, d_corr)[0][0, 0, idx]
+            return constrainGlobals(full, active, d, q, True, d_corr)[0][0, 0, idx]
 
         J = torch.autograd.functional.jacobian(f, u[0, k, idx])
         assert abs(torch.linalg.slogdet(J)[1].item() - ldj[0, k].item()) < 1e-8
