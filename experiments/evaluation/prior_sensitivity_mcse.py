@@ -117,7 +117,7 @@ class McseCheck:
                         continue
                     x_mb = g[j, :, ki].numpy()
                     x_nuts = nutsKey(name, point, ki)
-                    n_ch = min(MOVES_RW.n_chains, len(x_mb) // 4) if moved[j] else CHAINS
+                    n_ch = MOVES_RW.chainCount(len(x_mb)) if moved[j] else CHAINS
                     med_m, ess_m, mcse_m = chainStats(x_mb, n_ch)
                     med_n, ess_n, mcse_n = chainStats(x_nuts)
                     r = mbrow.loc[point]
