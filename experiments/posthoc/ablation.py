@@ -139,6 +139,8 @@ IMH_CONDITIONS = {
     'imhMarginal+moves': ('marginal', 0, MOVES_RW),
     'imhPM+moves': ('laplace', IS2_N_INNER, MOVES_RW),
 }
+CONDITIONS = ('raw', 'is', 'isFull', 'isMarginal', 'isLaplace', 'rbAttach', *IMH_CONDITIONS)
+OPT_IN_CONDITIONS = ('svgd', 'coldNuts', 'warmNuts')  # flags or the test split add them
 
 
 # fmt: off
@@ -152,8 +154,8 @@ def setup() -> argparse.Namespace:
     p.add_argument('--batch-size', type=int, default=4, help='sub-batch size for torch-based methods')
     p.add_argument('--n-datasets', type=int, default=None, help='cap on datasets per model (default: use the entire split)')
     p.add_argument('--n-samples', type=int, default=4000, help='flow samples for torch-based methods (raw/is/svgd) and the IMH proposal pool (4 chains x n/4 steps); 4000 matches the paper benchmarks and the NUTS draw count')
-    p.add_argument('--skip', nargs='+', default=[], choices=['raw', 'is', 'isFull', 'isMarginal', 'isLaplace', 'rbAttach', 'imhMarginal', 'imhGlobal', 'imhLaplace', 'imhPM', 'imhMarginal+moves', 'imhPM+moves', 'svgd', 'coldNuts', 'warmNuts'], help='conditions to skip (e.g. --skip is)')
-    p.add_argument('--only', nargs='+', default=None, choices=['raw', 'is', 'isFull', 'isMarginal', 'isLaplace', 'rbAttach', 'imhMarginal', 'imhGlobal', 'imhLaplace', 'imhPM', 'imhMarginal+moves', 'imhPM+moves', 'svgd', 'coldNuts', 'warmNuts'], help='run only these conditions; results go to {family}_{size}_{only}.md so existing full-run mds are not overwritten')
+    p.add_argument('--skip', nargs='+', default=[], choices=[*CONDITIONS, *OPT_IN_CONDITIONS], help='conditions to skip (e.g. --skip is)')
+    p.add_argument('--only', nargs='+', default=None, choices=[*CONDITIONS, *OPT_IN_CONDITIONS], help='run only these conditions; results go to {family}_{size}_{only}.md so existing full-run mds are not overwritten')
     p.add_argument('--include-svgd', action='store_true', help='also run the (slow) SVGD condition')
     p.add_argument('--include-warmnuts', action='store_true', help='also run the warm-started NUTS condition (slow on the first pass; per-dataset fits are cached)')
     p.add_argument('--wn-refit', action='store_true', help='ignore cached warm-NUTS fits and re-sample')
@@ -530,7 +532,7 @@ def refineIMH(
         p_out.to('cpu')
         imh_proposals.append(p_out)
         accept_rates.append(diag['accept_rate'].cpu())
-        moved.append(diag.get('moved'))
+        moved.append(diag['moved'])
     moved = torch.cat(moved) if moves is not None else None
     return concatProposalsBatch(imh_proposals), torch.cat(accept_rates, dim=0), moved
 
@@ -925,20 +927,7 @@ def main() -> None:
     if args.include_svgd:
         from eval_svgd import runSVGD
 
-    conditions = [
-        'raw',
-        'is',
-        'isFull',
-        'isMarginal',
-        'isLaplace',
-        'rbAttach',
-        'imhMarginal',
-        'imhGlobal',
-        'imhLaplace',
-        'imhPM',
-        'imhMarginal+moves',
-        'imhPM+moves',
-    ]
+    conditions = list(CONDITIONS)
     if args.include_svgd:
         conditions.append('svgd')
     if args.split == 'test':
