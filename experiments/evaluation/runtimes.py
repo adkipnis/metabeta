@@ -80,7 +80,7 @@ from metabeta.models.approximator import Approximator
 from metabeta.plotting.runtimes import plotRuntimeRecords
 from metabeta.utils.dataloader import Collection, collateGrouped, toDevice
 from metabeta.utils.device import setDevice, synchronizeDevice
-from metabeta.utils.evaluation import referenceConverged, simulatorClipped
+from metabeta.utils.evaluation import referenceConverged
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR, REPO_ROOT
 from metabeta.utils.fits import fitPath, loadFits
 from metabeta.utils.logger import setupLogging
@@ -467,17 +467,13 @@ def collectCell(
     method = refinementMethod(cfg, lf, data_id)
 
     B = len(col)
-    # simulator-clipped datasets are left out of every comparison with the references
-    keep = ~simulatorClipped(data_path)
-    idxs = [i for i in range(min(B, cfg.max_datasets) if cfg.max_datasets else B) if keep[i]]
+    idxs = list(range(min(B, cfg.max_datasets))) if cfg.max_datasets else list(range(B))
     durations, masks, conv = loadReferences(data_path)
     logger.info(
-        '%s: %d datasets (%d timed, %d simulator-clipped left out), %d NUTS-converged, '
-        'd<=%d q<=%d, refinement %s',
+        '%s: %d datasets (%d timed), %d NUTS-converged, d<=%d q<=%d, refinement %s',
         data_id,
         B,
         len(idxs),
-        int((~keep).sum()),
         int(conv[idxs].sum()),
         model_cfg.max_d,
         model_cfg.max_q,
