@@ -229,6 +229,7 @@ def test_mb_imh_appears_in_light_path_plot_labels(monkeypatch, tmp_path):
         lambda *args, **kwargs: (object(), batch, tmp_path / 'test.npz'),
     )
     monkeypatch.setattr(evaluator, '_fitMaskFromPath', lambda *args, **kwargs: None)
+    monkeypatch.setattr(evaluator, '_referenceMask', lambda *args, **kwargs: None)
     monkeypatch.setattr(evaluator, '_fitProposalFromNpz', lambda *args, **kwargs: object())
     monkeypatch.setattr(evaluator, '_getProposalAndMask', lambda *args, **kwargs: (object(), None))
     monkeypatch.setattr(

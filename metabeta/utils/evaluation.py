@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
+from metabeta.utils.families import POISSON_ETA_CLIP_MAX
 from metabeta.utils.fits import REFERENCE_TAG, fitPath, loadFits
 
 if TYPE_CHECKING:
@@ -255,6 +256,26 @@ def referenceConverged(data_path: Path) -> np.ndarray | None:
         return None
     keys = [f'{REFERENCE_TAG}_{k}' for k in NUTS_DIAG_KEYS]
     return nutsConverged(loadFits(data_path, REFERENCE_TAG, keys=keys), REFERENCE_TAG)
+
+
+def simulatorClipped(data_path: Path) -> np.ndarray:
+    """Datasets of a simulated Poisson file whose true linear predictor exceeds
+    POISSON_ETA_CLIP_MAX at some observation; all False for other families and for real data.
+
+    The simulator draws those counts from exp(min(η, POISSON_ETA_CLIP_MAX)), and MB, IS² and AGQ
+    evaluate that clipped likelihood, but PyMC's NUTS, ADVI and Pathfinder fit the exact
+    pm.Poisson(exp(η)): there the references target another posterior, so comparisons with
+    them or with the generating parameters leave these datasets out.
+    """
+    with np.load(data_path, allow_pickle=True) as raw:
+        if 'ffx' not in raw.files or int(raw['likelihood_family'].max()) != 2:
+            return np.zeros(len(raw['y']), dtype=bool)
+        X, groups, ffx, rfx, n = (raw[k] for k in ('X', 'groups', 'ffx', 'rfx', 'n'))
+    # padded random-effect columns are zero, so Z = X[..., :q] for every dataset
+    alpha = np.take_along_axis(rfx, groups[..., None].astype(np.int64), axis=1)
+    eta = np.einsum('bnd,bd->bn', X, ffx) + np.einsum('bnq,bnq->bn', X[..., : rfx.shape[-1]], alpha)
+    eta[np.arange(eta.shape[1]) >= n[:, None]] = -np.inf
+    return eta.max(-1) > POISSON_ETA_CLIP_MAX
 
 
 def subsetProposal(proposal: 'Proposal', mask: np.ndarray) -> 'Proposal':

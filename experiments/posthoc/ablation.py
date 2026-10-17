@@ -106,18 +106,18 @@ from build_ckpt import BEST_SEEDS, _ckpt_dir                           # noqa: E
 
 from metabeta.evaluation.summary import getSummary, summaryTable
 from metabeta.models.approximator import Approximator
-from metabeta.utils.evaluation import EvaluationSummary
+from metabeta.utils.evaluation import EvaluationSummary, simulatorClipped, subsetProposal
 from metabeta.posthoc.importance import ImportanceSampler, weightsTag
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
 from metabeta.posthoc.metropolis import IS2_N_INNER, MetropolisSampler, suggestPoolSize
 from metabeta.posthoc.warmnuts import WarmNuts, _stackProposals, needsEscalation
 from metabeta.utils.config import ApproximatorConfig
-from metabeta.utils.dataloader import Collection, collateGrouped, toDevice
+from metabeta.utils.dataloader import Collection, collateGrouped, subsetBatch, toDevice
 from metabeta.utils.fits import fitPath, loadFits
 from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.padding import unpad
-from metabeta.utils.posterior_cache import loadProposalCache
+from metabeta.utils.posterior_cache import loadProposalCache, maskTag
 from metabeta.utils.posterior_eval import MOVES_RW
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.warmfit import cachePath, loadFit, saveFit
@@ -417,7 +417,8 @@ def saveAblSummary(base: Path, summary: EvaluationSummary, diag: str) -> None:
 # the rfx correlations are exempt because every method identifies them poorly, and their
 # up-to-q(q-1)/2 dimensions would otherwise dominate the dimension-weighted average. The
 # per-class Corr(RFX) row is still printed. Unlike the oracle tables, all datasets of the split are
-# kept (no NUTS-convergence subset): the ablation scores against the ground truth.
+# kept (no NUTS-convergence subset): the ablation scores against the ground truth. Only the
+# simulator-clipped ones leave (keptScorer).
 PAPER_AVERAGE_EXCLUDE = ('corr_rfx',)
 
 
@@ -425,10 +426,22 @@ def ablTable(summary: EvaluationSummary, lf: int) -> str:
     return summaryTable(summary, lf, exclude_from_average=PAPER_AVERAGE_EXCLUDE)
 
 
-def runRaw(proposals, full_batch, lf, summary_cache=None):
+def keptScorer(full_batch: dict, keep: np.ndarray, lf: int):
+    """getSummary of a full-split proposal on the datasets ``keep`` selects: simulator-clipped
+    Poisson datasets leave the ablation, since NUTS fits another likelihood there
+    (utils.evaluation.simulatorClipped)."""
+    batch = full_batch if keep.all() else subsetBatch(full_batch, keep)
+
+    def score(proposal: Proposal) -> EvaluationSummary:
+        kept = proposal if keep.all() else subsetProposal(proposal, keep)
+        return getSummary(kept, batch, likelihood_family=lf)
+
+    return score
+
+
+def runRaw(proposals, score, lf, summary_cache=None):
     if summary_cache is None:
-        proposal = concatProposalsBatch(proposals)
-        summary_cache = getSummary(proposal, full_batch, likelihood_family=lf)
+        summary_cache = score(concatProposalsBatch(proposals))
     print(ablTable(summary_cache, lf))
     return summary_cache, ''
 
@@ -447,7 +460,7 @@ def _weightHealth(proposal) -> str:
     )
 
 
-def runIS(proposals, batches, full_batch, lf, full=False, marginal=False, rb_redraw=False):
+def runIS(proposals, batches, score, lf, full=False, marginal=False, rb_redraw=False):
     out = []
     with torch.no_grad():
         for p, batch in zip(proposals, batches):
@@ -465,7 +478,7 @@ def runIS(proposals, batches, full_batch, lf, full=False, marginal=False, rb_red
     proposal = concatProposalsBatch(out)
     diag = _weightHealth(proposal)
     print(diag, end='')
-    summary = getSummary(proposal, full_batch, likelihood_family=lf)
+    summary = score(proposal)
     print(ablTable(summary, lf))
     return summary, diag
 
@@ -526,7 +539,7 @@ def runIMH(
     mode,
     proposals,
     batches,
-    full_batch,
+    score,
     lf,
     n_steps=IMH_N_STEPS,
     n_inner=0,
@@ -547,17 +560,18 @@ def runIMH(
     t1 = time.perf_counter()
 
     suggested = suggestPoolSize(accept)
+    n_ds = sum(b['y'].shape[0] for b in batches)
     diag = (
         f'  Acceptance  mean={accept.mean():.3f}  '
         f'min={accept.min():.3f}  max={accept.max():.3f}  '
-        f'time={t1 - t0:.1f}s ({(t1 - t0) / full_batch["y"].shape[0]:.1f}s/dataset)\n'
+        f'time={t1 - t0:.1f}s ({(t1 - t0) / n_ds:.1f}s/dataset)\n'
         f'  Suggested pool size  median={int(suggested.median())}  max={int(suggested.max())}  '
         f'(run used s={IMH_N_CHAINS * n_steps})\n'
     )
     if moved is not None:
         diag += f'  Local moves on {int(moved.sum())}/{moved.numel()} datasets (IMH ESS gate)\n'
     print(diag, end='')
-    summary = getSummary(proposal, full_batch, likelihood_family=lf)
+    summary = score(proposal)
     print(ablTable(summary, lf))
     return summary, diag, proposal
 
@@ -595,7 +609,7 @@ def _wnSamplesToProposal(samples: dict, lf: int) -> Proposal:
     return Proposal(proposed, has_sigma_eps=has_se, corr_rfx=corr)
 
 
-def runWarmNutsLive(refined, tensor_batch, full_batch, ds_list, lf, fits_dir, label, refit):
+def runWarmNutsLive(refined, tensor_batch, score, ds_list, lf, fits_dir, label, refit):
     """Warm-started NUTS per dataset, seeded by the MB-IMH proposal ``refined``.
 
     ``refined`` is the seed Proposal in rescaled (evaluation) space, or a zero-argument
@@ -692,12 +706,12 @@ def runWarmNutsLive(refined, tensor_batch, full_batch, ds_list, lf, fits_dir, la
     merged = _stackProposals(per_ds, target_d=target_d, target_q=target_q)
     merged.rescale(tensor_batch['sd_y'][:n_ds])
     merged.reff = reff
-    summary = getSummary(merged, full_batch, likelihood_family=lf)
+    summary = score(merged)
     print(ablTable(summary, lf))
     return summary, diag
 
 
-def runISLaplace(proposals, batches, full_batch, lf, attach_only=False):
+def runISLaplace(proposals, batches, score, lf, attach_only=False):
     out = []
     with torch.no_grad():
         for p, batch in zip(proposals, batches):
@@ -712,7 +726,7 @@ def runISLaplace(proposals, batches, full_batch, lf, attach_only=False):
     proposal = concatProposalsBatch(out)
     diag = _weightHealth(proposal)
     print(diag, end='')
-    summary = getSummary(proposal, full_batch, likelihood_family=lf)
+    summary = score(proposal)
     print(ablTable(summary, lf))
     return summary, diag
 
@@ -772,12 +786,15 @@ def _mbSummaryCache(
     return None
 
 
-def runNutsFromNpz(npz_path: Path, ds_list: list, tensor_batch: dict, full_batch: dict, lf: int):
-    """Extract pre-computed NUTS results from test.nuts.npz and evaluate."""
+def runNutsFromNpz(
+    npz_path: Path, ds_list: list, tensor_batch: dict, score, lf: int, full_split: bool
+):
+    """Extract pre-computed NUTS results from test.nuts.npz and evaluate. The full-split summary
+    cache is only read and written when ``score`` scores every dataset (``full_split``)."""
     n_ds = len(ds_list)
     has_se = hasSigmaEps(lf)
 
-    cached = _nutsSummaryCache(npz_path, n_ds)
+    cached = _nutsSummaryCache(npz_path, n_ds) if full_split else None
     if cached is not None:
         # only the tiny diagnostic arrays are needed; skip the ~6.5 GB nuts_rfx load entirely
         keys = ('nuts_divergences', 'nuts_duration', 'nuts_ess', 'nuts_sigma_rfx')
@@ -864,12 +881,12 @@ def runNutsFromNpz(npz_path: Path, ds_list: list, tensor_batch: dict, full_batch
     merged = _stackProposals(proposals, target_d=target_d, target_q=target_q)
     merged.rescale(tensor_batch['sd_y'][:n_ds])
     merged.reff = reff
-    summary = getSummary(merged, full_batch, likelihood_family=lf)
+    summary = score(merged)
 
     # write the full-split summary back under the plain name evaluate.py and
     # _nutsSummaryCache use, so the inline recompute only ever happens once per
     # data dir (evaluate.py's multi-model runs only write masked-subset caches)
-    if n_ds == n_total:
+    if full_split and n_ds == n_total:
         partition = npz_path.name.split('.')[0]
         cache_path = npz_path.parent / f'summary_{partition}_nuts.pt'
         summary.save(cache_path)
@@ -958,6 +975,11 @@ def main() -> None:
                 f'data: {data_path.name}'
             )
             print('(per-method settings: see individual eval_*.py benchmarks)\n')
+            # where the simulator clipped (Poisson) the reference fits another likelihood
+            keep = ~simulatorClipped(data_path)[:n_ds]
+            if not keep.all():
+                print(f'Simulator-clipped datasets left out: {np.flatnonzero(~keep).tolist()}\n')
+            score = keptScorer(full_batch, keep, lf)
 
             run_name = cfg['ckpt'].parent.name
             proposals, batches = loadOrSampleProposals(
@@ -1013,7 +1035,7 @@ def main() -> None:
                     print()
                     continue
                 if cond == 'coldNuts':
-                    runNutsFromNpz(data_path, ds_list, tensor_batch, full_batch, lf)
+                    runNutsFromNpz(data_path, ds_list, tensor_batch, score, lf, keep.all())
                     print()
                     continue
 
@@ -1027,8 +1049,10 @@ def main() -> None:
                 cache_base = _ablSummaryBase(
                     cfg['data_dir'], args.split, cond, run_name, args.prefix, n_s_cond
                 )
+                if not keep.all():
+                    cache_base = cache_base.with_name(f'{cache_base.name}_{maskTag(keep)}')
                 cached = loadAblSummary(
-                    cache_base, n_ds, (data_path, cfg['ckpt']), args.refresh_summaries
+                    cache_base, int(keep.sum()), (data_path, cfg['ckpt']), args.refresh_summaries
                 )
                 if cached is not None:
                     summary, diag = cached
@@ -1039,30 +1063,32 @@ def main() -> None:
                     continue
 
                 if cond == 'raw':
-                    mb_summary = _mbSummaryCache(
-                        cfg['data_dir'],
-                        args.split,
-                        run_name,
-                        args.prefix,
-                        args.n_samples,
-                        n_ds,
-                        cfg['ckpt'],
+                    mb_summary = (
+                        _mbSummaryCache(
+                            cfg['data_dir'],
+                            args.split,
+                            run_name,
+                            args.prefix,
+                            args.n_samples,
+                            n_ds,
+                            cfg['ckpt'],
+                        )
+                        if keep.all()
+                        else None
                     )
-                    summary, diag = runRaw(proposals, full_batch, lf, summary_cache=mb_summary)
+                    summary, diag = runRaw(proposals, score, lf, summary_cache=mb_summary)
                 elif cond == 'is':
-                    summary, diag = runIS(proposals, batches, full_batch, lf)
+                    summary, diag = runIS(proposals, batches, score, lf)
                 elif cond == 'isFull':
-                    summary, diag = runIS(proposals, batches, full_batch, lf, full=True)
+                    summary, diag = runIS(proposals, batches, score, lf, full=True)
                 elif cond == 'isMarginal':
                     summary, diag = runIS(
-                        proposals, batches, full_batch, lf, marginal=True, rb_redraw=True
+                        proposals, batches, score, lf, marginal=True, rb_redraw=True
                     )
                 elif cond == 'isLaplace':
-                    summary, diag = runISLaplace(proposals, batches, full_batch, lf)
+                    summary, diag = runISLaplace(proposals, batches, score, lf)
                 elif cond == 'rbAttach':
-                    summary, diag = runISLaplace(
-                        proposals, batches, full_batch, lf, attach_only=True
-                    )
+                    summary, diag = runISLaplace(proposals, batches, score, lf, attach_only=True)
                 elif cond in IMH_CONDITIONS:
                     mode, n_inner, moves = IMH_CONDITIONS[cond]
                     if cond == 'imhMarginal':
@@ -1071,7 +1097,7 @@ def main() -> None:
                         mode,
                         imh_proposals,
                         imh_batches,
-                        full_batch,
+                        score,
                         lf,
                         n_steps=imh_n_steps,
                         n_inner=n_inner,
@@ -1107,7 +1133,7 @@ def main() -> None:
                     summary, diag = runWarmNutsLive(
                         wnSeed,
                         tensor_batch,
-                        full_batch,
+                        score,
                         ds_list,
                         lf,
                         cfg['data_dir'] / f'fits_warm_{run_name}',
