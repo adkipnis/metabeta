@@ -1263,7 +1263,7 @@ def test_router_random_walk_is_opt_in(tmp_path: Path):
     sg = router.sample(batch, n_samples=64).safeguards  # plain IMH
     assert not sg['random_walk_ran'].any() and np.isnan(sg['random_walk_accept']).all()
 
-    sg = router.sample(batch, n_samples=64, random_walk=LocalMoves(gate_ess=None)).safeguards
+    sg = router.sample(batch, n_samples=64, random_walk=LocalMoves()).safeguards
     assert sg['refine_method'] == 'imhPM+moves'
     assert sg['random_walk_ran'].all() and np.isfinite(sg['random_walk_accept']).all()
 

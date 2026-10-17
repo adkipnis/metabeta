@@ -413,7 +413,7 @@ def test_local_moves_ignore_a_stray_first_rfx_draw():
         proposal.data['local']['samples'][:, :, 0] = first
         sampler = MetropolisSampler(
             data, n_chains=4, n_steps=400, mode='laplace', likelihood_family=2,
-            n_eff_target=None, n_inner=4, moves=LocalMoves(gate_ess=None),
+            n_eff_target=None, n_inner=4, moves=LocalMoves(),
         )  # fmt: skip
         out, _ = sampler(proposal)
         means.append(out.rfx[0, :, :, 0].mean(-1))
