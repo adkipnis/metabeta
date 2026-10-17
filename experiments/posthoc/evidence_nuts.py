@@ -18,7 +18,6 @@ from pathlib import Path
 
 import numpy as np
 
-from metabeta.simulation.fit import Fitter
 from metabeta.utils.experiments import experimentResultsPath
 from metabeta.utils.padding import unpad
 
@@ -48,6 +47,8 @@ def fitReduced(family: str, size: str, idx: int) -> None:
     if path.exists():  # resubmitted array: keep finished fits
         print(f'exists {path}')
         return
+    from metabeta.simulation.fit import Fitter  # PyMC stack; evidence.py imports only outPath
+
     cfg = argparse.Namespace(
         method='nuts',
         level=2,
