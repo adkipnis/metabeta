@@ -447,7 +447,7 @@ def loadLatencies(
     keys = [f'{tag}:{i}' for i in np.flatnonzero(mask)]
     missing = [k for k in keys if k not in cache]
     if missing:
-        raise RuntimeError(
+        raise KeyError(
             f'{len(missing)} / {len(keys)} {tag!r} latencies missing from {path}; run '
             f'experiments/evaluation/runtimes.py --ds_type real --device {device.type} '
             f'--n_samples {n_samples} for this family, or pass --no-latency'
@@ -674,10 +674,10 @@ def evaluateReal(
             mask_t = torch.from_numpy(sub_mask)
             p_nuts_ref = subsetProposal(proposal_nuts, sub_mask)
             nuts_nll = nuts_loo[mask_t]
-            nuts_tpd = nuts_tpd_arr[mask_t] if nuts_tpd_arr is not None else None
+            nuts_tpd = nuts_tpd_arr[mask_t]
 
         delta_tpd: np.ndarray | None = None
-        if tpd_arr is not None and nuts_tpd is not None:
+        if tpd_arr is not None:
             delta_tpd = (tpd_arr.float() - nuts_tpd.float()).numpy()
 
         rows.append(
