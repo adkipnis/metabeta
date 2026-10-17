@@ -49,7 +49,7 @@ per GLMM row the quadrature's resolution; per Poisson row whether the simulator 
 (those rows leave the tables: NUTS fits the unclipped likelihood the flow never saw).
 
 Outputs: {out_dir}/{prefix}{size}_{split}_n{n_ds}.csv (per-dataset rows; prefix '' for Normal,
-'{family}_k{K}_' otherwise), .md (summary tables) and .png (diagnostic figure);
+'{family}_k{K}_' otherwise), .md (summary tables) and .pdf (diagnostic figure);
 --summarize-only additionally writes evidence.tex (all families, converged references
 only) and evidence_paper.md (the numbers quoted in the paper), with the t estimator
 where the CSVs carry it.
@@ -93,12 +93,7 @@ from metabeta.posthoc.laplace_glmm import (  # noqa: E402
     LaplaceImportanceSampler,
     logMarginalLikelihoodAGQ,
 )
-from metabeta.posthoc.metropolis import (  # noqa: E402
-    IS2_N_INNER,
-    LocalMoves,
-    MetropolisSampler,
-    bulkEss,
-)
+from metabeta.posthoc.metropolis import IS2_N_INNER, LocalMoves, MetropolisSampler  # noqa: E402
 from metabeta.utils.config import ApproximatorConfig  # noqa: E402
 from metabeta.utils.constants import hasSigmaEps  # noqa: E402
 from metabeta.utils.psis import psislw  # noqa: E402
@@ -216,9 +211,9 @@ def loadCsv(path: Path) -> pd.DataFrame:
         df['kflag_t'] = np.maximum(df['k_t'], df['kpool_t'])
         df['kflag_t_red'] = np.maximum(df['k_t_red'], df['kpool_t_red'])
     # once --ref-only ran, the summaries compare against its references (nested: only where the
-    # reduced model's NUTS converged); the first references stay as *_v1
+    # reduced model's NUTS converged); the first Bayes-factor reference stays as logbf_ref_v1
     if 'logev_ref' in df:
-        df['logev_bridge_nuts_v1'], df['logbf_ref_v1'] = df['logev_bridge_nuts'], df['logbf_ref']
+        df['logbf_ref_v1'] = df['logbf_ref']
         df['logev_bridge_nuts'], df['logev_bridge_nuts_swap'] = (
             df['logev_ref'],
             df['logev_ref_swap'],
@@ -531,12 +526,11 @@ def runImh(
         moves=moves,
     )
     p_imh, diag = sampler(proposalDouble(proposal, IMH_CHAINS * n_steps))
-    ess = diag['ess'] if moves else bulkEss(p_imh.samples_g, IMH_CHAINS)
     return p_imh, {
         'accept': float(diag['accept_rate'].mean()),
-        'ess': float(np.nanmin(ess.numpy())),
-        'moved': bool(moves and diag['moved'][0]),
-        'pool_k': float(psislw(diag['log_w'].detach().double().cpu().numpy())[1][0]),
+        'ess': float(np.nanmin(diag['ess'].numpy())),
+        'moved': bool(diag['moved'][0]),
+        'pool_k': float(psislw(diag['log_w'].cpu().double().numpy())[1][0]),
     }
 
 
@@ -829,20 +823,23 @@ def writeOutputs(df: pd.DataFrame, pool_sizes: list[int], out_dir: Path, stem: s
     label += f', converged reference {len(conv)}/{len(df)}'
     md = summarize(conv.reset_index(drop=True), pool_sizes, label)
     (out_dir / f'{stem}.md').write_text(md)
-    plot(conv.reset_index(drop=True), pool_sizes, out_dir / f'{stem}.png', label)
+    plot(conv.reset_index(drop=True), pool_sizes, out_dir / f'{stem}.pdf', label)
     print(md)
 
 
 def latestCsvs(out_dir: Path, family: str, split: str) -> dict[str, Path]:
-    """size -> newest merged CSV of one family in out_dir (K = IS2_N_INNER for GLMMs)."""
+    """size -> the merged CSV with the most datasets of one family in out_dir (K = IS2_N_INNER
+    for GLMMs), so a smaller smoke run next to it is never picked."""
     prefix = '' if family == 'normal' else f'{family}_k{IS2_N_INNER}_'
     csvs = {
-        size: sorted(
-            p for p in out_dir.glob(f'{prefix}{size}_{split}_n*.csv') if '_shard' not in p.stem
-        )
+        size: [p for p in out_dir.glob(f'{prefix}{size}_{split}_n*.csv') if '_shard' not in p.stem]
         for size in SIZES
     }
-    return {size: paths[-1] for size, paths in csvs.items() if paths}
+    return {
+        size: max(paths, key=lambda p: int(p.stem.rsplit('_n', 1)[1]))
+        for size, paths in csvs.items()
+        if paths
+    }
 
 
 def _texRows(df: pd.DataFrame, pool_sizes: list[int], head: str, blank: str) -> list[str]:
@@ -1046,12 +1043,26 @@ def stemPrefix(args: argparse.Namespace) -> str:
     return '' if args.family == 'normal' else f'{args.family}_k{args.n_inner}_'
 
 
+def sizePaths(size: str, args: argparse.Namespace) -> tuple[Path, Path]:
+    """The size's checkpoint and npz split."""
+    ckpt = _ckpt_dir(args.family, size, BEST_SEEDS[(args.family, size)]) / f'{args.prefix}.pt'
+    return ckpt, DATA_DIR / f'{size}-{args.family[0]}-sampled' / f'{args.split}.npz'
+
+
+def saveShard(
+    rows: list[dict], columns: tuple[str, ...], sub: str, stem: str, args: argparse.Namespace
+) -> Path:
+    """This shard's rows to {sub}/{stem}[_shard].csv, for joinColumns."""
+    shard = '' if args.n_shards == 1 else f'_shard{args.shard}of{args.n_shards}'
+    path = args.out_dir / sub / f'{stem}{shard}.csv'
+    path.parent.mkdir(exist_ok=True)
+    pd.DataFrame(rows, columns=['idx', *columns]).to_csv(path, index=False)
+    return path
+
+
 def runSize(size: str, args: argparse.Namespace) -> None:
     lf = FAMILIES[args.family]
-    seed = BEST_SEEDS[(args.family, size)]
-    ckpt = _ckpt_dir(args.family, size, seed) / f'{args.prefix}.pt'
-    data_dir = DATA_DIR / f'{size}-{args.family[0]}-sampled'
-    npz_path = data_dir / f'{args.split}.npz'
+    ckpt, npz_path = sizePaths(size, args)
     label = f'{args.family.capitalize()} ({size}), {args.split}, n={args.n_datasets}'
     if lf != 0:
         label += f', IS² K={args.n_inner}'
@@ -1177,8 +1188,8 @@ def runSize(size: str, args: argparse.Namespace) -> None:
 def runSizeT(size: str, args: argparse.Namespace) -> None:
     """--t-only: tFit on the rows of the size's CSV, and on the reduced model where the CSV has a
     nested reference, with runSize's seeds; written to t/ for joinColumns."""
-    ckpt = _ckpt_dir(args.family, size, BEST_SEEDS[(args.family, size)]) / f'{args.prefix}.pt'
-    col = Collection(DATA_DIR / f'{size}-{args.family[0]}-sampled' / f'{args.split}.npz')
+    ckpt, npz_path = sizePaths(size, args)
+    col = Collection(npz_path)
     stem = f'{stemPrefix(args)}{size}_{args.split}_n{min(args.n_datasets, len(col))}'
     ref = pd.read_csv(args.out_dir / f'{stem}.csv')
     model, _ = loadModel(ckpt)
@@ -1200,10 +1211,7 @@ def runSizeT(size: str, args: argparse.Namespace) -> None:
             msg += f'  lnBF ref={r.logbf_ref:+.2f} t={row["logbf_t"]:+.2f}'
         rows.append(row)
         print(msg, flush=True)
-    shard = '' if args.n_shards == 1 else f'_shard{args.shard}of{args.n_shards}'
-    path = args.out_dir / 't' / f'{stem}{shard}.csv'
-    path.parent.mkdir(exist_ok=True)
-    pd.DataFrame(rows, columns=['idx', *T_COLUMNS]).to_csv(path, index=False)
+    path = saveShard(rows, T_COLUMNS, 't', stem, args)
     print(f'[saved] {path}  ({time.perf_counter() - t0:.0f}s)')
 
 
@@ -1211,8 +1219,7 @@ def runSizeRef(size: str, args: argparse.Namespace) -> None:
     """--ref-only: REF_COLUMNS on the rows of the size's CSV, written to ref/ for the join. The
     bridges get fresh generators with runSize's seeds (+50_000 for the reduced model)."""
     lf = FAMILIES[args.family]
-    ckpt = _ckpt_dir(args.family, size, BEST_SEEDS[(args.family, size)]) / f'{args.prefix}.pt'
-    npz_path = DATA_DIR / f'{size}-{args.family[0]}-sampled' / f'{args.split}.npz'
+    ckpt, npz_path = sizePaths(size, args)
     col = Collection(npz_path, permute=False)
     n_ds = min(args.n_datasets, len(col))
     stem = f'{stemPrefix(args)}{size}_{args.split}_n{n_ds}'
@@ -1270,10 +1277,7 @@ def runSizeRef(size: str, args: argparse.Namespace) -> None:
             ),
             flush=True,
         )
-    shard = '' if args.n_shards == 1 else f'_shard{args.shard}of{args.n_shards}'
-    path = args.out_dir / 'ref' / f'{stem}{shard}.csv'
-    path.parent.mkdir(exist_ok=True)
-    pd.DataFrame(rows, columns=['idx', *REF_COLUMNS]).to_csv(path, index=False)
+    path = saveShard(rows, REF_COLUMNS, 'ref', stem, args)
     print(f'[saved] {path}  ({time.perf_counter() - t0:.0f}s)')
 
 
