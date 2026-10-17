@@ -24,7 +24,7 @@ experiments/simulation/likelihood_misspec.selectIndices (sorted, so the cache ke
 
 Output: one row per (dataset, condition, arm) in fixed_prior_{family}_{size}.csv, with
 agreement against NUTS(P1) (r, σ-ratio, rank-MAD, ΔLOO-NLL), IMH acceptance, the information
-proxy m/q, the realised log10 τ₁/τ₀, and per-level credible-interval hit counts
+proxy m/q, the realized log10 τ₁/τ₀, and per-level credible-interval hit counts
 against the generating parameters, from which EACE is recomputed for any subset.  ``report``
 reads only the CSV, so cluster CSVs can be tabulated locally.
 
