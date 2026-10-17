@@ -879,6 +879,7 @@ def runNutsFromNpz(
     target_d = tensor_batch['ffx'].shape[-1]
     target_q = tensor_batch['sigma_rfx'].shape[-1]
     merged = _stackProposals(proposals, target_d=target_d, target_q=target_q)
+    del proposals  # the stacked copy is all the summary needs (several GB at huge)
     merged.rescale(tensor_batch['sd_y'][:n_ds])
     merged.reff = reff
     summary = score(merged)
@@ -982,34 +983,38 @@ def main() -> None:
             score = keptScorer(full_batch, keep, lf)
 
             run_name = cfg['ckpt'].parent.name
-            proposals, batches = loadOrSampleProposals(
-                model,
-                items,
-                args.n_samples,
-                cfg['data_dir'],
-                args.split,
-                run_name,
-                data_path,
-                cfg['ckpt'],
-                args.prefix,
-                args.batch_size,
-                args.device,
-            )
             # IMH requires exactly N_CHAINS × N_STEPS samples — draw a dedicated set.
             imh_n_steps, imh_n_samples = imhSampleCount(args.n_samples)
-            imh_proposals, imh_batches = loadOrSampleProposals(
-                model,
-                items,
-                imh_n_samples,
-                cfg['data_dir'],
-                args.split,
-                run_name,
-                data_path,
-                cfg['ckpt'],
-                args.prefix,
-                args.batch_size,
-                args.device,
-            )
+            # every condition but coldNuts (the NUTS fit alone) needs the flow draws; at huge each
+            # set holds ~10 GB, so a coldNuts-only run skips them
+            proposals = batches = imh_proposals = imh_batches = None
+            if set(conditions) - {'coldNuts'}:
+                proposals, batches = loadOrSampleProposals(
+                    model,
+                    items,
+                    args.n_samples,
+                    cfg['data_dir'],
+                    args.split,
+                    run_name,
+                    data_path,
+                    cfg['ckpt'],
+                    args.prefix,
+                    args.batch_size,
+                    args.device,
+                )
+                imh_proposals, imh_batches = loadOrSampleProposals(
+                    model,
+                    items,
+                    imh_n_samples,
+                    cfg['data_dir'],
+                    args.split,
+                    run_name,
+                    data_path,
+                    cfg['ckpt'],
+                    args.prefix,
+                    args.batch_size,
+                    args.device,
+                )
 
             # IMH-refined proposals by mode, kept for the warmNuts seed so the
             # refinement is not recomputed when the imh* condition already ran
