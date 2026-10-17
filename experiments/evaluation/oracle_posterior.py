@@ -11,7 +11,8 @@ Markdown table with mean ± std over parameter dimensions (for NRMSE/ECE/EACE/R)
 datasets (for LOO-NLL). Unlike real_posterior.py, the sampled test sets carry ground-truth
 parameters, so the metrics are absolute (vs the true values) rather than relative to NUTS.
 The ``_conv`` tables restrict to the datasets on which the NUTS reference (``nuts2``)
-converged; the NUTS row is the composite ``nuts`` competitor.
+converged and the simulator did not clip (utils.evaluation.simulatorClipped); the NUTS row is
+the composite ``nuts`` competitor.
 
 MB posterior samples, per-method summaries, and post-hoc refinements are cached next to the
 data (siblings of test.npz), keyed by checkpoint/prefix/n_samples/seed and by the
@@ -39,7 +40,7 @@ from tabulate import tabulate
 
 from metabeta.models.approximator import Approximator
 from metabeta.utils.dataloader import Collection, collateGrouped, subsetBatch
-from metabeta.utils.evaluation import referenceConverged, subsetProposal
+from metabeta.utils.evaluation import referenceConverged, simulatorClipped, subsetProposal
 from metabeta.utils.results import Proposal
 from metabeta.utils.device import setDevice
 from metabeta.utils.logger import setupLogging
@@ -443,9 +444,10 @@ def evaluateRegime(
         logger.warning('  No datasets pass capacity filter — skipping.')
         return [], None
 
-    # NUTS reference convergence from the small diagnostic arrays (no fit samples materialized).
+    # NUTS reference convergence from the small diagnostic arrays (no fit samples materialized),
+    # less the datasets where the reference fits another likelihood (simulator-clipped Poisson).
     conv = referenceConverged(data_path)
-    conv_mask = None if conv is None else conv[cap_mask]
+    conv_mask = None if conv is None else (conv & ~simulatorClipped(data_path))[cap_mask]
     have_conv = False
     conv_idx = conv_batch = conv_full = None
     if conv_mask is not None:

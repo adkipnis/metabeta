@@ -24,7 +24,7 @@ experiments/simulation/likelihood_misspec.selectIndices (sorted, so the cache ke
 
 Output: one row per (dataset, condition, arm) in fixed_prior_{family}_{size}.csv, with
 agreement against NUTS(P1) (r, σ-ratio, rank-MAD, ΔLOO-NLL), IMH acceptance, the information
-proxy m/q (App. B.7), the realised log10 τ₁/τ₀, and per-level credible-interval hit counts
+proxy m/q, the realized log10 τ₁/τ₀, and per-level credible-interval hit counts
 against the generating parameters, from which EACE is recomputed for any subset.  ``report``
 reads only the CSV, so cluster CSVs can be tabulated locally.
 
@@ -56,7 +56,7 @@ from metabeta.utils.constants import (
 )
 from metabeta.utils.dataloader import Collection, collateGrouped
 from metabeta.utils.device import setDevice
-from metabeta.utils.evaluation import nutsConverged
+from metabeta.utils.evaluation import nutsConverged, simulatorClipped
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR, REPO_ROOT
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.posterior_eval import (
@@ -128,7 +128,7 @@ FAMILY_LABELS = {'n': 'Gaussian', 'b': 'Bernoulli', 'p': 'Poisson'}
 # MB(P1) acceptance (same family, same datasets).  Failing rows stay in every table, marked.
 VALIDITY_SHARE = 0.5
 # valid by the rule but footnoted in the paper table: Bambi's scale 2.5 exceeds the Poisson
-# training maximum (App. F.3: τ_β ≤ 1.5, τ_σ ≤ 1.0), so the stand-in is pessimistic
+# training maximum (τ_β ≤ 1.5, τ_σ ≤ 1.0), so the stand-in is pessimistic
 BORDERLINE = {('p', 'bambi')}
 
 FREEZE = """## Frozen design (2026-09-24, before the medium/large/huge runs)
@@ -149,9 +149,9 @@ FREEZE = """## Frozen design (2026-09-24, before the medium/large/huge runs)
 - IMH acceptance is read off the saved chains (a step accepts iff the global state moves).
   Against MetropolisSampler's own accept_rate on the same run (Gaussian small, 32 datasets,
   identity / Bambi / τ₁/τ₀=3): max |difference| 0.003, correlation 1.000.
-- Hyper-prior-mode scaling: stored τ × sd_y in the small test sets reproduces the App. F.3
+- Hyper-prior-mode scaling: stored τ × sd_y in the small test sets reproduces the training
   hyper-prior quantiles (5–95%) within 3% for all three families (outcome calibration shrinks
-  only the upper tail), so the hyper-prior-mode P0 is the App. F.3 mode divided by sd_y
+  only the upper tail), so the hyper-prior-mode P0 is the simulation/prior.py mode divided by sd_y
   (Gaussian; sd_y = 1 for Bernoulli and Poisson).
 """
 
@@ -295,7 +295,11 @@ class FixedPriorStudy:
 
     @staticmethod
     def acceptRate(proposal: Proposal) -> np.ndarray:
-        """Per-dataset IMH acceptance, read off the chains: a step accepts iff the state moves."""
+        """Per-dataset IMH acceptance: MetropolisSampler's own record where the cache has it (after
+        local moves the draws are no longer the IMH chains), else read off the chains (a step
+        accepts iff the state moves)."""
+        if 'imh_accept_rate' in proposal.is_results:
+            return proposal.is_results['imh_accept_rate'].float().numpy()
         b, s, D = proposal.samples_g.shape
         chains = proposal.samples_g.reshape(b, IMH_N_CHAINS, s // IMH_N_CHAINS, D)
         moved = (chains[:, :, 1:] != chains[:, :, :-1]).any(-1)   # (b, C, T-1)
@@ -378,7 +382,7 @@ class FixedPriorStudy:
         self.max_d, self.max_q = model_cfg.max_d, model_cfg.max_q
         batch, mask, data_path = self.loadBatch(size)
         B = batch['X'].shape[0]
-        conv = nutsConverged(batch, 'nuts2').astype(bool)
+        conv = nutsConverged(batch, 'nuts2').astype(bool) & ~simulatorClipped(data_path)[mask]
         logger.info('%s-%s: %d datasets, %d NUTS-converged', size, self.family, B, conv.sum())
 
         nuts = fit2proposal(batch, 'nuts2')
@@ -583,7 +587,7 @@ class FixedPriorStudy:
             ),
             '',
         ]
-        # dose-response over information per parameter: quartiles of m/q (App. B.7)
+        # dose-response over information per parameter: quartiles of m/q
         for tag in [IDENTITY] + [t for t in CONDITIONS if t in set(df['condition'])]:
             sub = df[(df['condition'] == tag) | (df['arm'] == 'NUTS')]
             rows = []

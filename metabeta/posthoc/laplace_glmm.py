@@ -128,6 +128,28 @@ def _llScoreWeight(
     return (ll * mask_n).sum(dim=2), score_res, w
 
 
+def _cholFloat64(
+    Z: Tensor,  # (K, n, q), padded observations zeroed
+    w: Tensor,  # (K, n)
+    Sigma_inv: Tensor,  # (K, q, q)
+) -> Tensor:
+    """Chol(ZᵀWZ + Σ⁻¹ + 1e-6·I) assembled in float64, returned in Z's dtype. (K, q, q).
+
+    For the Newton Hessians whose float32 assembly is indefinite. H is PD in exact arithmetic,
+    but when a column of Z is constant within the group (a group-level covariate with a random
+    slope) ZᵀWZ is singular, and H's smallest eigenvalue is Σ⁻¹'s curvature along its null
+    direction. On the Poisson η-clip plateau (w = e^10 on every observation, where an
+    overshooting Newton step can land) ‖ZᵀWZ‖ reaches ~1e6, and the float32 rounding of the
+    outer products and their sum, ~eps·‖ZᵀWZ‖ ≈ 0.1, exceeds that eigenvalue. In float64 the
+    products z_q·z_r of float32 inputs are exact and the sum errs by ~1e-10, and the float32
+    factor of that H keeps its small pivot to relative precision.
+    """
+    eye = torch.eye(Z.shape[-1], dtype=torch.float64, device=Z.device)
+    Z64 = Z.double()
+    H = torch.einsum('kn,knq,knr->kqr', w.double(), Z64, Z64) + Sigma_inv.double() + 1e-6 * eye
+    return torch.linalg.cholesky(H).to(Z.dtype)
+
+
 def laplaceRfxModes(
     ffx: Tensor,  # (b, s, d)
     sigma_rfx: Tensor,  # (b, s, q)
@@ -204,7 +226,13 @@ def laplaceRfxModes(
         ll0, score_res, w = _llScoreWeight(eta, y, sigma_eps, mask_n, likelihood_family)
         score = torch.einsum('bmnq,bmns->bmsq', Z_m, score_res * mask_n)
         score = score - torch.einsum('bsqr,bmsr->bmsq', Sigma_inv, modes)
-        chol_H = torch.linalg.cholesky(hessian(w) + 1e-6 * eye)
+        chol_H, info = torch.linalg.cholesky_ex(hessian(w) + 1e-6 * eye)
+        if bool(info.any()):  # float32 H indefinite, see _cholFloat64
+            bi, mi, si = info.nonzero(as_tuple=True)
+            wk = w[bi, mi, :, si] * mask_n[bi, mi, :, 0]  # (K, n)
+            chol_H = chol_H.index_put(
+                (bi, mi, si), _cholFloat64(Z_m[bi, mi], wk, Sigma_inv[bi, si])
+            )
         delta = torch.cholesky_solve(score.unsqueeze(-1), chol_H).squeeze(-1)
         decrement = (0.5 * (score * delta).sum(-1)).nan_to_num(nan=torch.inf) * mask_m
         if t == n_newton or (t >= n_newton - 1 and float(decrement.max()) <= tol):
@@ -309,7 +337,10 @@ def _refineUnresolved(
             'kqr,kr->kq', Sik, modk
         )
         H = torch.einsum('kn,knq,knr->kqr', w * nk, Zk, Zk) + Sik
-        chol = torch.linalg.cholesky(H + 1e-6 * eye)
+        chol, info = torch.linalg.cholesky_ex(H + 1e-6 * eye)
+        if bool(info.any()):  # float32 H indefinite, see _cholFloat64
+            k = info.nonzero(as_tuple=True)[0]
+            chol = chol.index_put((k,), _cholFloat64(Zk[k], (w * nk)[k], Sik[k]))
         delta = torch.cholesky_solve(score.unsqueeze(-1), chol).squeeze(-1)
         dec = (0.5 * (score * delta).sum(-1)).nan_to_num(nan=torch.inf)
         active = dec > tol

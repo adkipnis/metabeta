@@ -35,6 +35,7 @@ from metabeta.utils.evaluation import (
     EvaluationSummary,
     dictMean,
     referenceConverged,
+    simulatorClipped,
     subsetProposal,
 )
 from metabeta.utils.results import Proposal, concatProposalsBatch
@@ -122,7 +123,8 @@ def setup() -> argparse.Namespace:
     )
     parser.add_argument(
         '--all_datasets', action=argparse.BooleanOptionalAction, default=False,
-        help='Evaluate every dataset instead of only those where the nuts2 reference converged',
+        help='Evaluate every dataset instead of only those where the nuts2 reference converged '
+        '(simulator-clipped Poisson datasets stay out either way)',
     )
     parser.add_argument(
         '--pred_coverage', action=argparse.BooleanOptionalAction, default=False,
@@ -840,14 +842,17 @@ class Evaluator:
             return int(raw['y'].shape[0])
 
     def _referenceMask(self, partition: str, n: int) -> np.ndarray | None:
-        """Datasets where the NUTS reference converged; None without a reference or with
-        --all_datasets (the convergence-validation check compares the two)."""
-        if self.cfg.all_datasets:
-            return None
-        mask = referenceConverged(Path(self._partitionDataPath(partition)))
-        if mask is None:
-            return None
-        logger.info('%s converged on %d / %d datasets', REFERENCE_TAG, int(mask.sum()), n)
+        """Datasets where the NUTS reference converged (all with --all_datasets: the
+        convergence-validation check compares the two), less the simulator-clipped ones; None
+        when that leaves every dataset."""
+        data_path = Path(self._partitionDataPath(partition))
+        mask = ~simulatorClipped(data_path)
+        if not mask.all():
+            logger.info('%d / %d datasets simulator-clipped, excluded', int((~mask).sum()), n)
+        conv = None if self.cfg.all_datasets else referenceConverged(data_path)
+        if conv is not None:
+            logger.info('%s converged on %d / %d datasets', REFERENCE_TAG, int(conv.sum()), n)
+            mask &= conv
         return None if mask.all() else mask
 
     def _fitMaskFromPath(self, data_path: Path, method: str) -> np.ndarray | None:

@@ -1,5 +1,6 @@
 from collections import OrderedDict
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -7,6 +8,7 @@ import pytest
 import torch
 
 from metabeta.models.api import Api
+from metabeta.posthoc.metropolis import LocalMoves
 from metabeta.utils.dataloader import Dataloader
 from metabeta.utils.api import joinCheckpoints
 
@@ -1250,6 +1252,74 @@ def test_router_imh_skips_local_flow_and_raw_flow_keeps_it(tmp_path: Path, monke
 
     router.sample(_glmm_batch(d=4, q=2), n_samples=64, refine=False)  # raw flow
     assert len(calls) == 1
+
+
+def test_router_random_walk_is_opt_in(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2, analytical_refinement='light')
+    router = Api(joint_path, warmup=False)
+    batch = _glmm_batch(d=4, q=2)
+
+    sg = router.sample(batch, n_samples=64).safeguards  # plain IMH
+    assert not sg['random_walk_ran'].any() and np.isnan(sg['random_walk_accept']).all()
+
+    sg = router.sample(batch, n_samples=64, random_walk=LocalMoves()).safeguards
+    assert sg['refine_method'] == 'imhPM+moves'
+    assert sg['random_walk_ran'].all() and np.isfinite(sg['random_walk_accept']).all()
+
+    for refine in ('is', False):
+        with pytest.raises(ValueError, match="random_walk requires refine='imh'"):
+            router.sample(batch, n_samples=64, refine=refine, random_walk=True)
+
+
+def test_router_evidence_is_opt_in_and_flags_k_hat(tmp_path: Path):
+    import metabeta.models.api as api_module
+
+    joint_path = tmp_path / 'joint.pt'
+    _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2, analytical_refinement='light')
+    router = Api(joint_path, warmup=False)
+    batch = _glmm_batch(d=4, q=2)
+    with mock.patch.object(api_module, 'tEvidence', wraps=api_module.tEvidence) as t_evidence:
+        assert router.sample(batch, n_samples=64).evidence is None
+        t_evidence.assert_not_called()  # no t fit unless asked for
+        ev = router.sample(batch, n_samples=64, evidence=True).evidence
+        t_evidence.assert_called_once()
+    assert ev['log_evidence'].shape == ev['psis_k'].shape == ev['psis_flag'].shape == (1,)
+    assert np.isfinite(ev['log_evidence']).all()
+
+    with pytest.warns(UserWarning, match='Evidence reliability check failed'):
+        ev = router.sample(batch, n_samples=64, evidence=True, k_threshold=-np.inf).evidence
+    assert ev['psis_flag'].all()
+
+    with pytest.raises(ValueError, match='evidence=True needs n_samples'):
+        router.sample(batch, n_samples=8, evidence=True)
+
+
+def test_router_evidence_flags_the_flow_pool_k_hat(tmp_path: Path):
+    import metabeta.models.api as api_module
+
+    joint_path = tmp_path / 'joint.pt'
+    _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2, analytical_refinement='light')
+    router = Api(joint_path, warmup=False)
+    batch = _glmm_batch(d=4, q=2)
+    for refine in ('imh', 'is'):
+        ev = router.sample(batch, n_samples=64, refine=refine, evidence=True).evidence
+        assert ev['pool_psis_k'].shape == (1,)
+    ev = router.sample(batch, n_samples=64, refine=False, evidence=True).evidence
+    assert ev['pool_psis_k'] is None
+
+    # a pool k-hat above the threshold flags the evidence however good the t pass looks
+    def badPool(log_w: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        return log_w, np.full(log_w.shape[:-1], 2.0)
+
+    t_ok = {'log_ev': np.zeros(1), 'k': np.zeros(1), 'eff': np.ones(1)}
+    with (
+        mock.patch.object(api_module, 'psislw', badPool),
+        mock.patch.object(api_module, 'tEvidence', return_value=t_ok),
+        pytest.warns(UserWarning, match='Evidence reliability check failed'),
+    ):
+        ev = router.sample(batch, n_samples=64, evidence=True).evidence
+    assert ev['psis_flag'].all() and ev['psis_k'][0] == 0.0 and ev['pool_psis_k'][0] == 2.0
 
 
 def test_estimate_without_local_rejects_glmm_without_analytical_stats(tmp_path: Path):

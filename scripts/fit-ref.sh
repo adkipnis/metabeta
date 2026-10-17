@@ -1,19 +1,9 @@
 #!/bin/bash
-# Reference fits on the cluster: one SLURM array task per dataset, one method and budget
-# level per submission. Submits itself, then runs metabeta/simulation/fit.py per task.
-#
-# Usage (from the repo root on the submit node):
+# Reference fits: one SLURM array task per dataset, one method and level per submission.
+# Run from the repo root on the submit node, then metabeta/simulation/check.py.
 #   scripts/fit-ref.sh --method nuts --level 2 --data_id small-n-sampled
-#   scripts/fit-ref.sh --method advi --data_id small-n-sampled --partition valid
 #   scripts/fit-ref.sh --method pathfinder --level 1 --data_id small-n-sampled --idx 3 17 42
-#
-# Methods: nuts (levels 0|1|2, 4 cores), advi (both snapshots in one run), pathfinder
-# (levels 0|1), laplace; the last three use one core. --idx refits selected datasets only,
-# the default array covers datasets 0-511. --qos cpu_preemptible runs under the second user
-# cap (200 jobs) next to cpu_normal (100). --warm ~/pytensor_cache_{n|b|p}.tar (from
-# scripts/warm-cache.sh) starts every task from that PyTensor cache instead of an empty one,
-# so the recorded wall time is that of a user who has fitted one such GLMM before.
-# Afterwards: metabeta/simulation/check.py.
+# Levels: nuts 0|1|2, pathfinder 0|1. --qos cpu_preemptible has its own job cap (200, vs 100).
 
 set -euo pipefail
 
@@ -115,50 +105,8 @@ case "$FAM_NAME" in
     *) echo "Unknown family letter: $FAM_NAME (use n, b, or p)" >&2; exit 1 ;;
 esac
 
-SIF="$HOME/containers/python312.sif"
-VENV="$HOME/metabeta/.venv-apptainer"
-# outputs/data is symlinked to workspace storage; bind it so the link resolves in-container
-DATA_ROOT="/lustre/groups/hcai/workspace/alexander.kipnis/datasets"
-
-# node-local compile directory; empty (cold) unless a warm cache is unpacked into it
-JOB_TMPDIR="${SLURM_TMPDIR:-/tmp}/pytensor_${SLURM_JOB_ID}_${SLURM_ARRAY_TASK_ID}"
-mkdir -p "$JOB_TMPDIR"
-trap 'rm -rf "$JOB_TMPDIR"' EXIT
-[[ -n "$WARM" ]] && tar xf "$WARM" -C "$JOB_TMPDIR"
-
-apptainer exec \
-  --bind "$HOME:$HOME" \
-  --bind "$DATA_ROOT:$DATA_ROOT" \
-  --bind /tmp:/tmp \
-  "$SIF" \
-  bash -lc "
-    set -euo pipefail
-
-    cd '$HOME/metabeta'
-    source '$VENV/bin/activate'
-
-    export OMP_NUM_THREADS=1
-    export MKL_NUM_THREADS=1
-    export OPENBLAS_NUM_THREADS=1
-    export NUMEXPR_NUM_THREADS=1
-
-    export TMPDIR="$JOB_TMPDIR"
-    export PYTENSOR_FLAGS='base_compiledir=$JOB_TMPDIR,cxx=/usr/bin/g++'
-
-    echo 'hostname:' \$(hostname)
-    echo 'python:' \$(command -v python)
-    python --version
-    echo 'PYTENSOR_FLAGS:' \$PYTENSOR_FLAGS
-    echo 'SLURM_CPUS_PER_TASK:' ${SLURM_CPUS_PER_TASK}
-    echo 'Fitting dataset idx:' '$FIT_IDX'
-    echo 'warm cache:' '${WARM:-none}'
-
-    python metabeta/simulation/fit.py \
-      --size '$SIZE' \
-      --family '$FAMILY' \
-      --ds_type '$DS_TYPE' \
-      --partition '$PARTITION' \
-      --method '$METHOD' \
-      --level '$LEVEL' \
-      --idx '$FIT_IDX'
-  "
+source "$HOME/metabeta/scripts/pymc-run.sh"
+[[ -n "$WARM" ]] && tar xf "$WARM" -C "$PYTENSOR_DIR"
+echo "warm cache: ${WARM:-none}"
+runPymc python metabeta/simulation/fit.py --size "$SIZE" --family "$FAMILY" --ds_type "$DS_TYPE" \
+    --partition "$PARTITION" --method "$METHOD" --level "$LEVEL" --idx "$FIT_IDX"

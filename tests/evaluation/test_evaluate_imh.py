@@ -50,7 +50,9 @@ def test_resolve_models_rejects_unknown():
         evaluator._resolveModels()
 
 
-@pytest.mark.parametrize(('lf', 'expected'), [(0, 'imhMarginal'), (1, 'imhPM'), (2, 'imhPM')])
+@pytest.mark.parametrize(
+    ('lf', 'expected'), [(0, 'imhMarginal+moves'), (1, 'imhPM+moves'), (2, 'imhPM+moves')]
+)
 def test_imh_method_defaults_come_from_presets(lf, expected):
     evaluator = _evaluator(likelihood_family=lf)
 
@@ -75,7 +77,7 @@ def test_method_name_maps_mb_imh_to_its_variant():
 
     assert evaluator._methodName('MB') == 'mb'
     assert evaluator._methodName('NUTS') == 'nuts'
-    assert evaluator._methodName('MB+IMH') == 'imhMarginal'
+    assert evaluator._methodName('MB+IMH') == 'imhMarginal+moves'
 
 
 def test_mb_imh_stays_active_without_fit_file(tmp_path):
@@ -148,7 +150,7 @@ def test_mb_imh_proposal_adds_refinement_time_per_dataset(monkeypatch, tmp_path)
 
     assert proposal is refined
     assert mask is None
-    assert seen['method'] == 'imhMarginal'
+    assert seen['method'] == 'imhMarginal+moves'
     assert seen['base'] is base
     assert seen['batch'] is full_batch
     # MB sampling cost per dataset plus the refinement pass amortised over the batch
@@ -227,6 +229,7 @@ def test_mb_imh_appears_in_light_path_plot_labels(monkeypatch, tmp_path):
         lambda *args, **kwargs: (object(), batch, tmp_path / 'test.npz'),
     )
     monkeypatch.setattr(evaluator, '_fitMaskFromPath', lambda *args, **kwargs: None)
+    monkeypatch.setattr(evaluator, '_referenceMask', lambda *args, **kwargs: None)
     monkeypatch.setattr(evaluator, '_fitProposalFromNpz', lambda *args, **kwargs: object())
     monkeypatch.setattr(evaluator, '_getProposalAndMask', lambda *args, **kwargs: (object(), None))
     monkeypatch.setattr(
@@ -256,7 +259,7 @@ def test_mb_imh_appears_in_light_path_plot_labels(monkeypatch, tmp_path):
     # plot labels follow the paper naming: MB = flow + IMH, MB^0 = raw flow (b4c5a111)
     assert labels_seen == ['MB$^0$', 'MB', 'NUTS']
     # MB+IMH looks up its own summary cache, not MB's
-    assert methods_seen == ['mb', 'imhMarginal']
+    assert methods_seen == ['mb', 'imhMarginal+moves']
 
 
 def _lightSummary():

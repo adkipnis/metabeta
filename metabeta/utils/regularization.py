@@ -189,6 +189,66 @@ def logDetJacobianCorr(z: torch.Tensor, q: int) -> torch.Tensor:
     return (0.5 * coeffs * log1m_tanh_sq).sum(-1)
 
 
+# global posterior coordinates: [ffx (d) | sigma_rfx (q) | sigma_eps | corr (d_corr)]
+
+
+def globalMask(
+    data: dict[str, torch.Tensor], d: int, q: int, has_sigma_eps: bool, d_corr: int
+) -> torch.Tensor:
+    """(b, D_g) bool: the global dims each dataset has."""
+    masks = [data['mask_d'][..., :d], data['mask_q'][..., :q]]
+    if has_sigma_eps:
+        masks.append(torch.ones_like(data['mask_d'][..., 0:1]))
+    if d_corr > 0:
+        mask_corr = data['mask_corr'][..., :d_corr]
+        if 'eta_rfx' in data:  # this breaks earlier models
+            mask_corr = mask_corr & (data['eta_rfx'].unsqueeze(-1) > 0)
+        masks.append(mask_corr)
+    return torch.cat(masks, dim=-1)
+
+
+def unconstrainGlobals(
+    theta: torch.Tensor, d: int, q: int, has_sigma_eps: bool, d_corr: int
+) -> torch.Tensor:
+    """Constrained globals → the flow's coordinates (inverse-softplus sigmas, partial-correlation
+    z); padded sigmas (0) map to 0."""
+    q_var = q + int(has_sigma_eps)
+    u = theta.clone()
+    u[..., d : d + q_var] = maskedInverseSoftplus(theta[..., d : d + q_var])
+    if d_corr > 0:
+        r_corr = theta[..., d + q_var : d + q_var + d_corr]
+        u[..., d + q_var : d + q_var + d_corr] = corrLowerToUnconstrained(r_corr, q)
+    return u
+
+
+def constrainGlobals(
+    u: torch.Tensor,  # (b, s, D_g)
+    active: torch.Tensor,  # (b, D_g), globalMask
+    d: int,
+    q: int,
+    has_sigma_eps: bool,
+    d_corr: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Inverse of unconstrainGlobals and log |dθ/du|, (b, s, D_g) and (b, s).
+
+    Padding comes from ``active``, not from u == 0 (the masked constrainers' rule): an active
+    float32 draw lands on exactly 0 about once per few million draws, and would become sigma = 0
+    with its Jacobian dropped. Padded sigmas map to 0; the corr term is the padded-q Jacobian
+    (logDetJacobianCorr), which priors re-expressed in these coordinates must use too.
+    """
+    q_var = q + int(has_sigma_eps)
+    log_sigmas = u[..., d : d + q_var]
+    active_sig = active[..., None, d : d + q_var].to(u.dtype)  # (b, 1, q_var)
+    parts = [u[..., :d], softplus(log_sigmas) * active_sig]
+    ldj = (F.logsigmoid(log_sigmas) * active_sig).sum(-1)
+    if d_corr > 0:
+        z_corr = u[..., d + q_var : d + q_var + d_corr]
+        ldj = ldj + logDetJacobianCorr(z_corr, q)
+        L_corr = unconstrainedToCholesky(z_corr, q)
+        parts.append(corrToLower(L_corr @ L_corr.mT))
+    return torch.cat(parts, dim=-1), ldj
+
+
 # crunching
 def dampen(x: torch.Tensor, p: float = 0.45) -> torch.Tensor:
     return x.sign() * x.abs().pow(p)

@@ -171,6 +171,18 @@ def perturbDataset(ds: dict[str, np.ndarray], scale: float) -> dict[str, np.ndar
     centered = predictors - predictors.mean(axis=0, keepdims=True)
     nonlinear = (centered**2).sum(axis=1)  # (n,)
     out['y'] = ds['y'] + scale * nonlinear
+    # the precomputed analytical stats belong to the unperturbed y; without them the flow
+    # computes them from the perturbed data (Approximator._resolveStats)
+    for key in (
+        'beta_est',
+        'sigma_rfx_est',
+        'blup_est',
+        'blup_var',
+        'sigma_eps_est',
+        'phi_pearson',
+        'Psi',
+    ):
+        out.pop(key, None)
     return out
 
 

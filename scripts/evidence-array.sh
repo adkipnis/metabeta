@@ -1,15 +1,17 @@
 #!/bin/bash
 
-# GLMM evidence check (experiments/posthoc/evidence.py) as a SLURM array: one task per
+# Evidence check (experiments/posthoc/evidence.py) as a SLURM array: one task per
 # (family, size, shard), N_SHARDS shards per (family, size), then a dependent merge job.
 #   JOB=$(sbatch --parsable scripts/evidence-array.sh)
 #   sbatch --dependency=afterany:$JOB --array=0 scripts/evidence-array.sh --merge
 # Extra arguments are passed on to evidence.py (e.g. --n-datasets 256); pass the same to --merge.
+# Normal outcomes compare every q >= 2 dataset in the nested check and run the IMH bridge on all
+# datasets (cheap with the exact marginal); the GLMMs keep 128 nested and 64 IMH-bridge datasets.
 
 #SBATCH --job-name=evidence
 #SBATCH --output=logs/evidence/%A_%a.out
 #SBATCH --error=logs/evidence/%A_%a.err
-#SBATCH --array=0-511
+#SBATCH --array=0-767
 
 #SBATCH --partition=cpu_p
 #SBATCH --qos=cpu_normal
@@ -20,7 +22,7 @@
 
 set -euo pipefail
 
-FAMILIES=(bernoulli poisson)
+FAMILIES=(normal bernoulli poisson)
 SIZES=(small medium large huge)
 N_SHARDS=64
 
@@ -41,7 +43,13 @@ SIF="$HOME/containers/python312.sif"
 VENV="$HOME/metabeta/.venv-apptainer"
 # outputs/{data,checkpoints} are symlinked to workspace storage; bind it so the links resolve
 WORKSPACE="/lustre/groups/hcai/workspace/alexander.kipnis"
-BASE="--n-datasets 512 --nested 128"
+base() {
+    if [[ $1 == normal ]]; then
+        echo "--n-datasets 512 --nested 512 --imh-bridge 512"
+    else
+        echo "--n-datasets 512 --nested 128"
+    fi
+}
 
 mkdir -p logs/evidence
 
@@ -49,11 +57,11 @@ if [[ $MERGE -eq 1 ]]; then
     RUN=""
     for f in "${FAMILIES[@]}"; do
         for s in "${SIZES[@]}"; do
-            RUN+="python experiments/posthoc/evidence.py --family $f --sizes $s $BASE $EXTRA --summarize-only; "
+            RUN+="python experiments/posthoc/evidence.py --family $f --sizes $s $(base $f) $EXTRA --summarize-only; "
         done
     done
 else
-    RUN="python experiments/posthoc/evidence.py --family $FAMILY --sizes $SIZE $BASE $EXTRA --shard $SHARD --n-shards $N_SHARDS"
+    RUN="python experiments/posthoc/evidence.py --family $FAMILY --sizes $SIZE $(base $FAMILY) $EXTRA --shard $SHARD --n-shards $N_SHARDS"
 fi
 
 apptainer exec \

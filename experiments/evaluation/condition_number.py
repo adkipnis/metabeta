@@ -83,6 +83,8 @@ METHOD_LABELS = {
     'imhMarginal': 'MB+IMH',
     'imhPM': 'MB+IMH',
     'imhLaplace': 'MB+IMH',
+    'imhMarginal+moves': 'MB+IMH+RW',
+    'imhPM+moves': 'MB+IMH+RW',
     'isMarginal': 'MB+SNIS',
     'isLaplace': 'MB+SNIS',
 }

@@ -14,7 +14,8 @@ misspecified — model with the stored priors.  This script produces the dose–
      generating parameters are no longer the fitted model's pseudo-true values, so absolute
      numbers degrade by design — the question is whether MB degrades in step with NUTS.
 
-All metrics are computed on the NUTS-converged subset (paired comparisons); % converged per
+Simulator-clipped datasets (utils.evaluation.simulatorClipped) are left out; all metrics are
+computed on the NUTS-converged subset of the rest (paired comparisons); % converged per
 severity marks where the reference itself starts to fail.  Sizes are pooled per severity;
 ``--per_size`` adds per-size agreement breakdowns.  Each size uses its regime-matched
 checkpoint (BEST_SEEDS from scripts/build_ckpt.py — one pretrained model per family × size).
@@ -33,8 +34,8 @@ import numpy as np
 import torch
 from tabulate import tabulate
 
-from metabeta.utils.dataloader import Collection, collateGrouped
-from metabeta.utils.evaluation import nutsConverged
+from metabeta.utils.dataloader import Collection, collateGrouped, subsetBatch
+from metabeta.utils.evaluation import nutsConverged, simulatorClipped, subsetProposal
 from metabeta.utils.device import setDevice
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.preprocessing import rescaleData
@@ -141,7 +142,15 @@ def collectCondition(
         logger.warning('%s: no NUTS diagnostics; treating all as converged', data_id)
         conv = np.ones(B, dtype=bool)
     conv = conv.astype(bool)
-    logger.info('%s: %d datasets, %d NUTS-converged', data_id, B, int(conv.sum()))
+    # where the simulator clipped (Poisson) the reference fits another likelihood: leave out
+    keep = ~simulatorClipped(data_path)
+    logger.info(
+        '%s: %d datasets, %d simulator-clipped left out, %d NUTS-converged',
+        data_id,
+        B,
+        int((~keep).sum()),
+        int(conv[keep].sum()),
+    )
 
     proposal_mb, _ = loadOrSampleMB(
         model,
@@ -175,17 +184,19 @@ def collectCondition(
         .numpy()
     )
 
+    def keptEntries(proposal) -> dict:
+        p, b = subsetProposal(proposal, keep), subsetBatch(batch, keep)
+        return {
+            'local': localEntries(p, b, conv[keep]),
+            'global': globalEntries(p, b, conv[keep], lf),
+        }
+
     out = {
         'size': np.array([size] * B, dtype=object),
         'conv': conv,
         'nuts:loo': nuts_loo,
     }
-    entries = {
-        NUTS_LABEL: {
-            'local': localEntries(proposal_nuts, batch, conv),
-            'global': globalEntries(proposal_nuts, batch, conv, lf),
-        }
-    }
+    entries = {NUTS_LABEL: keptEntries(proposal_nuts)}
     for m in methods:
         if m == 'mb':
             proposal = proposal_mb
@@ -225,11 +236,8 @@ def collectCondition(
         out[f'{m}:rank_mad'] = computeRankMAD(proposal, proposal_nuts, batch)
         out[f'{m}:loo'] = summary.per_dataset.loo_nll.float().numpy()
         out[f'{m}:delta_nll'] = out[f'{m}:loo'] - nuts_loo
-        entries[METHOD_LABELS.get(m, m)] = {
-            'local': localEntries(proposal, batch, conv),
-            'global': globalEntries(proposal, batch, conv, lf),
-        }
-    return {'agree': out, 'entries': entries}
+        entries[METHOD_LABELS.get(m, m)] = keptEntries(proposal)
+    return {'agree': {k: v[keep] for k, v in out.items()}, 'entries': entries}
 
 
 def alignSizes(per_cond: dict[str, list[dict]]) -> tuple[dict[str, list[dict]], list[str]]:

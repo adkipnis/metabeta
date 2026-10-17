@@ -14,7 +14,7 @@ Optionally layers post-hoc refinements on the raw MB flow posterior (extra
 The SNIS/Laplace families keep their PSIS-smoothed IS weights and the comparison
 metrics are weight-aware (IMH returns an equal-weight chain); see refineProposal.
 The method(s) come from ``--methods`` or, if omitted, the per-family default in
-metabeta/configs/presets.yaml (imhMarginal for Normal); pass ``--methods`` with no
+metabeta/configs/presets.yaml (imhMarginal+moves for Normal); pass ``--methods`` with no
 values for raw MB only.
 
 Metrics (median ± MAD over datasets):
@@ -22,7 +22,10 @@ Metrics (median ± MAD over datasets):
   σ-ratio    — per-dataset median(std_method / std_NUTS) across active params
   rank-MAD   — per-dataset mean |empirical quantile − expected| for NUTS-in-MB rank fracs
   ΔNLL       — LOO-NLL(method) − LOO-NLL(NUTS), per dataset
-  Δtime (s)  — tpd(method) − tpd(NUTS), seconds per dataset
+  Δtime (s)  — tpd(method) − tpd(NUTS), seconds per dataset, timed as in the oracle runtime
+               tables: NUTS is the escalating composite (``nuts``: cheapest converged level,
+               wall time of every level tried), MB the batch-of-1 latency cached by
+               runtimes.py (``--ds_type real``); the accuracy reference stays ``nuts2``
 
 Usage (from repo root):
     uv run python experiments/evaluation/real_posterior.py --checkpoint PATH
@@ -41,7 +44,7 @@ from metabeta.evaluation.point import pointEstimate
 from metabeta.models.approximator import Approximator
 from metabeta.utils.dataloader import Collection, collateGrouped, subsetBatch
 from metabeta.utils.evaluation import nutsConverged, subsetProposal
-from metabeta.utils.fits import REFERENCE_TAG
+from metabeta.utils.fits import REFERENCE_TAG, loadFits
 from metabeta.utils.results import Proposal
 from metabeta.utils.device import setDevice
 from metabeta.utils.logger import setupLogging
@@ -61,8 +64,12 @@ from metabeta.utils.posterior_eval import (
     validMethods,
 )
 
+# sibling experiment script (this directory is sys.path[0] at run time)
+from runtimes import cachePath as latencyCachePath, loadCache as loadLatencyCache
+
 OUT_DIR = RESULTS_DIR
 SECONDARY = (('ADVI', 'advi1'), ('PF', 'pathfinder1'))  # competitors scored against the reference
+TIMING_TAG = 'nuts'  # NUTS wall time: the escalating composite, as in the oracle runtime tables
 
 logger = logging.getLogger(__name__)
 
@@ -95,11 +102,15 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--rescale',          action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--warmup',           action=argparse.BooleanOptionalAction, default=True,
                         help='Untimed 1-sample MB warm-up before timed sampling (default: true)')
+    parser.add_argument('--latency',          action=argparse.BooleanOptionalAction, default=True,
+                        help='MB times from the batch-of-1 latency cache of runtimes.py (default: '
+                             'true; fails if a dataset is missing). --no-latency uses the batched '
+                             'sampling time of this run instead.')
     parser.add_argument('--methods',          type=str, nargs='*', default=None,
                         choices=list(SUPPORTED_METHODS),
                         help='Post-hoc refinement methods to run on top of raw MB, evaluated '
                              'as extra rows vs NUTS. Default: the family preset in presets.yaml '
-                             '(isMarginal for Normal). Pass an empty list to run raw MB only.')
+                             '(imhMarginal+moves for Normal). Pass an empty list to run raw MB only.')
     # fmt: on
     return parser.parse_args()
 
@@ -420,6 +431,30 @@ def _buildRow(
 # Main evaluation
 
 
+def loadLatencies(
+    data_path: Path,
+    ckpt_dir: Path,
+    prefix: str,
+    n_samples: int,
+    seed: int,
+    device: torch.device,
+    mask: np.ndarray,
+    tag: str,
+) -> torch.Tensor:
+    """Batch-of-1 latencies of ``tag`` (runtimes.py cache) for the datasets in ``mask``."""
+    path = latencyCachePath(data_path, ckpt_dir, prefix, n_samples, seed, device)
+    cache = loadLatencyCache(path, data_path, ckpt_dir, prefix)
+    keys = [f'{tag}:{i}' for i in np.flatnonzero(mask)]
+    missing = [k for k in keys if k not in cache]
+    if missing:
+        raise KeyError(
+            f'{len(missing)} / {len(keys)} {tag!r} latencies missing from {path}; run '
+            f'experiments/evaluation/runtimes.py --ds_type real --device {device.type} '
+            f'--n_samples {n_samples} for this family, or pass --no-latency'
+        )
+    return torch.tensor([cache[k] for k in keys], dtype=torch.float64)
+
+
 def evaluateReal(
     model: Approximator,
     data_path: Path,
@@ -436,6 +471,7 @@ def evaluateReal(
     methods: list[str],
     summary_chunk_size: int = 4,
     warmup: bool = True,
+    latency: bool = True,
 ) -> list[dict]:
     col = Collection(
         data_path,
@@ -494,6 +530,11 @@ def evaluateReal(
         conv_mask,
         warmup=warmup,
     )
+    rs = f'rs{int(rescale)}'
+    if latency:
+        mb_tpd_arr = loadLatencies(
+            data_path, ckpt_dir, prefix, n_samples, seed, device, conv_mask, 'flow'
+        )
     proposal_nuts = fit2proposal(batch, REFERENCE_TAG)
     proposals_sec = {
         label: fit2proposal(secondary[label][1], tag) if secondary[label][1] is not None else None
@@ -585,11 +626,21 @@ def evaluateReal(
             seed=seed,
             summary_chunk_size=summary_chunk_size,
         )
-        # refinement runs on top of MB, so its cost adds to the MB per-dataset time
-        tpd_ref = mb_tpd_arr + refine_s / B
+        if latency:
+            # runtimes.py times the full default pipeline (global pass + refinement)
+            tpd_ref = loadLatencies(
+                data_path, ckpt_dir, prefix, n_samples, seed, device, conv_mask,
+                f'mb_{method}_{rs}',
+            )
+        else:
+            # refinement runs on top of MB, so its cost adds to the MB per-dataset time
+            tpd_ref = mb_tpd_arr + refine_s / B
         refined_specs.append((f'MB+{method}', p_ref, batch, tpd_ref, summary_ref))
 
-    nuts_tpd_arr = batch.get(f'{REFERENCE_TAG}_duration')   # (B,) tensor or None
+    timing = loadFits(data_path, TIMING_TAG, keys=(f'{TIMING_TAG}_duration',))
+    nuts_tpd_arr = torch.as_tensor(
+        np.asarray(timing[f'{TIMING_TAG}_duration'], dtype=np.float64).reshape(-1)[conv_mask]
+    )
 
     rows: list[dict] = []
 
@@ -623,10 +674,10 @@ def evaluateReal(
             mask_t = torch.from_numpy(sub_mask)
             p_nuts_ref = subsetProposal(proposal_nuts, sub_mask)
             nuts_nll = nuts_loo[mask_t]
-            nuts_tpd = nuts_tpd_arr[mask_t] if nuts_tpd_arr is not None else None
+            nuts_tpd = nuts_tpd_arr[mask_t]
 
         delta_tpd: np.ndarray | None = None
-        if tpd_arr is not None and nuts_tpd is not None:
+        if tpd_arr is not None:
             delta_tpd = (tpd_arr.float() - nuts_tpd.float()).numpy()
 
         rows.append(
@@ -799,6 +850,7 @@ def main() -> None:
             methods=methods,
             summary_chunk_size=cfg.summary_chunk_size,
             warmup=getattr(cfg, 'warmup', True),
+            latency=getattr(cfg, 'latency', True),
         )
         if rows:
             rows_by_regime[regime] = rows

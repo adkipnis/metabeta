@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 import pytest
 import torch
@@ -76,3 +77,31 @@ def test_estimate_shapes_and_constraints(model: Approximator, batch: dict[str, t
     mask_g = model._masks(batch, local=False)
     sigma_mask = mask_g[..., d : d + q_var].unsqueeze(1).expand_as(sigmas)
     assert (sigmas[sigma_mask] > 0).all(), 'unmasked global sigmas must be positive'
+
+
+def test_postprocess_maps_an_active_zero_draw_like_any_other(
+    model: Approximator, batch: dict[str, torch.Tensor]
+):
+    """An unconstrained sigma draw of exactly 0.0 is a valid draw (softplus(0) = log 2), not
+    padding: it must map like a draw just above zero, density Jacobian included."""
+    torch.manual_seed(1)
+    d, q = model.d_ffx, model.d_rfx
+    i_eps = d + q  # sigma_eps: active in every Gaussian dataset
+    mask_g = model._masks(batch, local=False)
+    b, m = batch['mask_m'].shape[:2]
+    s = 3
+    base = torch.randn(b, s, mask_g.shape[-1]) * mask_g.unsqueeze(1)
+
+    def postprocess(eps_draw: float):
+        samples = base.clone()
+        samples[..., i_eps] = eps_draw
+        proposed = {
+            'global': {'samples': samples, 'log_prob': torch.zeros(b, s)},
+            'local': {'samples': torch.zeros(b, m, s, q), 'log_prob': torch.zeros(b, m, s)},
+        }
+        return model._postprocess(proposed, mask_g)
+
+    at_zero, near_zero = postprocess(0.0), postprocess(1e-30)
+    assert torch.allclose(at_zero.samples_g[..., i_eps], torch.tensor(math.log(2)))
+    assert torch.allclose(at_zero.samples_g, near_zero.samples_g)
+    assert torch.allclose(at_zero.log_prob_g, near_zero.log_prob_g)

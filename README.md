@@ -71,7 +71,12 @@ so the refined posterior does not hinge on network accuracy alone; the random ef
 redrawn from their conditional, so the local posterior network (the main cost on CPU) is
 skipped entirely. Per-dataset acceptance rates and a suggested pool size are reported in
 `result.safeguards`. If the suggestion exceeds the `n_samples` you requested, rerun with
-the larger value (or pass `refine=False` to keep the raw flow posterior).
+the larger value (or pass `refine=False` to keep the raw flow posterior). Where the IMH
+chains mix poorly (minimum bulk ESS below 150), typically because the flow lacks tail
+mass, `sample` warns that intervals may be too narrow. Pass `random_walk=True` to follow
+the IMH on those datasets with random-walk moves on the same target, which widen intervals
+the IMH alone leaves too narrow; `result.safeguards` records where they ran. Below an ESS of
+10 the moves narrow the gap but may not close it; check those datasets against NUTS.
 On a MacBook (Apple M3 CPU), the refined posterior with 4,000 draws returns in a fraction of
 a second per dataset for all three outcome families at representative dataset sizes; on a
 GPU the same call takes about a tenth of a second.

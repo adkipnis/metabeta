@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,9 +19,15 @@ from tabulate import tabulate
 from metabeta.datasets.preprocessor import DataPreprocessor, PreprocessReport
 from metabeta.evaluation import predictive as _predictive
 from metabeta.models.approximator import Approximator
+from metabeta.posthoc.evidence import tEvidence
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
-from metabeta.posthoc.metropolis import IS2_N_INNER, MetropolisSampler, suggestPoolSize
+from metabeta.posthoc.metropolis import (
+    IS2_N_INNER,
+    LocalMoves,
+    MetropolisSampler,
+    suggestPoolSize,
+)
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.dataloader import (
@@ -31,6 +37,7 @@ from metabeta.utils.dataloader import (
     toDevice,
     trimBatchPadding,
 )
+from metabeta.utils.psis import psislw
 from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.utils.api import (
     JOINT_CHECKPOINT_VERSION,
@@ -82,10 +89,20 @@ PSIS_K_THRESHOLD = 0.7
 MAP_Z_THRESHOLD = 5.0
 MIN_SAFEGUARD_SAMPLES = 64
 # IMH refinement: chain layout and the acceptance level below which the flow-posterior
-# gap is large (see the paper's appendix on hybrid methods)
+# gap is large
 IMH_N_CHAINS = 4
 IMH_BURNIN = 25
 IMH_ACCEPT_WARN = 0.1
+IMH_ESS_WARN = 150
+# below it the random-walk moves narrow the gap but may not close it: exact MCMC is recommended
+IMH_ESS_NUTS = 10
+# sample(random_walk=True): random-walk moves after the IMH on the datasets IMH_ESS_WARN flags.
+# A CPU step costs in proportion to chains × IS² draws per group, a GPU step barely, so the GPU
+# runs more of both: K=4 and 500 chains (half the sequential steps of 250 for the same draws).
+RANDOM_WALK_DEFAULT = {
+    'cpu': LocalMoves(n_inner=2, gate_ess=IMH_ESS_WARN),
+    'cuda': LocalMoves(n_chains=500, n_inner=4, gate_ess=IMH_ESS_WARN),
+}
 
 
 def mapZScores(
@@ -140,6 +157,7 @@ class RouterResult:
     batch: 'dict[str, torch.Tensor] | None' = None
     ns: np.ndarray | None = None
     safeguards: dict[str, Any] | None = None
+    evidence: dict[str, Any] | None = None
 
 
 class Api:
@@ -350,6 +368,8 @@ class Api:
         refine: bool | str = True,
         k_threshold: float = PSIS_K_THRESHOLD,
         map_z_threshold: float = MAP_Z_THRESHOLD,
+        random_walk: LocalMoves | bool = False,
+        evidence: bool = False,
         **prepare_kwargs: Any,
     ) -> RouterResult:
         """Sample from the posterior, routing each dataset to the smallest compatible submodel.
@@ -368,7 +388,16 @@ class Api:
         calibration-validated effective-draw target at the measured acceptance) are
         reported in ``RouterResult.safeguards``; datasets with mean acceptance below
         ``IMH_ACCEPT_WARN`` trigger a warning recommending the suggested size or exact
-        MCMC.
+        MCMC.  The IMH can only revisit pool members, so where the flow lacks tail mass its
+        chains repeat few states and the refined sample can be too narrow, which more draws do
+        not fix; datasets whose minimum bulk ESS over the global parameters falls below
+        ``IMH_ESS_WARN`` are flagged with a warning.  ``random_walk=True`` continues the IMH
+        on the flagged datasets with pseudo-marginal random-walk moves on the same target
+        (posthoc/metropolis.py, ``LocalMoves``; ``RANDOM_WALK_DEFAULT``, by device); below
+        ``IMH_ESS_NUTS`` they may not repair it fully, and exact MCMC is recommended there.  A
+        ``LocalMoves`` instance sets them, and its own gate, explicitly.  Per dataset, the safeguards record
+        the flag ('ess_flag'), whether the moves ran ('random_walk_ran') and their acceptance
+        ('random_walk_accept', NaN where they did not run).
 
         ``refine='is'`` selects the previous self-normalized importance-sampling
         correction instead, with the PSIS shape diagnostic k̂ (Yao et al., 2018) computed
@@ -382,12 +411,27 @@ class Api:
         datasets whose maximum |posterior mean − MAP| / posterior SD exceeds
         ``map_z_threshold`` trigger a warning.  All checks are reported in
         ``RouterResult.safeguards``.
+
+        ``evidence=True`` also returns each dataset's log marginal likelihood log p(y) on the raw
+        response scale in ``RouterResult.evidence``; the log Bayes factor between two models of
+        the same data is the difference of their ``log_evidence``.  It costs one more likelihood
+        pass (posthoc/evidence.py), needs ``n_samples >= MIN_SAFEGUARD_SAMPLES`` and warns where
+        the PSIS k̂ of that pass or, with refinement, of the flow pool's weights exceeds
+        ``k_threshold``.
         """
 
         method = {True: 'imh', False: None}.get(refine, refine)
         if method not in (None, 'imh', 'is'):
             raise ValueError(f"refine must be True, False, 'imh' or 'is' (got {refine!r})")
         do_refine = method is not None and n_samples >= MIN_SAFEGUARD_SAMPLES
+        if random_walk is not False and method != 'imh':
+            raise ValueError("random_walk requires refine='imh'")
+        if evidence and n_samples < MIN_SAFEGUARD_SAMPLES:
+            raise ValueError(f'evidence=True needs n_samples >= {MIN_SAFEGUARD_SAMPLES}')
+        moves = None
+        if method == 'imh' and random_walk:
+            preset = RANDOM_WALK_DEFAULT['cuda' if self.device.type == 'cuda' else 'cpu']
+            moves = preset if random_walk is True else random_walk
 
         self._param_names: dict[str, list[str]] | None = None
         self._scale_info: 'ScaleInfo | None' = None
@@ -408,8 +452,17 @@ class Api:
         safeguards: dict[str, Any] | None = None
         if do_refine:
             proposal, safeguards = self._refineAndCheck(
-                proposal, batch, method=method, k_threshold=k_threshold, n_samples=n_samples
+                proposal,
+                batch,
+                method=method,
+                k_threshold=k_threshold,
+                n_samples=n_samples,
+                moves=moves,
             )
+        log_ev = None
+        if evidence:
+            pool_k = safeguards['psis_k'] if safeguards else None
+            log_ev = self._evidence(proposal, batch, k_threshold=k_threshold, pool_k=pool_k)
         if stats is not None and n_samples >= MIN_SAFEGUARD_SAMPLES:
             map_check = self._mapConsistency(proposal, stats, batch, threshold=map_z_threshold)
             safeguards = {**(safeguards or {}), **map_check}
@@ -438,6 +491,7 @@ class Api:
             batch=batch if diagnostics else None,
             ns=ns_arr,
             safeguards=safeguards,
+            evidence=log_ev,
         )
 
     def _warmupSubmodel(self, entry: dict) -> None:
@@ -695,6 +749,32 @@ class Api:
         proposal = model.estimate(batch, n_samples=n_samples, stats=stats, local=local)
         return proposal, stats
 
+    def _mapChunks(
+        self,
+        fn: Callable[[Proposal, dict[str, torch.Tensor]], Any],
+        proposal: Proposal,
+        batch: dict[str, torch.Tensor],
+    ) -> list[Any]:
+        """fn(proposal chunk, batch chunk) per chunk of ``self.batch_size`` datasets (when set),
+        each trimmed to its own padding; one call on the whole batch when it fits."""
+        B = proposal.samples_g.shape[0]
+        chunk_size = self.batch_size or B
+        if chunk_size >= B:
+            return [fn(proposal, batch)]
+        out = []
+        for start in range(0, B, chunk_size):
+            end = min(start + chunk_size, B)
+            chunk = trimBatchPadding(sliceBatch(batch, start, end))
+            base_chunk = proposal.slice_b(start, end).resizeGroups(chunk['mask_n'].shape[1])
+            out.append(fn(base_chunk, chunk))
+        return out
+
+    @staticmethod
+    def _joinChunks(chunks: list[Proposal], batch: dict[str, torch.Tensor]) -> Proposal:
+        if len(chunks) == 1:
+            return chunks[0]
+        return concatProposalsBatch(chunks).resizeGroups(batch['mask_n'].shape[1])
+
     def _refineAndCheck(
         self,
         proposal: Proposal,
@@ -703,6 +783,7 @@ class Api:
         method: str,
         k_threshold: float,
         n_samples: int,
+        moves: LocalMoves | None = None,
     ) -> tuple[Proposal, dict[str, Any]]:
         """Refine the flow posterior ('imh' or 'is') and run the reliability checks.
 
@@ -712,9 +793,13 @@ class Api:
 
         'imh' (default) runs Independence Metropolis-Hastings with the flow pool as
         proposals: asymptotically exact in the pool size, no weight-degeneracy failure
-        mode.  Per-dataset acceptance and a suggested pool size are reported; mean
-        acceptance below ``IMH_ACCEPT_WARN`` triggers a warning.  The post-burn-in
-        draws are trimmed to exactly ``n_samples``.
+        mode.  Per-dataset acceptance, a suggested pool size and the bulk ESS per global
+        parameter are reported; mean acceptance below ``IMH_ACCEPT_WARN`` or a minimum ESS
+        below ``IMH_ESS_WARN`` triggers a warning.  The post-burn-in
+        draws are trimmed to exactly ``n_samples``.  ``moves`` (``LocalMoves``) runs random-walk
+        moves where its gate says; the ESS stays the IMH chains' (the gate's statistic).  Both
+        methods report the PSIS k̂ of the pool's weights ('psis_k'), which the evidence check
+        reuses.
 
         'is' applies self-normalized importance sampling with PSIS smoothing; datasets
         with k̂ > ``k_threshold`` fall back to uniform weights (the raw flow globals, with
@@ -727,7 +812,7 @@ class Api:
         """
         lf = int(batch['likelihood_family'].flatten()[0].item())
         if method == 'imh':
-            return self._refineIMH(proposal, batch, lf=lf, n_samples=n_samples)
+            return self._refineIMH(proposal, batch, lf=lf, n_samples=n_samples, moves=moves)
 
         def _refineChunk(chunk_proposal: Proposal, chunk: dict[str, torch.Tensor]) -> Proposal:
             if lf == 0:
@@ -751,18 +836,7 @@ class Api:
             return sampler(chunk_proposal)
 
         B = proposal.samples_g.shape[0]
-        chunk_size = self.batch_size or B
-        if chunk_size >= B:
-            proposal = _refineChunk(proposal, batch)
-        else:
-            chunks = []
-            for start in range(0, B, chunk_size):
-                end = min(start + chunk_size, B)
-                chunk = trimBatchPadding(sliceBatch(batch, start, end))
-                base_chunk = proposal.slice_b(start, end).resizeGroups(chunk['mask_n'].shape[1])
-                chunks.append(_refineChunk(base_chunk, chunk))
-            proposal = concatProposalsBatch(chunks).resizeGroups(batch['mask_n'].shape[1])
-
+        proposal = self._joinChunks(self._mapChunks(_refineChunk, proposal, batch), batch)
         psis_k = proposal.is_results['pareto_k'].detach().float().cpu().numpy().copy()
         fallback = proposal.is_results['fallback'].detach().cpu().numpy().copy()
 
@@ -803,13 +877,14 @@ class Api:
         *,
         lf: int,
         n_samples: int,
+        moves: LocalMoves | None = None,
     ) -> tuple[Proposal, dict[str, Any]]:
         """IMH-refine the flow posterior; see ``_refineAndCheck`` for the contract."""
         n_steps = proposal.n_samples // IMH_N_CHAINS
 
         def _imhChunk(
             chunk_proposal: Proposal, chunk: dict[str, torch.Tensor]
-        ) -> tuple[Proposal, torch.Tensor]:
+        ) -> tuple[Proposal, dict[str, Any]]:
             sampler = MetropolisSampler(
                 chunk,
                 n_chains=IMH_N_CHAINS,
@@ -819,25 +894,24 @@ class Api:
                 likelihood_family=lf,
                 # GLMMs: pseudo-marginal chain (unbiased IS² weights), i.e. the exact posterior
                 n_inner=0 if lf == 0 else IS2_N_INNER,
+                moves=moves,
             )
-            refined, diag = sampler(chunk_proposal)
-            return refined, diag['accept_rate']
+            return sampler(chunk_proposal)
 
-        B = proposal.samples_g.shape[0]
-        chunk_size = self.batch_size or B
-        if chunk_size >= B:
-            proposal, accept = _imhChunk(proposal, batch)
-        else:
-            chunks, accepts = [], []
-            for start in range(0, B, chunk_size):
-                end = min(start + chunk_size, B)
-                chunk = trimBatchPadding(sliceBatch(batch, start, end))
-                base_chunk = proposal.slice_b(start, end).resizeGroups(chunk['mask_n'].shape[1])
-                refined, acc = _imhChunk(base_chunk, chunk)
-                chunks.append(refined)
-                accepts.append(acc)
-            proposal = concatProposalsBatch(chunks).resizeGroups(batch['mask_n'].shape[1])
-            accept = torch.cat(accepts, dim=0)
+        parts = self._mapChunks(_imhChunk, proposal, batch)
+        proposal = self._joinChunks([p for p, _ in parts], batch)
+        accept, ess, ran, rw_accept = (
+            torch.cat([diag[k] for _, diag in parts])
+            for k in ('accept_rate', 'ess', 'moved', 'move_accept')
+        )
+        pool_k = np.concatenate(
+            [psislw(diag['log_w'].cpu().double().numpy())[1] for _, diag in parts]
+        )
+        B = accept.shape[0]
+        ran, ess = ran.numpy(), ess.numpy()  # ess (B, D_g): the IMH chains', NaN = padding
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', RuntimeWarning)  # all-NaN rows
+            ess_min = np.nanmin(ess, axis=1)
 
         # the pool was over-drawn by the burn-in; trim to exactly n_samples
         idx = (
@@ -862,12 +936,46 @@ class Api:
                 'exact MCMC (e.g. NUTS) instead.',
                 stacklevel=4,
             )
+        ess_flag = ess_min < IMH_ESS_WARN
+        if ess_flag.any():
+            flagged = np.flatnonzero(ess_flag)
+            e_vals = ', '.join(f'{ess_min[i]:.0f}' for i in flagged)
+            todo, low = flagged[~ran[flagged]], flagged[ess_min[flagged] < IMH_ESS_NUTS]
+            advice = ''
+            if todo.size:
+                advice += (
+                    f'Re-run with random_walk=True to continue the IMH on {todo.tolist()} with '
+                    'random-walk moves on the same target, or use exact MCMC (e.g. NUTS '
+                    'warm-started from this posterior). '
+                )
+            if ran.any():
+                advice += f'Random-walk moves ran for {np.flatnonzero(ran).tolist()}. '
+            if low.size:
+                advice += (
+                    f'For {low.tolist()} (ESS < {IMH_ESS_NUTS:g}) random-walk moves narrow the '
+                    'gap but may not close it: check against exact MCMC there.'
+                )
+            warnings.warn(
+                f'IMH effective sample size is low for dataset(s) {flagged.tolist()} '
+                f'(min bulk ESS over global parameters {e_vals} < {IMH_ESS_WARN:g}): the '
+                'chains revisit few distinct states, and the refined sample can be too narrow '
+                f'where the flow under-covers the posterior, which more draws do not fix. '
+                f'{advice.strip()}',
+                stacklevel=4,
+            )
         return proposal, {
-            'refine_method': 'imhMarginal' if lf == 0 else 'imhPM',
+            'refine_method': ('imhMarginal' if lf == 0 else 'imhPM') + ('+moves' if moves else ''),
             'accept_rate': a_bar.detach().float().cpu().numpy().copy(),
             'accept_threshold': IMH_ACCEPT_WARN,
             'accept_flag': flag,
             'suggested_n_samples': suggested.detach().cpu().numpy().copy(),
+            'ess': ess,
+            'ess_min': ess_min,
+            'ess_threshold': IMH_ESS_WARN,
+            'ess_flag': ess_flag,
+            'random_walk_ran': ran,
+            'random_walk_accept': rw_accept.numpy(),
+            'psis_k': pool_k,
         }
 
     def _mapConsistency(
@@ -900,6 +1008,49 @@ class Api:
             'map_z': map_z,
             'map_z_threshold': threshold,
             'map_z_flag': flag,
+        }
+
+    def _evidence(
+        self,
+        proposal: Proposal,
+        batch: dict[str, torch.Tensor],
+        *,
+        k_threshold: float,
+        pool_k: np.ndarray | None,
+    ) -> dict[str, Any]:
+        """log p(y) per dataset from the unrescaled posterior, chunked like the refinement.
+
+        A dataset is flagged where the PSIS k̂ of the t pass or of the flow pool's weights (pool_k,
+        None without refinement) exceeds k_threshold: the t is fitted to draws that inherit the
+        pool's gaps, which the t pass's own k̂ can miss.
+        """
+        lf = int(batch['likelihood_family'].flatten()[0].item())
+        parts = self._mapChunks(
+            lambda p, chunk: tEvidence(chunk, p, lf, proposal.n_samples), proposal, batch
+        )
+        log_ev, psis_k, eff = (
+            np.concatenate([p[k] for p in parts]) for k in ('log_ev', 'k', 'eff')
+        )
+        k_max = psis_k if pool_k is None else np.maximum(psis_k, pool_k)
+        flag = k_max > k_threshold
+        if flag.any():
+            flagged = np.flatnonzero(flag)
+            k_vals = ', '.join(f'{k_max[i]:.2f}' for i in flagged)
+            warnings.warn(
+                f'Evidence reliability check failed for dataset(s) {flagged.tolist()} '
+                f'(PSIS k̂ of the evidence pass or the flow pool = {k_vals} > {k_threshold:g}): '
+                'the log-evidence and any Bayes factor built on it may be inaccurate. Treat '
+                'those values with caution and consider bridge sampling on exact MCMC (e.g. NUTS) '
+                'draws instead.',
+                stacklevel=3,
+            )
+        return {
+            'log_evidence': log_ev,
+            'psis_k': psis_k,
+            'pool_psis_k': pool_k,
+            'efficiency': eff,
+            'psis_k_threshold': k_threshold,
+            'psis_flag': flag,
         }
 
     def _rescaleProposal(self, proposal: Proposal, batch: dict[str, torch.Tensor]) -> None:

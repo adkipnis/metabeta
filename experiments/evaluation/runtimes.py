@@ -29,10 +29,11 @@ user gets, two are the components of the default one:
   * **MBG** — the global pass alone: the same forward pass drawing only the global flow
     (``local=False``), i.e. the proposal the default pipeline hands to IMH.
   * **IMH** — the head: rescaling, the IMH chains on ``device`` (4 chains, burn-in 25, in the
-    rescaled space, as the oracle/real benchmarks run it) and the copy of the refined draws
-    back to the host.  Because the head marginalizes the rfx out of the target and reimputes
-    them from their analytical conditional at the accepted globals, it needs no local-flow
-    draws — which is why MBG can skip the local posterior network.
+    rescaled space, as the oracle/real benchmarks run it; with the '+moves' presets default also
+    the local moves where the IMH ESS is low) and the copy of the refined draws back to the
+    host.  Because the head marginalizes the rfx out of the target and reimputes them from
+    their analytical conditional at the accepted globals, it needs no local-flow draws — which
+    is why MBG can skip the local posterior network.
   * **MB** — the default pipeline, MBG + IMH timed as one region (``Api.sample`` passes
     ``local=False`` whenever it refines).  MB is therefore *not* MB^0 plus a head: the local
     flow is paid only by MB^0, and on CPU — where it is the dominant cost for the discrete
@@ -41,7 +42,7 @@ user gets, two are the components of the default one:
 
 Not timed here, and deliberately so: batching several datasets through one forward pass, and
 recomputing the analytical MAP/EB statistics that condition the summarizer instead of reading
-the precomputed ones the batch carries.  Both are one-line appendix statements — the fit is
+the precomputed ones the batch carries.  Both are one-line statements in the paper — the fit is
 data-only, so its cost is checkpoint-independent, and the batched cost of the default pipeline
 is what the oracle benchmark's time column reports.
 

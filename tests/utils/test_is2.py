@@ -16,7 +16,7 @@ from metabeta.posthoc.laplace_glmm import (
     logMarginalLikelihoodIS2,
     refreshRfxIS2,
 )
-from metabeta.posthoc.metropolis import MetropolisSampler
+from metabeta.posthoc.metropolis import LocalMoves, MetropolisSampler
 from metabeta.utils.families import logMarginalLikelihoodNormal
 from metabeta.utils.results import Proposal
 
@@ -235,8 +235,8 @@ def _tinyBernoulli(m=4, n=5, seed=3):
     }
 
 
-def _gridPosterior(data):
-    """(log p(D), E[β₀ | D], E[σ | D], E[b_0 | D]) by nested grid integration."""
+def _gridLogJoint(data):
+    """(β grid, σ grid, log p(y, β, σ) on it, log cell area, E[b_0 | β, σ, y_0])."""
     y = data['y'][0]  # (m, n)
     beta = torch.linspace(-7.0, 7.0, 281, dtype=torch.float64)
     sigma = torch.linspace(1e-3, 6.0, 300, dtype=torch.float64)
@@ -260,6 +260,12 @@ def _gridPosterior(data):
     )
     log_joint = ll_u + log_prior  # (B, S)
     log_cell = math.log(float(beta[1] - beta[0])) + math.log(float(sigma[1] - sigma[0]))
+    return beta, sigma, log_joint, log_cell, b0
+
+
+def _gridPosterior(data):
+    """(log p(D), E[β₀ | D], E[σ | D], E[b_0 | D]) by nested grid integration."""
+    beta, sigma, log_joint, log_cell, b0 = _gridLogJoint(data)
     log_z = float(torch.logsumexp(log_joint.flatten(), 0)) + log_cell
     post = torch.softmax(log_joint.flatten(), 0).view_as(log_joint)
     return (
@@ -323,6 +329,111 @@ def test_pseudo_marginal_imh_targets_exact_posterior():
     assert abs(out.ffx.mean().item() - want_beta) < 0.04
     assert abs(out.sigma_rfx.mean().item() - want_sigma) < 0.03
     assert abs(out.rfx[0, 0].mean().item() - want_b0) < 0.04
+
+
+def _gridSd(data) -> tuple[float, float]:
+    """Posterior sd of β₀ and σ by grid integration."""
+    beta, sigma, log_joint, _, _ = _gridLogJoint(data)
+    post = torch.softmax(log_joint.flatten(), 0).view_as(log_joint)
+    sd = lambda g: float(((post * g**2).sum() - (post * g).sum() ** 2).sqrt())
+    return sd(beta[:, None]), sd(sigma[None, :])
+
+
+def test_local_moves_widen_an_undercovering_proposal():
+    """A proposal much narrower than the posterior leaves the pseudo-marginal IMH too narrow
+    (it can only revisit pool members); random-walk moves on the same target restore the
+    posterior means and sds of the globals."""
+    torch.manual_seed(6)
+    data = _tinyBernoulli()
+    _, want_beta, want_sigma, _ = _gridPosterior(data)
+    sd_beta, sd_sigma = _gridSd(data)
+    m = data['X'].shape[1]
+    n_steps = 1025
+    moves = LocalMoves()
+    narrow = (want_beta, 0.35 * sd_beta, 0.6 * want_sigma)
+    sds = {}
+    for label, mv in (('imh', None), ('moves', moves)):
+        torch.manual_seed(7)
+        sampler = MetropolisSampler(
+            data,
+            n_chains=4,
+            n_steps=n_steps,
+            mode='laplace',
+            likelihood_family=1,
+            n_eff_target=None,
+            n_inner=4,
+            moves=mv,
+        )
+        out, diag = sampler(_gaussianProposal(4 * n_steps, m, *narrow))
+        sds[label] = (out.ffx.std().item(), out.sigma_rfx.std().item())
+        # the IMH acceptance survives the moves on the output (they replace the chains)
+        assert torch.equal(out.is_results['imh_accept_rate'], diag['accept_rate'].mean(-1))
+        if mv is not None:
+            assert bool(diag['moved'].all()) and float(diag['move_accept'][0]) > 0.2
+            assert abs(out.ffx.mean().item() - want_beta) < 0.08 * sd_beta
+            assert abs(out.sigma_rfx.mean().item() - want_sigma) < 0.08 * sd_sigma
+    assert sds['imh'][0] < 0.8 * sd_beta  # the test is meaningful: IMH alone is too narrow
+    assert abs(sds['moves'][0] / sd_beta - 1) < 0.06
+    assert abs(sds['moves'][1] / sd_sigma - 1) < 0.06
+
+
+def test_local_moves_gate_leaves_high_ess_datasets_untouched():
+    """A gate no dataset falls below must reproduce the plain IMH draw for draw."""
+    data = _tinyBernoulli()
+    m = data['X'].shape[1]
+    outs = []
+    for moves in (None, LocalMoves(gate_ess=0.0)):
+        torch.manual_seed(3)
+        proposal = _gaussianProposal(4 * 100, m, 0.6, 1.2, 1.5)
+        sampler = MetropolisSampler(
+            data, n_chains=4, n_steps=100, mode='laplace', likelihood_family=1,
+            n_eff_target=None, n_inner=4, moves=moves,
+        )  # fmt: skip
+        outs.append(sampler(proposal))
+    (plain, _), (gated, diag) = outs
+    assert not bool(diag['moved'].any()) and torch.isnan(diag['move_accept']).all()
+    assert torch.equal(plain.samples_g, gated.samples_g)
+    assert torch.equal(plain.rfx, gated.rfx)
+
+
+def test_local_moves_ignore_a_stray_first_rfx_draw():
+    """The moves' mode search starts at the median of the pool's Laplace modes: an extreme first
+    rfx draw (as the flow's local draws give on Poisson real data) must not change the result.
+    Seeded by that draw, the moves shifted every group's rfx mean by 1-5."""
+    data = _tinyBernoulli(m=6)
+    g = torch.Generator().manual_seed(3)
+    b = 1.5 * torch.randn(6, 1, generator=g, dtype=torch.float64)
+    y = torch.poisson(torch.exp(1.0 + b).expand(6, 5), generator=g)
+    y[0], y[1] = 0.0, 40.0  # an all-zero and a high-count group
+    data['y'] = y[None]
+    means = []
+    for first in (0.0, 20.0):
+        torch.manual_seed(7)
+        proposal = _gaussianProposal(4 * 400, 6, 1.0, 0.6, 1.5)
+        proposal.data['local']['samples'][:, :, 0] = first
+        sampler = MetropolisSampler(
+            data, n_chains=4, n_steps=400, mode='laplace', likelihood_family=2,
+            n_eff_target=None, n_inner=4, moves=LocalMoves(),
+        )  # fmt: skip
+        out, _ = sampler(proposal)
+        means.append(out.rfx[0, :, :, 0].mean(-1))
+    assert torch.allclose(means[0], means[1], atol=0.05), means
+
+
+def test_local_moves_settings():
+    """No burn-in still records a full chain-major sample; invalid settings fail early."""
+    data = _tinyBernoulli()
+    torch.manual_seed(3)
+    proposal = _gaussianProposal(4 * 100, data['X'].shape[1], 0.6, 1.2, 1.5)
+    sampler = MetropolisSampler(
+        data, n_chains=4, n_steps=100, mode='laplace', likelihood_family=1,
+        n_eff_target=None, n_inner=4, moves=LocalMoves(burnin_per_dim=0.0),
+    )  # fmt: skip
+    out, diag = sampler(proposal)
+    assert bool(diag['moved'].all()) and torch.isfinite(out.samples_g).all()
+    for bad in ({'n_inner': 0}, {'thin': 0}, {'n_chains': 0}, {'burnin_per_dim': -1.0}):
+        with pytest.raises(ValueError):
+            LocalMoves(**bad)
 
 
 def test_imh_without_laplace_weights_runs():
