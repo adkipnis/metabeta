@@ -24,7 +24,8 @@ the same ground truth, on complementary quality dimensions:
   LOO-NLL ↓ leave-one-out predictive negative log-likelihood per dataset (γ table only).
 
 NUTS is scored on its converged subset only (% NUTS-converged per bin marks where the
-reference itself degrades).  All metrics reuse metabeta.evaluation functions verbatim; we
+reference itself degrades); simulator-clipped datasets (utils.evaluation.simulatorClipped) are
+left out for every method.  All metrics reuse metabeta.evaluation functions verbatim; we
 only condition them on ρ / γ by restricting the active-parameter masks.
 
 Usage (from repo root):
@@ -42,7 +43,7 @@ import torch
 from tabulate import tabulate
 
 from metabeta.utils.dataloader import Collection, collateGrouped
-from metabeta.utils.evaluation import nutsConverged
+from metabeta.utils.evaluation import nutsConverged, simulatorClipped, subsetProposal
 from metabeta.utils.device import setDevice
 from metabeta.utils.logger import setupLogging
 from metabeta.utils.preprocessing import rescaleData
@@ -205,18 +206,26 @@ def globalEntries(proposal, batch, conv: np.ndarray, lf: int) -> dict[str, np.nd
     return {k: np.concatenate(v, axis=0) for k, v in cols.items()}
 
 
-def _entriesChunked(fn, proposal: Proposal, batch: dict, conv: np.ndarray, *args) -> dict:
-    """``fn`` (localEntries / globalEntries) over chunks of SCORE_CHUNK datasets, concatenated.
-    getCredibleIntervals sorts a copy of every draw tensor (values + int64 indices); over all 512
-    datasets at 4000 draws that alone is ~20 GiB per call at huge."""
+def _entriesChunked(
+    fn, proposal: Proposal, batch: dict, conv: np.ndarray, keep: np.ndarray, *args
+) -> dict:
+    """``fn`` (localEntries / globalEntries) over chunks of SCORE_CHUNK datasets, concatenated,
+    for the datasets ``keep`` selects. getCredibleIntervals sorts a copy of every draw tensor
+    (values + int64 indices); over all 512 datasets at 4000 draws that alone is ~20 GiB per call
+    at huge."""
     B = len(conv)
     parts = []
     for i in range(0, B, SCORE_CHUNK):
         j = min(i + SCORE_CHUNK, B)
+        sel = keep[i:j]
+        if not sel.any():
+            continue
+        rows = torch.from_numpy(sel)
         sub = {
-            k: v[i:j] if torch.is_tensor(v) and v.shape[:1] == (B,) else v for k, v in batch.items()
+            k: v[i:j][rows] if torch.is_tensor(v) and v.shape[:1] == (B,) else v
+            for k, v in batch.items()
         }
-        parts.append(fn(proposal.slice_b(i, j), sub, conv[i:j], *args))
+        parts.append(fn(subsetProposal(proposal.slice_b(i, j), sel), sub, conv[i:j][sel], *args))
     return {k: np.concatenate([part[k] for part in parts]) for k in parts[0]}
 
 
@@ -466,26 +475,28 @@ def collectSize(cfg, size: str, device: torch.device) -> dict | None:
     conv = nutsConverged(fit_batch, 'nuts2')
     conv = np.ones(B, dtype=bool) if conv is None else conv.astype(bool)
     del fit_batch
+    # where the simulator clipped (Poisson) the reference fits another likelihood: leave out
+    keep = ~simulatorClipped(data_path)
 
-    group_active = batch['mask_n'].any(-1).numpy()  # (B, m)
+    group_active = batch['mask_n'].any(-1).numpy() & keep[:, None]  # (B, m)
     grp_rho = perGroupRho(batch)[group_active]  # per active group
     grp_conv = np.broadcast_to(conv[:, None], group_active.shape)[group_active]
-    gamma_all = datasetGamma(batch, 'all', lf)  # per dataset
+    gamma_all = datasetGamma(batch, 'all', lf)[keep]  # per dataset
 
     out = {
         'size': size,
         'grp_rho': grp_rho,
         'grp_conv': grp_conv,
         'gamma_all': gamma_all,
-        'ds_conv': conv,
+        'ds_conv': conv[keep],
         'methods': {},
         'loos': {},
     }
 
     def score(label: str, prop: Proposal, method_name: str) -> None:
         out['methods'][label] = {
-            'local': _entriesChunked(localEntries, prop, batch, conv),
-            'global': _entriesChunked(globalEntries, prop, batch, conv, lf),
+            'local': _entriesChunked(localEntries, prop, batch, conv, keep),
+            'global': _entriesChunked(globalEntries, prop, batch, conv, keep, lf),
         }
         if not cfg.predictive:
             return
@@ -506,7 +517,8 @@ def collectSize(cfg, size: str, device: torch.device) -> dict | None:
                 seed=cfg.seed,
                 summary_chunk_size=cfg.summary_chunk_size,
             )
-        out['loos'][label] = datasetLoo(summary, batch, conv, lf)
+        loo = datasetLoo(summary, batch, conv, lf)
+        out['loos'][label] = {k: v[keep] for k, v in loo.items()}
 
     proposal_mb, _ = loadOrSampleMB(
         model,

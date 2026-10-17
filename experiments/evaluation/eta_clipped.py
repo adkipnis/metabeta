@@ -1,30 +1,23 @@
 """Which simulated Poisson test datasets did the simulator clip?
 
-The Poisson simulator draws y from exp(min(η, POISSON_ETA_CLIP_MAX)), and MB, IS² and AGQ
-evaluate that clipped likelihood, but PyMC's NUTS, ADVI and Pathfinder fit the exact
-pm.Poisson(exp(η)). On a dataset where any true η exceeds the clip the NUTS reference
-therefore targets another posterior. evidence.py drops those rows (etaClipped); this script
-applies the same criterion to every simulated Poisson test set under DATA_DIR (oracle and
-stress conditions; real-outcome sets are skipped) and records the reference fit's
-diagnostics next to each flag.
+Applies metabeta.utils.evaluation.simulatorClipped, the criterion every comparison uses to leave
+these datasets out, to every simulated Poisson test set under DATA_DIR (oracle and stress
+conditions; real-outcome sets are skipped) and records the reference fit's diagnostics next to
+each flag.
 
 Output: experiments/results/eta_clipped/eta_clipped_p.csv, one row per dataset with
-  dir, idx, max_eta, frac_clipped, eta_clipped, nuts2_converged, nuts2_max_rhat,
-  nuts2_min_ess, nuts2_div (total divergent transitions), nuts2_level;
+  dir, idx, eta_clipped, nuts2_converged, nuts2_max_rhat, nuts2_min_ess,
+  nuts2_div (total divergent transitions), nuts2_level;
 and eta_clipped_p.md, the per-directory counts.
 
 Run from the repo root:
-    uv run python experiments/posthoc/eta_clipped.py
+    uv run python experiments/evaluation/eta_clipped.py
 """
 
 import numpy as np
 import pandas as pd
 
-# evidence.py sits in this directory (on sys.path[0] at run time).
-from evidence import etaClipped
-
-from metabeta.utils.dataloader import Collection
-from metabeta.utils.evaluation import NUTS_DIAG_KEYS, nutsConverged
+from metabeta.utils.evaluation import NUTS_DIAG_KEYS, nutsConverged, simulatorClipped
 from metabeta.utils.experiments import DATA_DIR, experimentResultsPath
 from metabeta.utils.families import POISSON_ETA_CLIP_MAX
 from metabeta.utils.fits import REFERENCE_TAG, fitPath, loadFits
@@ -34,21 +27,8 @@ OUT_DIR = experimentResultsPath('eta_clipped')
 
 def flagFile(name: str) -> pd.DataFrame:
     path = DATA_DIR / name / 'test.npz'
-    col = Collection(path, permute=False)
-    rows = []
-    for i in range(len(col)):
-        item = col[i]
-        eta = item['X'] @ item['ffx'] + (item['Z'] * item['rfx'][item['groups'].astype(int)]).sum(-1)
-        rows.append(
-            {
-                'dir': name,
-                'idx': i,
-                'max_eta': float(eta.max()),
-                'frac_clipped': float(np.mean(eta > POISSON_ETA_CLIP_MAX)),
-                'eta_clipped': etaClipped(item),
-            }
-        )
-    df = pd.DataFrame(rows)
+    clipped = simulatorClipped(path)
+    df = pd.DataFrame({'dir': name, 'idx': np.arange(len(clipped)), 'eta_clipped': clipped})
     if fitPath(path, REFERENCE_TAG).exists():
         ref = REFERENCE_TAG
         diag = loadFits(path, ref, keys=[f'{ref}_{k}' for k in NUTS_DIAG_KEYS])
