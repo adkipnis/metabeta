@@ -113,3 +113,18 @@ def test_preprocessing_ignores_a_collinear_column_the_formula_does_not_name(
         assert torch.equal(getattr(result.proposal, key), getattr(reference.proposal, key))
     messages = [str(w.message) for w in caught] + [r.getMessage() for r in caplog.records]
     assert not any('days2' in message.lower() for message in messages)
+
+
+@pytest.mark.parametrize(
+    ('formula', 'term'),
+    [
+        ('Reaction ~ Noise + (1 + Days | Subject)', 'Days'),
+        ('Reaction ~ 0 + Days + (1 | Subject)', '(?i)intercept'),
+        ('Reaction ~ Days + (0 + Days | Subject)', '(?i)intercept'),
+    ],
+)
+def test_random_terms_the_fixed_terms_cannot_lead_with_raise(api: Api, formula: str, term: str):
+    df = _sleepstudy(Noise=np.random.default_rng(1).normal(size=120))
+
+    with pytest.raises(ValueError, match=term):
+        api.sample(df, formula=formula, n_samples=8, fit_preprocessor=True)
