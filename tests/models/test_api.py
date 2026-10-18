@@ -529,3 +529,23 @@ def test_binary_outcome_on_the_normal_checkpoint_suggests_bernoulli(api: Api):
     _, caught = _warningsOf(lambda: api.sample(df, likelihood_family='normal', **kwargs))
     (hint,) = [w for w in caught if "'bernoulli'" in str(w.message)]
     assert hint.filename == __file__
+
+
+def _footer(summary: str) -> dict[str, str]:
+    """The fields of a posteriorSummary footer, by label."""
+    fields = summary.splitlines()[-1].split('   ')
+    return dict(field.split(' = ', 1) for field in fields)
+
+
+def test_imh_footer_reports_acceptance_min_ess_and_k_hat(api: Api):
+    df = _sleepstudy()
+    kwargs = dict(formula='Reaction ~ Days + (1 | Subject)', n_samples=64, fit_preprocessor=True)
+    refined = api.sample(df, **kwargs)
+    raw = api.sample(df, refine=False, **kwargs)
+
+    footer = _footer(api.posteriorSummary(refined))
+    safeguards = refined.safeguards
+    assert footer['acceptance'] == f"{safeguards['accept_rate'][0]:.2f}"
+    assert footer['min ESS'] == f"{safeguards['ess_min'][0]:.0f}"
+    assert footer['PSIS k̂'].startswith(f"{safeguards['psis_k'][0]:.3f}")
+    assert list(_footer(api.posteriorSummary(raw))) == ['draws', 'MAP z']
