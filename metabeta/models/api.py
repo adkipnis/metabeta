@@ -1796,11 +1796,14 @@ class Api:
         *,
         ci: float = 0.95,
         batch_index: int = 0,
+        x_scale: str = 'original',
     ) -> str:
         """Return a formatted per-group random effects summary for a sampled RouterResult.
 
         Produces one table per random-effect component (intercept, slope, …), each under
         its own header, rather than a single wide table with repeated column groups.
+        ``x_scale`` has the meaning it has in ``posteriorSummary``: on the original scale a
+        slope is per unit of its predictor and the intercept is the group's deviation at x = 0.
         """
         if result.proposal is None:
             raise ValueError('RouterResult has no proposal; call sample() first')
@@ -1812,6 +1815,11 @@ class Api:
         names = result.param_names or {}
         rfx = result.proposal.rfx[batch_index].float()              # (m, S, q)
         sigma_rfx = result.proposal.sigma_rfx[batch_index].float()  # (S, q)
+        if _resolveXScale(x_scale, result.scale_info) == 'original':
+            corr = result.proposal.corr_rfx
+            corr_b = corr[batch_index].float() if corr is not None else None
+            rfx = result.scale_info.rfxToOriginal(rfx)
+            sigma_rfx, _ = result.scale_info.sdCorrToOriginal(sigma_rfx, corr_b)
         m, _, q_model = rfx.shape
         srfx_names = names.get('sigma_rfx') or [f'rfx_{i}' for i in range(q_model)]
         n_rfx = len(srfx_names)
@@ -1876,6 +1884,21 @@ class Api:
             ]
 
         return '\n'.join(parts)
+
+
+def _resolveXScale(x_scale: str, scale_info: 'ScaleInfo | None') -> str:
+    """The scale a summary can print: 'original' needs the preprocessing's scale info."""
+    if x_scale == 'original' and scale_info is None:
+        import warnings
+
+        warnings.warn(
+            'x_scale="original" requires scale_info; falling back to standardized. '
+            'Call router.sample() with fit_preprocessor=True to enable back-transformation.',
+            RuntimeWarning,
+            stacklevel=3,
+        )
+        return 'standardized'
+    return x_scale
 
 
 def _priorStr(priors: Any) -> str:
@@ -2028,23 +2051,12 @@ def posteriorTable(
     hi_pct = f'{(1 - alpha) * 100:g}%'
 
     ffx = proposal.ffx[batch_index].float()  # (S, d)
-    if x_scale == 'original':
-        if scale_info is None:
-            import warnings
-
-            warnings.warn(
-                'x_scale="original" requires scale_info; falling back to standardized. '
-                'Call router.sample() with fit_preprocessor=True to enable back-transformation.',
-                RuntimeWarning,
-                stacklevel=2,
-            )
-            x_scale = 'standardized'
-        else:
-            ffx = scale_info.to_original_scale(ffx)
     srfx = proposal.sigma_rfx[batch_index].float()  # (S, q)
     corr = proposal.corr_rfx
     corr_b = corr[batch_index].float() if corr is not None else None  # (S, q, q)
+    x_scale = _resolveXScale(x_scale, scale_info)
     if x_scale == 'original':
+        ffx = scale_info.to_original_scale(ffx)
         srfx, corr_b = scale_info.sdCorrToOriginal(srfx, corr_b)
     S = ffx.shape[0]
 
