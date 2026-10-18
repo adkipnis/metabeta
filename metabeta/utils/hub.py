@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from metabeta.utils.constants import LIKELIHOOD_FAMILIES
+from metabeta.utils.constants import LIKELIHOOD_FAMILIES, LIKELIHOOD_NAME_TO_ID
 
 HF_REPO_ID = 'adkipnis/metabeta'
 
@@ -29,7 +29,8 @@ def download_checkpoint(
     Parameters
     ----------
     family:
-        Likelihood family — one of ``"normal"``, ``"bernoulli"``, ``"poisson"``.
+        Likelihood family — one of ``"gaussian"`` (or ``"normal"``), ``"bernoulli"``,
+        ``"poisson"``, in any case.
     cache_dir:
         Override the default HF Hub cache (``~/.cache/huggingface/hub``).
     force_download:
@@ -37,8 +38,9 @@ def download_checkpoint(
     verbose:
         Print concise checkpoint resolution status messages.
     """
-    if family not in LIKELIHOOD_FAMILIES:
-        raise ValueError(f'family must be one of {LIKELIHOOD_FAMILIES}, got {family!r}')
+    if family.lower() not in LIKELIHOOD_NAME_TO_ID:
+        raise ValueError(f'family must be one of {tuple(LIKELIHOOD_NAME_TO_ID)}, got {family!r}')
+    family = LIKELIHOOD_FAMILIES[LIKELIHOOD_NAME_TO_ID[family.lower()]]  # names the file
 
     try:
         from huggingface_hub import hf_hub_download

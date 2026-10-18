@@ -10,6 +10,12 @@ STUDENT_DF = 5
 LIKELIHOOD_FAMILIES = ('normal', 'bernoulli', 'poisson')
 LIKELIHOOD_HAS_SIGMA_EPS = (True, False, False)
 LIKELIHOOD_BAMBI_FAMILY = ('gaussian', 'bernoulli', 'poisson')
+# a family's index by metabeta's name or by bambi's and R's ('gaussian' for 'normal') (#30)
+LIKELIHOOD_NAME_TO_ID = {
+    name: i
+    for names in (LIKELIHOOD_FAMILIES, LIKELIHOOD_BAMBI_FAMILY)
+    for i, name in enumerate(names)
+}
 
 FAMILY_NAMES = {0: 'n', 1: 'b', 2: 'p'}  # normal, bernoulli, poisson
 FAMILY_NAMES_REVERSE = {'n': 0, 'b': 1, 'p': 2}

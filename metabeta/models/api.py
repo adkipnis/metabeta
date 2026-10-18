@@ -202,7 +202,8 @@ class Api:
         Parameters
         ----------
         family:
-            Likelihood family — ``"normal"``, ``"bernoulli"``, or ``"poisson"``.
+            Likelihood family — ``"gaussian"`` (or ``"normal"``), ``"bernoulli"``, or
+            ``"poisson"``, in any case.
         cache_dir:
             Override the default HF Hub cache (``~/.cache/huggingface/hub``).
         force_download:

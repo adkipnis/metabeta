@@ -12,7 +12,13 @@ from typing import Any
 import numpy as np
 import torch
 
-from metabeta.utils.constants import FFX_FAMILIES, LIKELIHOOD_FAMILIES, SIGMA_FAMILIES, hasSigmaEps
+from metabeta.utils.constants import (
+    FFX_FAMILIES,
+    LIKELIHOOD_FAMILIES,
+    LIKELIHOOD_NAME_TO_ID,
+    SIGMA_FAMILIES,
+    hasSigmaEps,
+)
 from metabeta.utils.experiments import CHECKPOINT_DIR
 from metabeta.utils.priors import bambiDefaultPriors
 
@@ -70,7 +76,6 @@ Y_TYPE_TO_LIKELIHOOD = {
     'count': 2,
 }
 
-LIKELIHOOD_NAME_TO_ID = {name: i for i, name in enumerate(LIKELIHOOD_FAMILIES)}
 FFX_FAMILY_NAME_TO_ID = {name: i for i, name in enumerate(FFX_FAMILIES)}
 SIGMA_FAMILY_NAME_TO_ID = {name: i for i, name in enumerate(SIGMA_FAMILIES)}
 
