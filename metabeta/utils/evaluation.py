@@ -394,9 +394,11 @@ def makePriorPDFs(
     for j in range(1, d):
         pdfs.append(_sym_pdf(float(nu_f[j] / x_stds[j]), float(tau_f[j] / x_stds[j]), fam_ffx))
 
-    # sigma_rfx
-    for j in range(q):
-        pdfs.append(_half_pdf(float(tau_r[j]), fam_rfx))
+    # sigma_rfx: a random slope's SD scales by 1/s_j like its fixed slope (the intercept's x_std
+    # is 1)
+    for j, name in enumerate(result.param_names['sigma_rfx']):  # type: ignore[attr-defined]
+        x_std = float(x_stds[si.param_names.index(name)])
+        pdfs.append(_half_pdf(float(tau_r[j]) / x_std, fam_rfx))
 
     # sigma_eps
     if result.proposal.has_sigma_eps:  # type: ignore[attr-defined]
