@@ -16,6 +16,7 @@ from metabeta.analytical.linalg import (
     _safeSolve,
 )
 from metabeta.utils.families import logProbFfx, logProbSigma
+from metabeta.utils.linalg import choleskySolve
 
 __all__ = [
     'refineBernoulliLaplaceEb',
@@ -917,9 +918,7 @@ def refineBernoulliNagqSrfx(
                 log_det_Hg = 2.0 * chol_Hg.diagonal(dim1=-2, dim2=-1).log().sum(-1)
 
                 H_g_inv = (
-                    torch.cholesky_solve(
-                        eye_q_act[None, None].expand(n_elig, m, q_act, q_act), chol_Hg
-                    )
+                    choleskySolve(eye_q_act[None, None].expand(n_elig, m, q_act, q_act), chol_Hg)
                     + 1e-6 * eye_q_act[None, None]
                 )
                 L_g = torch.linalg.cholesky(H_g_inv)

@@ -12,6 +12,7 @@ from metabeta.analytical.linalg import (
 )
 from metabeta.analytical.lmm.lmm import _normalGlsAndBlups
 from metabeta.utils.families import logProbFfx, logProbSigma
+from metabeta.utils.linalg import choleskySolve
 
 __all__ = [
     'refineNormalLaplaceEb',
@@ -73,7 +74,7 @@ def _logMarginalLikelihoodNormal(
 
     chol_Psi, info_Psi = torch.linalg.cholesky_ex(Psi + jitter)
     psi_ok = info_Psi == 0
-    Psi_inv = torch.cholesky_solve(eye_q.expand(B, S, q, q), chol_Psi)
+    Psi_inv = choleskySolve(eye_q.expand(B, S, q, q), chol_Psi)
     log_det_Psi = 2.0 * chol_Psi.diagonal(dim1=-2, dim2=-1).log().sum(-1)
 
     Z_masked = Zm * mask_n4
@@ -89,7 +90,7 @@ def _logMarginalLikelihoodNormal(
     chol_M, info_M = torch.linalg.cholesky_ex(M + jitter)
     M_ok = info_M == 0
     log_det_M = 2.0 * chol_M.diagonal(dim1=-2, dim2=-1).log().sum(-1)
-    M_inv_Ztr = torch.cholesky_solve(Ztr.unsqueeze(-1), chol_M).squeeze(-1)
+    M_inv_Ztr = choleskySolve(Ztr.unsqueeze(-1), chol_M).squeeze(-1)
     hMh = (Ztr * M_inv_Ztr).sum(-1)
 
     log_det_V = log_det_M + log_det_Psi[:, None, :] + n_i[:, :, None] * s2e.log()[:, None, :]
