@@ -108,6 +108,7 @@ A GLMM fit is then a forward pass through the trained networks. Metropolis–Has
 
 ## FAQ
 
+<details>
 <summary><b>What can metabeta fit?</b></summary>
 
 - **Models**: Gaussian, Bernoulli (0/1) and Poisson GLMMs with one grouping factor.
@@ -161,7 +162,7 @@ random-walk moves (`random_walk=True`). `02-families` compares a Poisson fit wit
 
 </details>
 
-<details>
+
 
 
 
