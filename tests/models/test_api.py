@@ -425,3 +425,26 @@ def test_low_ess_warning_suggests_more_draws_and_points_at_the_call(api: Api):
     assert 'n_samples' in str(ess.message)
     assert 'do not fix' not in str(ess.message)
     assert ess.filename == __file__
+
+
+def test_random_walk_reports_one_line_instead_of_the_chain_warnings(api: Api):
+    df = _sleepstudy()
+    kwargs = dict(
+        formula='Reaction ~ Days + (1 + Days | Subject)', n_samples=64, fit_preprocessor=True
+    )
+    # load the routed model first: its initialization draws from the seeded stream
+    api.model(api.route(df, formula=kwargs['formula'])[0])
+    torch.manual_seed(0)
+    reference = api.sample(df, **kwargs)
+    torch.manual_seed(0)
+    result, caught = _warningsOf(lambda: api.sample(df, random_walk=True, **kwargs))
+
+    messages = [str(w.message) for w in caught]
+    assert not any('effective sample size' in m or 'acceptance is low' in m for m in messages)
+    (line,) = [w for w in caught if 'moves ran' in str(w.message)]
+    assert line.filename == __file__
+    safeguards = result.safeguards
+    assert safeguards['random_walk_ran'][0]
+    assert ('NUTS' in str(line.message)) == (safeguards['ess_min'][0] < 10)
+    for key in ('accept_rate', 'accept_flag', 'suggested_n_samples', 'ess', 'ess_min', 'ess_flag'):
+        np.testing.assert_array_equal(safeguards[key], reference.safeguards[key], err_msg=key)
