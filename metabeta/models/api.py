@@ -402,9 +402,10 @@ class Api:
 
         By default (``refine=True``, i.e. ``refine='imh'``) the flow posterior is refined
         by Independence Metropolis-Hastings: the flow serves as the proposal of a Markov
-        chain targeting the exact rfx-marginalized posterior (Normal) or its Laplace
-        approximation (GLMMs), so the chain's stationary distribution does not depend on
-        flow accuracy.  Both refinements redraw the rfx from their conditional at the
+        chain targeting the exact rfx-marginalized posterior, in closed form (Normal) or
+        through unbiased importance-sampling estimates of the marginal likelihood with a
+        Laplace proposal (GLMMs, a pseudo-marginal chain), so the chain's stationary distribution does not
+        depend on flow accuracy.  Both refinements redraw the rfx from their conditional at the
         accepted (or weighted) globals, so the local posterior network is not run at all:
         its cost is skipped and the analytical rfx estimate seeds the Laplace mode search
         instead (only the raw flow, ``refine=False``, samples it).  The proposal pool is
@@ -857,9 +858,11 @@ class Api:
     ) -> tuple[Proposal, dict[str, Any]]:
         """Refine the flow posterior ('imh' or 'is') and run the reliability checks.
 
-        Both methods share the same target: the exact rfx-marginalized posterior
-        (Normal) or its Laplace approximation (GLMMs), with rfx redrawn from the
-        matching conditional so the delivered draws form a consistent joint sample.
+        Both methods target the exact rfx-marginalized posterior for Normal. For GLMMs, 'imh'
+        targets the exact posterior through a pseudo-marginal chain on unbiased IS² estimates
+        of the marginal likelihood, and 'is' targets its Laplace approximation. Each redraws
+        the rfx from the matching conditional, so the delivered draws form a consistent joint
+        sample.
 
         'imh' (default) runs Independence Metropolis-Hastings with the flow pool as
         proposals: asymptotically exact in the pool size, no weight-degeneracy failure
