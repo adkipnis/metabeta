@@ -387,9 +387,10 @@ def test_router_prepares_preprocessed_numpy_dict_with_formula_and_default_priors
     assert batch['tau_rfx'].shape == (1, 2)
 
     first = math_preprocessed['X'][0]
+    # the model's X leads with the random slope (ses), whatever the formula's order
     assert torch.allclose(
         batch['X'][0, 0, 0, :3],
-        torch.tensor([1.0, first[1], first[0]], dtype=batch['X'].dtype),
+        torch.tensor([1.0, first[0], first[1]], dtype=batch['X'].dtype),
     )
     assert torch.allclose(
         batch['Z'][0, 0, 0, :2],
