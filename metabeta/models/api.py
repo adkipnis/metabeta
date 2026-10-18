@@ -996,8 +996,8 @@ class Api:
         flag = (a_bar < IMH_ACCEPT_WARN).cpu().numpy()
         ess_flag = ess_min < IMH_ESS_WARN
         # where the random-walk moves ran, they continued the chains these two warnings describe
-        if (flag & ~ran).any():
-            flagged = np.flatnonzero(flag & ~ran)
+        flagged = np.flatnonzero(flag & ~ran)
+        if flagged.size:
             a_vals = ', '.join(f'{a_bar[i]:.2f}' for i in flagged)
             s_vals = ', '.join(f'{int(suggested[i])}' for i in flagged)
             respectively = ' (respectively)' if flagged.size > 1 else ''
@@ -1010,8 +1010,8 @@ class Api:
                 '  2. exact MCMC, e.g. NUTS',
                 skip_file_prefixes=INTERNAL_PREFIXES,
             )
-        if (ess_flag & ~ran).any():
-            flagged = np.flatnonzero(ess_flag & ~ran)
+        flagged = np.flatnonzero(ess_flag & ~ran)
+        if flagged.size:
             e_vals = ', '.join(f'{ess_min[i]:.0f}' for i in flagged)
             low = flagged[ess_min[flagged] < IMH_ESS_NUTS]
             caveat = f' (may not suffice for {low.tolist()})' if low.size else ''
@@ -1026,8 +1026,8 @@ class Api:
                 skip_file_prefixes=INTERNAL_PREFIXES,
             )
         # the moves replace the ESS warning, except where the IMH left them too little to work with
-        if (ran & (ess_min < IMH_ESS_NUTS)).any():
-            low = np.flatnonzero(ran & (ess_min < IMH_ESS_NUTS))
+        low = np.flatnonzero(ran & (ess_min < IMH_ESS_NUTS))
+        if low.size:
             e_vals = ', '.join(f'{ess_min[i]:.0f}' for i in low)
             warnings.warn(
                 f'Very low IMH ESS before the random-walk moves for dataset(s) {low.tolist()}: '
@@ -1723,9 +1723,7 @@ class Api:
 
         if result.diagnostics is None or result.batch is None:
             raise ValueError('result has no posterior predictive; call sample() first')
-        pp = result.diagnostics.get('pp')
-        if pp is None:
-            raise ValueError('pp not found in diagnostics')
+        pp = result.diagnostics['pp']
         b = int(result.batch['y'].shape[0])
         prior_ids = _renamedArg('indices', indices, 'prior_ids', prior_ids)
         rows = range(b) if prior_ids is None else [_priorRow(result, p) for p in prior_ids]
@@ -2082,8 +2080,6 @@ class Api:
 def _resolveXScale(x_scale: str, scale_info: 'ScaleInfo | None') -> str:
     """The scale a summary can print: 'original' needs the preprocessing's scale info."""
     if x_scale == 'original' and scale_info is None:
-        import warnings
-
         warnings.warn(
             'x_scale="original" requires scale_info; falling back to standardized. '
             'Call router.sample() with fit_preprocessor=True to enable back-transformation.',
