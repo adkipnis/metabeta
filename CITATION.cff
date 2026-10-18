@@ -8,6 +8,11 @@ repository-code: https://github.com/adkipnis/metabeta
 license: Apache-2.0
 version: 0.6.0
 date-released: 2026-10-18
+doi: 10.5281/zenodo.23458113
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.23458113
+    description: Concept DOI, shared by all versions
 preferred-citation:
   type: article
   title: Prior-Amortized In-Context Bayesian Inference for Generalized Linear Mixed-Effects Models
