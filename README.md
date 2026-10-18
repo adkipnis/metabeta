@@ -105,16 +105,6 @@ Diagnostics, in `result.safeguards` and the summary's last line:
 
 `sample` warns when IMH acceptance, the ESS or `MAP z` crosses its threshold.
 
-## Research workflow
-
-The repository also holds the code that builds the checkpoints. After `uv sync`, run these
-scripts in order (each takes `--help`):
-
-1. `metabeta/simulation/generate.py` simulates datasets.
-2. `metabeta/training/train.py` trains the networks.
-3. `metabeta/evaluation/evaluate.py` evaluates them, also against NUTS.
-4. `scripts/build_ckpt.py` bundles them into checkpoints.
-
 ## FAQ
 
 <details>
