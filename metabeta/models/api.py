@@ -1850,39 +1850,24 @@ class Api:
             if result.validation and batch_index < len(result.validation)
             else {}
         )
-        bi = batch_index
+
+        def at(values: Any, default: Any = None) -> Any:
+            """This row's entry of a per-dataset array, as a Python scalar."""
+            return values[batch_index].item() if values is not None else default
+
         fit_vals = d.get('fit_vals')
-        fit = fit_vals[bi].item() if fit_vals is not None and bi < len(fit_vals) else d.get('fit')
-        loo_nll_vals = d.get('loo_nll_vals')
-        loo_nll = (
-            loo_nll_vals[bi].item()
-            if loo_nll_vals is not None and bi < len(loo_nll_vals)
-            else d.get('loo_nll')
-        )
-        pareto_k_vals = d.get('pareto_k_vals')
-        pareto_k = (
-            pareto_k_vals[bi].item()
-            if pareto_k_vals is not None and bi < len(pareto_k_vals)
-            else d.get('pareto_k')
-        )
+        fit = at(fit_vals, d.get('fit'))
+        loo_nll = at(d.get('loo_nll_vals'), d.get('loo_nll'))
+        pareto_k = at(d.get('pareto_k_vals'), d.get('pareto_k'))
         fit_label = d.get('fit_label', 'fit')
         if fit_vals is not None and fit_label.startswith('Mean '):
             fit_label = fit_label[5:]
         sg = result.safeguards or {}
-        psis_k_vals = sg.get('psis_k')
-        psis_k = (
-            float(psis_k_vals[bi]) if psis_k_vals is not None and bi < len(psis_k_vals) else None
-        )
-        map_z_vals = sg.get('map_z')
-        map_z = float(map_z_vals[bi]) if map_z_vals is not None and bi < len(map_z_vals) else None
-        accept_vals = sg.get('accept_rate')
-        accept = (
-            float(accept_vals[bi]) if accept_vals is not None and bi < len(accept_vals) else None
-        )
-        ess_vals = sg.get('ess_min')
-        ess_min = float(ess_vals[bi]) if ess_vals is not None and bi < len(ess_vals) else None
-        ran = sg.get('random_walk_ran')
-        random_walk = bool(ran[bi]) if ran is not None and bi < len(ran) else False
+        psis_k = at(sg.get('psis_k'))
+        map_z = at(sg.get('map_z'))
+        accept = at(sg.get('accept_rate'))
+        ess_min = at(sg.get('ess_min'))
+        random_walk = at(sg.get('random_walk_ran'), False)
         return posteriorTable(
             result.proposal,
             result.param_names,
