@@ -545,7 +545,7 @@ class Api:
         self,
         proposal: Proposal,
         prior_params: dict[str, np.ndarray],
-        diags: dict[str, Any] | None,
+        diags: dict[str, Any],
     ) -> None:
         """Permute the fixed-effect columns from the model's layout (random slopes first) back
         to the user's formula order. Padding columns stay in place, and ``result.batch`` keeps
@@ -563,7 +563,7 @@ class Api:
         for key in ('tau_ffx', 'nu_ffx'):
             if key in prior_params:
                 prior_params[key] = prior_params[key][:, lead(prior_params[key].shape[1])]
-        if diags is not None:
+        if 'param_summary' in diags:
             summary = diags['param_summary']['ffx']
             diags['param_summary']['ffx'] = {
                 k: v[..., lead(v.shape[-1])] for k, v in summary.items()
@@ -722,12 +722,8 @@ class Api:
     ) -> dict[str, Any]:
         lf = int(batch['likelihood_family'].flatten()[0].item())
         pp = _predictive.getPosteriorPredictive(proposal, batch, likelihood_family=lf)
-        log_p = pp.log_prob(batch['y'].unsqueeze(-1))  # (B, m, n, S)
-        ppc_nll = _predictive.posteriorPredictiveNLL(pp, batch, mode='mixture', log_p=log_p)
 
         b = int(batch['X'].shape[0])
-        agg = (lambda t: t.item()) if b == 1 else (lambda t: t.mean().item())
-
         if lf == 0:
             vals = _predictive.posteriorPredictiveR2(pp, batch, w=proposal.weights)
             fit = vals.item() if b == 1 else vals.mean().item()
@@ -740,6 +736,16 @@ class Api:
             vals = _predictive.posteriorPredictiveDeviance(pp, batch, w=proposal.weights)
             fit = vals.item() if b == 1 else vals.mean().item()
             fit_label = 'Deviance' if b == 1 else 'Mean Deviance'
+        diags = {'fit': fit, 'fit_vals': vals, 'fit_label': fit_label, 'pp': pp}
+        if not loo:
+            return diags
+
+        # PSIS over every observation, the costly part, and the rest of what diagnostics=True gave
+        log_p = pp.log_prob(batch['y'].unsqueeze(-1))  # (B, m, n, S)
+        ppc_nll = _predictive.posteriorPredictiveNLL(pp, batch, mode='mixture', log_p=log_p)
+        loo_nll_vals, pareto_k_vals = _predictive.psisLooNLL(
+            pp, batch, w=proposal.weights, reff=proposal.reff, log_p=log_p
+        )
 
         def _summarize(samples: torch.Tensor, dim: int) -> dict[str, torch.Tensor]:
             s = samples.float()
@@ -756,26 +762,15 @@ class Api:
         }
         if proposal.has_sigma_eps:
             param_summary['sigma_eps'] = _summarize(proposal.sigma_eps, dim=-1)
-
-        diags = {
+        agg = (lambda t: t.item()) if b == 1 else (lambda t: t.mean().item())
+        return diags | {
             'ppc_nll': ppc_nll,
             'param_summary': param_summary,
-            'fit': fit,
-            'fit_vals': vals,
-            'fit_label': fit_label,
-            'pp': pp,
+            'loo_nll': agg(loo_nll_vals),
+            'loo_nll_vals': loo_nll_vals,
+            'pareto_k': agg(pareto_k_vals),
+            'pareto_k_vals': pareto_k_vals,
         }
-        if loo:  # PSIS over every observation: the costly part
-            loo_nll_vals, pareto_k_vals = _predictive.psisLooNLL(
-                pp, batch, w=proposal.weights, reff=proposal.reff, log_p=log_p
-            )
-            diags |= {
-                'loo_nll': agg(loo_nll_vals),
-                'loo_nll_vals': loo_nll_vals,
-                'pareto_k': agg(pareto_k_vals),
-                'pareto_k_vals': pareto_k_vals,
-            }
-        return diags
 
     def _validateParameterKeys(self, batch: Mapping[str, Any]) -> None:
         missing = [k for k in ('ffx', 'sigma_rfx', 'rfx') if k not in batch]
