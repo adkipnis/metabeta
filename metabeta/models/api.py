@@ -247,8 +247,9 @@ class Api:
         self._models: dict[str, Approximator] = {}
 
         if warmup:
-            for entry in self.submodels:
-                self._warmupSubmodel(entry)
+            # the first call's cost is paid once per process, not per submodel, so one pass on
+            # the smallest submodel suffices; the others are built on their first batch (#19)
+            self._warmupSubmodel(self.submodels[0])
 
     def model(self, submodel_id: str) -> Approximator:
         """Return the lazily instantiated model for ``submodel_id``."""
@@ -531,7 +532,7 @@ class Api:
             }
 
     def _warmupSubmodel(self, entry: dict) -> None:
-        """Run one forward pass through a specific submodel using minimal dummy data."""
+        """Warm the default sampling path on minimal dummy data routed to ``entry``."""
         r = entry.get('routing', {})
         d = max(int(r.get('min_d', 1)), 2)  # at least intercept + one covariate
         q = int(r.get('min_q', 1))
@@ -558,20 +559,15 @@ class Api:
         rfx_slopes = (' + ' + ' + '.join(f'_x{j}' for j in range(q - 1))) if q > 1 else ''
         formula = f'_y ~ {fixed} + (1{rfx_slopes} | _g)'
 
-        self.sample(
-            pd.DataFrame(dummy),
-            formula=formula,
-            n_samples=1,
-            diagnostics=False,
-            likelihood_family=fam,
-        )
+        self.warmup(pd.DataFrame(dummy), formula=formula, likelihood_family=fam)
 
     def warmup(self, data: Any = None, **prepare_kwargs: Any) -> None:
-        """Prime PyTorch's kernel cache with a single-sample forward pass.
+        """Run the default sampling path once, IMH at ``MIN_SAFEGUARD_SAMPLES`` draws, so the
+        first real call is as fast as later ones.  Its draws and warnings are discarded.
 
-        By default all submodels are warmed automatically at ``__init__`` time
-        (``warmup=True``).  Call this explicitly only if ``warmup=False`` was
-        passed or you want to warm a specific submodel with a real DataFrame.
+        ``warmup=True`` (the default) does this at ``__init__`` time; the cost it removes is
+        paid once per process, so one pass serves every submodel.  Call this explicitly only
+        if ``warmup=False`` was passed.
 
         ``data`` is optional when ``formula`` is passed as a keyword argument:
         a minimal dummy DataFrame is generated automatically from the formula
@@ -613,7 +609,10 @@ class Api:
             if spec.group_name:
                 dummy[spec.group_name] = np.repeat(np.arange(min_m), min_n)
             data = pd.DataFrame(dummy)
-        self.sample(data, n_samples=1, diagnostics=False, **prepare_kwargs)
+        # the draws are discarded, and so are the warnings about them
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            self.sample(data, n_samples=MIN_SAFEGUARD_SAMPLES, **prepare_kwargs)
 
     @torch.no_grad()
     def forward(self, data: Any, **prepare_kwargs: Any) -> RouterResult:
