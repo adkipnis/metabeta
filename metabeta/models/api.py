@@ -1224,6 +1224,7 @@ class Api:
         model_columns = intercept + model_indices
         self._ffx_order = [model_columns.index(idx) for idx in intercept + fixed_indices]
         fixed_names = ['Intercept'] * len(intercept) + [columns[idx] for idx in fixed_indices]
+        model_names = ['Intercept'] * len(intercept) + [columns[idx] for idx in model_indices]
         X_parts = [np.ones((X_pre.shape[0], 1), dtype=float)] * len(intercept)
         X_parts += [X_pre[:, idx : idx + 1] for idx in model_indices]
         X = np.concatenate(X_parts, axis=1) if X_parts else np.empty((X_pre.shape[0], 0))
@@ -1271,7 +1272,7 @@ class Api:
         sd_y = preprocessedSdY(preprocessed)
         prior_variants = resolvePriors(
             priors,
-            fixed_names=fixed_names,
+            fixed_names=model_names,
             random_names=random_names,
             likelihood_family=likelihood,
         )
