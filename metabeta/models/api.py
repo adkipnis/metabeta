@@ -53,7 +53,6 @@ from metabeta.utils.api import (
     padModelDataset,
     parseFormula,
     preprocessedSdY,
-    resolveColumnTerm,
     resolveFixedIndices,
     resolveLikelihoodFamily,
     resolvePriors,
@@ -1163,6 +1162,7 @@ class Api:
             self._group_labels = [str(v) for v in labels]
         else:
             self._group_labels = None
+        terms = {*spec.fixed_terms, *spec.random_terms}
         if preprocessor is not None:
             prep = (
                 DataPreprocessor.load(preprocessor)
@@ -1176,7 +1176,6 @@ class Api:
             if formula is not None:
                 # fit on the formula's columns only, so an unrelated column cannot drop a named
                 # one through the correlation filter; a term may name a dummy, '{column}_{level}'
-                terms = {*spec.fixed_terms, *spec.random_terms}
                 named = {c for c in df.columns for t in terms if t == c or t.startswith(f'{c}_')}
                 df = df[[c for c in df.columns if c in {'y', group_name} | named]]
             prep = DataPreprocessor(group_name=group_name)
@@ -1188,7 +1187,7 @@ class Api:
                 )
             preprocessed = prep.fit_transform(df)
         # a dropped column would resolve to another one sharing its prefix, or to none
-        dropped = sorted({*spec.fixed_terms, *spec.random_terms} & prep._dropped_cols)
+        dropped = sorted(terms & prep._dropped_cols)
         if dropped:
             raise ValueError(
                 f'the preprocessor dropped formula column(s) {dropped} as nearly collinear with '
@@ -1262,22 +1261,14 @@ class Api:
                 'a fixed intercept needs a random intercept: write (1 + ... | group) or '
                 'suppress the fixed intercept with 0 +'
             )
-        for term in random_terms:
-            if term == '1':
-                continue
-            missing = [
-                columns[idx] for idx in resolveColumnTerm(term, columns) if idx not in fixed_indices
-            ]
-            if missing:
-                raise ValueError(
-                    f'random slope {", ".join(missing)} is not a fixed term: add it to the '
-                    'fixed terms'
-                )
         # the model sees the random slopes first, in the random term's order; every output
         # is mapped back to the user's order (`fixed_names`) through `_ffx_order`
-        slope_indices = [
-            idx for term in random_terms if term != '1' for idx in resolveColumnTerm(term, columns)
-        ]
+        slope_indices = resolveFixedIndices([t for t in random_terms if t != '1'], columns)
+        missing = [columns[idx] for idx in slope_indices if idx not in fixed_indices]
+        if missing:
+            raise ValueError(
+                f'random slope {", ".join(missing)} is not a fixed term: add it to the fixed terms'
+            )
         other_indices = [idx for idx in fixed_indices if idx not in slope_indices]
         intercept = [-1] if spec.intercept else []  # -1 stands for the column of ones
         user_columns = intercept + fixed_indices
@@ -1300,16 +1291,8 @@ class Api:
         y_mean_meta = float(np.asarray(preprocessed.get('y_mean', 0.0)).item())
         y_std_meta = float(np.asarray(preprocessed.get('sd_y', 1.0)).item())
 
-        si_means = (
-            [0.0] + [float(x_means_meta[idx]) for idx in fixed_indices]
-            if spec.intercept
-            else [float(x_means_meta[idx]) for idx in fixed_indices]
-        )
-        si_stds = (
-            [1.0] + [float(x_stds_meta[idx]) for idx in fixed_indices]
-            if spec.intercept
-            else [float(x_stds_meta[idx]) for idx in fixed_indices]
-        )
+        si_means = [0.0 if idx < 0 else float(x_means_meta[idx]) for idx in user_columns]
+        si_stds = [1.0 if idx < 0 else float(x_stds_meta[idx]) for idx in user_columns]
         self._scale_info = ScaleInfo(
             y_mean=y_mean_meta,
             y_std=y_std_meta,
