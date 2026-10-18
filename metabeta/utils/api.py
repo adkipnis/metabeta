@@ -202,7 +202,7 @@ class ScaleInfo:
         q = len(self.random_names)
         A = torch.tensor(self.rfxMap(), dtype=torch.float64, device=sigma.device)
         sd = sigma[..., :q].double()
-        R = torch.ones(1, 1, dtype=sd.dtype) if corr is None else corr[..., :q, :q].double()
+        R = sd.new_ones(1, 1) if corr is None else corr[..., :q, :q].double()
         cov = sd.unsqueeze(-1) * R * sd.unsqueeze(-2)  # (..., q, q)
         cov = A @ cov @ A.T
         sd_orig = cov.diagonal(dim1=-2, dim2=-1).sqrt()  # (..., q)
