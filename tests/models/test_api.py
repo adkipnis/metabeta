@@ -667,6 +667,22 @@ def test_from_pretrained_writes_its_status_to_stdout(
     assert err == ''
 
 
+def test_from_pretrained_takes_gaussian_for_normal(api: Api, monkeypatch: pytest.MonkeyPatch):
+    files = []
+
+    def download(**kwargs):
+        files.append(kwargs['filename'])
+        return str(api.joint_checkpoint)
+
+    monkeypatch.setattr('huggingface_hub.hf_hub_download', download)
+
+    Api.from_pretrained('Gaussian', warmup=False, verbose=False)
+
+    assert files == ['metabeta-normal.pt']
+    with pytest.raises(ValueError, match="'gaussian'"):
+        Api.from_pretrained('gauss', warmup=False, verbose=False)
+
+
 def _preprocessed(X: np.ndarray, y: np.ndarray) -> dict[str, np.ndarray]:
     """A preprocessed dict of 12 groups by 10 rows with columns x1, x2, which skips the
     preprocessor and its checks."""
