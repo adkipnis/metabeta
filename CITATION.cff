@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: If you use metabeta, please cite it as below.
+title: 'metabeta: amortized Bayesian inference for generalized linear mixed-effects models'
+authors:
+  - family-names: Kipnis
+    given-names: Alex
+repository-code: https://github.com/adkipnis/metabeta
+license: Apache-2.0
+version: 0.5.1
+date-released: 2026-10-18
+preferred-citation:
+  type: article
+  title: Prior-Amortized In-Context Bayesian Inference for Generalized Linear Mixed-Effects Models
+  authors:
+    - family-names: Kipnis
+      given-names: Alex
+    - family-names: Binz
+      given-names: Marcel
+    - family-names: Schulz
+      given-names: Eric
+  journal: arXiv preprint arXiv:2609.24422
+  year: 2026
+  doi: 10.48550/arXiv.2609.24422
+  url: https://arxiv.org/abs/2609.24422
