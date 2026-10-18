@@ -162,16 +162,6 @@ random-walk moves (`random_walk=True`). `02-families` compares a Poisson fit wit
 
 </details>
 
-<details>
-<summary><b>On which scale are the estimates?</b></summary>
-
-- Summaries and plots use the data's scale: slopes per unit of each predictor, in the response's
-  units (Gaussian), log-odds (Bernoulli) or log rates (Poisson).
-- `x_scale='standardized'` reports slopes per SD of the predictor instead.
-- Priors and raw draws (`result.proposal`) use a standardized scale, with predictors (and a
-  Gaussian response) at mean 0 and SD 1.
-
-</details>
 
 ## Citing
 
