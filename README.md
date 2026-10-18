@@ -119,8 +119,9 @@ scripts in order (each takes `--help`):
 <details>
 <summary><b>Do I need a GPU?</b></summary>
 
-No. A fit takes 0.2 to 1 second on a laptop CPU, and about 0.1 seconds on a GPU. To use a GPU,
-pass `device='cuda'` to `Api.from_pretrained`.
+No. A fit takes 0.2 to 1 second on a laptop CPU, and about 0.1 seconds on a fast GPU. Colab's
+free runtimes are slower: one to a few seconds on CPU or T4. To use a GPU, pass `device='cuda'` to
+`Api.from_pretrained`.
 
 </details>
 
