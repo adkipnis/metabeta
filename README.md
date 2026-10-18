@@ -66,7 +66,7 @@ draws = 1000   acceptance = 0.78   min ESS = 456   PSIS k̂ = 0.240   MAP z = 0.
 ```
 
 - **Units**: ms, and ms per day for `Days` (lme4: 251.4 and 10.47).
-- **Last line**: the diagnostics are explained in [How it works](#how-it-works).
+- **Last line**: the diagnostics are explained in the [FAQ](#faq).
 - **More**: `mb.rfxSummary(result)` prints each subject's random effects, and
   `mb.plotParameters(result)` visualizes posterior draws. The [tutorials](#tutorials) cover
   `posteriorDraws`, `groupDraws`, `posteriorPredictive` and `bayesFactor`.
@@ -83,27 +83,29 @@ draws = 1000   acceptance = 0.78   min ESS = 456   PSIS k̂ = 0.240   MAP z = 0.
 
 <img src="https://raw.githubusercontent.com/adkipnis/metabeta/main/assets/overview.svg" width="100%" alt="Top: training datasets are simulated from priors over the fixed effects, the random-effect SDs and their correlations. Bottom: summary networks condense each group, then all groups; flows map the summary and the prior to posterior draws.">
 
-1. **Training**: the networks learn from simulated GLMM datasets with random sizes, priors and
-   parameters (figure, top).
-2. **Summary**: Σ<sub>l</sub> summarizes each group, and Σ<sub>g</sub> summarizes across groups
-   (figure, bottom).
-3. **Posterior**: normalizing flows turn the summary, analytical estimates and the prior into
-   draws. Π<sub>g</sub> draws the fixed effects β, random-effect SDs σ and correlations R;
-   Π<sub>l</sub> draws each group's random effects α<sub>i</sub>.
-4. **Refinement**: independence Metropolis–Hastings (IMH) uses the flow's draws as proposals.
+**Simulation** (figure, top): every training dataset is a random GLMM.
 
-Diagnostics, in `result.safeguards` and the summary's last line:
+- **Sizes**: the numbers of predictors d, random effects q, groups m and rows per group
+  n<sub>i</sub> are drawn first, favoring the small sizes common in applied work.
+- **Priors**: the prior families and their scales are drawn next, so the prior becomes an input.
+- **Parameters**: the fixed effects β, random-effect SDs σ and correlations R come from these
+  priors. Each group's random effects α<sub>i</sub> are normal, with SDs σ and correlations R.
+- **Predictors**: X comes from synthetic tables, built from random causal models as in TabPFN, or
+  from subsamples of real tables.
+- **Outcomes**: y is drawn from the GLMM, given X and the parameters.
 
-- `acceptance`: the IMH acceptance rate.
-- `min ESS`: the smallest effective sample size (ESS).
-- `PSIS k̂`: how well the flow's draws match the posterior, by Pareto-smoothed importance sampling
-  (PSIS); lower is better.
-- `MAP z`: the distance between the posterior mean and the maximum a posteriori (MAP) estimate, in
-  posterior SDs.
-- `R²`, `AUC` or `Deviance`, by family: how well the posterior predicts the data (in
-  `result.diagnostics`).
+**Training** (figure, bottom): the networks learn to recover the parameters behind each dataset.
 
-`sample` warns when IMH acceptance, the ESS or `MAP z` crosses its threshold.
+- **Summaries**: Σ<sub>l</sub> condenses each group's rows into a vector, and Σ<sub>g</sub>
+  condenses these vectors into one summary s. Both ignore the order of rows and groups.
+- **Shortcuts**: quick analytical estimates, the prior and the dataset's sizes join the summaries.
+- **Posterior**: normalizing flows turn random noise u into posterior draws. Π<sub>g</sub> draws
+  β, σ and R from s; Π<sub>l</sub> draws each group's α<sub>i</sub> from its summary and a draw
+  of Π<sub>g</sub>.
+- **Objective**: all networks train together, so that the true parameters get high posterior
+  density.
+
+A fit is then one pass through the trained networks, and Metropolis–Hastings refines its draws.
 
 ## FAQ
 
@@ -113,6 +115,24 @@ Diagnostics, in `result.safeguards` and the summary's last line:
 No. A fit takes 0.2 to 1 second on a laptop CPU, and about 0.1 seconds on a fast GPU. Colab's
 free runtimes are slower: one to a few seconds on CPU or T4. To use a GPU, pass `device='cuda'` to
 `Api.from_pretrained`.
+
+</details>
+
+<details>
+<summary><b>What do the diagnostics mean?</b></summary>
+
+They are in the summary's last line and in `result.safeguards`:
+
+- `acceptance`: the share of the networks' draws that Metropolis–Hastings accepts.
+- `min ESS`: the smallest effective sample size (ESS).
+- `PSIS k̂`: how well the networks' draws match the posterior, by Pareto-smoothed importance
+  sampling (PSIS); lower is better.
+- `MAP z`: the distance between the posterior mean and the maximum a posteriori (MAP) estimate, in
+  posterior SDs.
+- `R²`, `AUC` or `Deviance`, by family: how well the posterior predicts the data (in
+  `result.diagnostics`).
+
+`sample` warns when the acceptance, the ESS or `MAP z` crosses its threshold.
 
 </details>
 
