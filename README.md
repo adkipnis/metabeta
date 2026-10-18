@@ -1,6 +1,7 @@
 [![PyPI](https://img.shields.io/pypi/v/metabeta)](https://pypi.org/project/metabeta/)
 [![CI](https://github.com/adkipnis/metabeta/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/adkipnis/metabeta/actions/workflows/ci.yml)
 [![arXiv](https://img.shields.io/badge/arXiv-2609.24422-b31b1b)](https://arxiv.org/abs/2609.24422)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23458113.svg)](https://doi.org/10.5281/zenodo.23458113)
 [![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-checkpoints-yellow)](https://huggingface.co/adkipnis/metabeta)
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/adkipnis/metabeta/blob/main/demos/01-quickstart.ipynb)
 [![License](https://img.shields.io/badge/license-code%20Apache--2.0%20%C2%B7%20weights%20CC%20BY--NC--SA%204.0-blue)](https://github.com/adkipnis/metabeta#license)
@@ -178,6 +179,8 @@ random-walk moves (`random_walk=True`). `02-families` compares a Poisson fit wit
   url           = {https://arxiv.org/abs/2609.24422}
 }
 ```
+
+All versions share the DOI [10.5281/zenodo.23458113](https://doi.org/10.5281/zenodo.23458113).
 
 ## License
 
