@@ -75,6 +75,7 @@ REPO_ONLY_DEPS = {
 # Colab's preinstalled versions (Python 3.13); a higher floor makes pip replace them, and
 # arviz 1.x breaks Colab's pymc, which needs arviz<1
 COLAB_FLOORS = {
+    'numpy': '>=2.1.3',
     'pandas': '>=2.2.3',
     'scikit-learn': '>=1.6.1',
     'matplotlib': '>=3.10.0',
