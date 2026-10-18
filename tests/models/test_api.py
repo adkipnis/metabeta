@@ -293,3 +293,17 @@ def test_default_rfx_summary_reports_group_effects_at_days_zero(api: Api):
         assert [row[1] for row in rows.values()] == pytest.approx(means, abs=1e-3)
         assert [row[2] for row in rows.values()] == pytest.approx(b.std(axis=1, ddof=1), abs=1e-3)
         assert ratio == pytest.approx(means.std(ddof=1) / sd_rows[name][0], abs=0.01)
+
+
+def test_integer_group_ids_label_their_own_rows(api: Api):
+    df = _sleepstudy()
+    df['Subject'] = np.repeat(np.arange(12), 10)  # ids 0-11; as strings '10' sorts before '2'
+    df.loc[df['Subject'] == 10, 'Reaction'] += 300
+
+    result = api.sample(
+        df, formula='Reaction ~ Days + (1 | Subject)', n_samples=64, fit_preprocessor=True
+    )
+
+    rows, _ = _rfxRows(api.rfxSummary(result), 'Intercept')
+    assert list(rows) == [str(i) for i in range(12)]
+    assert max(rows, key=lambda group: rows[group][1]) == '10'
