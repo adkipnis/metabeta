@@ -60,6 +60,7 @@ from torch.nn import functional as F
 
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.utils.families import POISSON_ETA_CLIP_MAX
+from metabeta.utils.linalg import choleskySolve
 from metabeta.utils.results import Proposal
 
 AGQ_N_BACKTRACK = (
@@ -191,7 +192,7 @@ def laplaceRfxModes(
 
     L_rfx = _sigmaChol(sigma_rfx, L_corr)
     eye = torch.eye(q, dtype=L_rfx.dtype, device=L_rfx.device)
-    Sigma_inv = torch.cholesky_solve(eye.expand_as(L_rfx), L_rfx)  # (b, s, q, q)
+    Sigma_inv = choleskySolve(eye.expand_as(L_rfx), L_rfx)  # (b, s, q, q)
 
     Z_m = Z * mask_n  # zero out padded observations
     mu_ffx = torch.einsum('bmnd,bsd->bmns', X, ffx)  # (b, m, n, s)
@@ -233,7 +234,7 @@ def laplaceRfxModes(
             chol_H = chol_H.index_put(
                 (bi, mi, si), _cholFloat64(Z_m[bi, mi], wk, Sigma_inv[bi, si])
             )
-        delta = torch.cholesky_solve(score.unsqueeze(-1), chol_H).squeeze(-1)
+        delta = choleskySolve(score.unsqueeze(-1), chol_H).squeeze(-1)
         decrement = (0.5 * (score * delta).sum(-1)).nan_to_num(nan=torch.inf) * mask_m
         if t == n_newton or (t >= n_newton - 1 and float(decrement.max()) <= tol):
             break
@@ -341,7 +342,7 @@ def _refineUnresolved(
         if bool(info.any()):  # float32 H indefinite, see _cholFloat64
             k = info.nonzero(as_tuple=True)[0]
             chol = chol.index_put((k,), _cholFloat64(Zk[k], (w * nk)[k], Sik[k]))
-        delta = torch.cholesky_solve(score.unsqueeze(-1), chol).squeeze(-1)
+        delta = choleskySolve(score.unsqueeze(-1), chol).squeeze(-1)
         dec = (0.5 * (score * delta).sum(-1)).nan_to_num(nan=torch.inf)
         active = dec > tol
         if t == n_extra or not bool(active.any()):
@@ -668,12 +669,12 @@ def _saturatedInit(
         eta0, w0 = y, torch.ones_like(y)
     L_rfx = _sigmaChol(sigma_rfx, L_corr)  # (b, s, q, q)
     eye = torch.eye(L_rfx.shape[-1], dtype=L_rfx.dtype, device=L_rfx.device)
-    Sigma_inv = torch.cholesky_solve(eye.expand_as(L_rfx), L_rfx)
+    Sigma_inv = choleskySolve(eye.expand_as(L_rfx), L_rfx)
     Zw = Z * (w0 * mask_n)  # (b, m, n, q)
     ZWZ = torch.einsum('bmnq,bmnr->bmqr', Zw, Z)[:, :, None] + Sigma_inv[:, None]  # (b, m, s, q, q)
     resid = eta0 - torch.einsum('bmnd,bsd->bmns', X, ffx)  # (b, m, n, s)
     rhs = torch.einsum('bmnq,bmns->bmsq', Zw, resid)
-    init = torch.cholesky_solve(rhs.unsqueeze(-1), torch.linalg.cholesky(ZWZ)).squeeze(-1)
+    init = choleskySolve(rhs.unsqueeze(-1), torch.linalg.cholesky(ZWZ)).squeeze(-1)
     return init.nan_to_num(nan=0.0, posinf=0.0, neginf=0.0)
 
 

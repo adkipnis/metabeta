@@ -107,7 +107,8 @@ def plotPPD(
     y_rep = posteriorPredictiveSample(pp, data)
     y_prior_rep = posteriorPredictiveSample(pp_prior, data) if pp_prior is not None else None
     mask_n = data['mask_n']
-    fig, axs = plt.subplots(figsize=(6 * len(indices), 6), ncols=len(indices), dpi=DPI)
+    # the default dpi on screen: savePlot applies DPI to files
+    fig, axs = plt.subplots(figsize=(6 * len(indices), 6), ncols=len(indices))
     # subplots(ncols=1) returns a bare Axes, not an array
     if len(indices) == 1:
         axs = [axs]

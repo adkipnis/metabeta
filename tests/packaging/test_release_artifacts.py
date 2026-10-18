@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 from email.parser import Parser
+import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tarfile
 import tomllib
 import zipfile
+
+from packaging.requirements import Requirement
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -70,6 +75,16 @@ REPO_ONLY_DEPS = {
     'scamd',
 }
 
+# Colab's preinstalled versions (Python 3.13); a higher floor makes pip replace them, and
+# arviz 1.x breaks Colab's pymc, which needs arviz<1
+COLAB_FLOORS = {
+    'numpy': '>=2.1.3',
+    'pandas': '>=2.2.3',
+    'scikit-learn': '>=1.6.1',
+    'matplotlib': '>=3.10.0',
+    'arviz-stats': '>=1.3.0',
+}
+
 
 def _require_artifacts() -> None:
     missing = [str(path.relative_to(ROOT)) for path in (WHEEL, SDIST) if not path.exists()]
@@ -82,6 +97,16 @@ def _metadata() -> Parser:
             name for name in wheel.namelist() if name.endswith('.dist-info/METADATA')
         )
         return Parser().parsestr(wheel.read(metadata_name).decode())
+
+
+def _notebook_cells() -> list[tuple[str, dict]]:
+    notebooks = sorted((ROOT / 'demos').glob('*.ipynb'))
+    assert notebooks, 'no notebooks under demos/'
+    return [
+        (notebook.name, cell)
+        for notebook in notebooks
+        for cell in json.loads(notebook.read_text())['cells']
+    ]
 
 
 def test_release_artifact_contents() -> None:
@@ -98,8 +123,11 @@ def test_release_artifact_contents() -> None:
         sdist_names = sdist.getnames()
     for prefix in SDIST_EXCLUDED_PREFIXES:
         assert not any(name.startswith(prefix) for name in sdist_names), prefix
-    assert f'{SDIST_ROOT}/demos/intro.ipynb' in sdist_names
-    assert f'{SDIST_ROOT}/demos/priors.ipynb' in sdist_names
+    assert f'{SDIST_ROOT}/demos/01-quickstart.ipynb' in sdist_names
+    assert f'{SDIST_ROOT}/demos/02-families.ipynb' in sdist_names
+    assert f'{SDIST_ROOT}/demos/intro.ipynb' not in sdist_names
+    assert f'{SDIST_ROOT}/demos/03-priors.ipynb' in sdist_names
+    assert f'{SDIST_ROOT}/demos/priors.ipynb' not in sdist_names
 
 
 def test_release_metadata_dependencies() -> None:
@@ -121,6 +149,51 @@ def test_release_metadata_dependencies() -> None:
         'Provides-Extra'
     )
     assert any(req.startswith('pymc') for req in research_requirements)
+
+
+def test_release_metadata_installs_next_to_colab() -> None:
+    _require_artifacts()
+
+    metadata = _metadata()
+    requirements = [Requirement(req) for req in metadata.get_all('Requires-Dist')]
+    core = {req.name: str(req.specifier) for req in requirements if req.marker is None}
+    research = {req.name for req in requirements if str(req.marker) == 'extra == "research"'}
+
+    assert metadata['Requires-Python'] == '>=3.12'
+    for name, floor in COLAB_FLOORS.items():
+        assert core.get(name) == floor, name
+    assert 'arviz' not in core
+    assert 'arviz' in research
+
+
+def test_release_metadata_license() -> None:
+    _require_artifacts()
+
+    metadata = _metadata()
+    assert metadata['License-Expression'] == 'Apache-2.0'
+    assert metadata.get_all('License-File') == ['LICENSE']
+
+
+def test_citation_version_matches_pyproject() -> None:
+    citation = yaml.safe_load((ROOT / 'CITATION.cff').read_text())
+    assert citation['version'] == VERSION
+
+
+def test_notebook_pins_match_pyproject() -> None:
+    for name, cell in _notebook_cells():
+        for pin in re.findall(r'metabeta==([^\s\'"]+)', ''.join(cell['source'])):
+            assert pin == VERSION, f'{name} pins metabeta=={pin}'
+
+
+def test_notebook_images_render_on_colab() -> None:
+    # Colab renders neither cell attachments nor images at paths relative to the notebook
+    for name, cell in _notebook_cells():
+        assert 'attachments' not in cell, f'{name} has a cell attachment'
+        source = ''.join(cell['source'])
+        images = re.findall(r'!\[[^\]]*\]\(([^)\s]+)', source)
+        images += re.findall(r'<img[^>]*\ssrc=["\']([^"\']+)', source)
+        for image in images:
+            assert image.startswith('https://'), f'{name} shows the image {image}'
 
 
 def test_release_metadata_public_surface() -> None:

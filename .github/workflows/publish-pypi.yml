@@ -1,14 +1,17 @@
-name: Publish to PyPI
+# Trusted publishing: a published GitHub release uploads its sdist and wheel to PyPI; a manual
+# run uploads them to TestPyPI instead, as the dry run. Zenodo archives the same release event on
+# its own. The PyPI and TestPyPI trusted-publisher entries name this file and the environments.
+name: Publish
 
 on:
+  release:
+    types: [published]
   workflow_dispatch:
 
 jobs:
-  publish:
+  # the build runs without the publishing token
+  build:
     runs-on: ubuntu-latest
-    environment: pypi
-    permissions:
-      id-token: write
 
     # skip the project's default-groups (research needs R on PATH for rpy2)
     env:
@@ -20,6 +23,18 @@ jobs:
 
       - name: Install uv
         uses: astral-sh/setup-uv@v10.1.0
+
+      # a release whose tag names another version stops here, before PyPI gets a mislabeled build
+      - name: Check the tag names the package version
+        if: github.event_name == 'release'
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          expected="v$(uv version --short)"
+          if [ "$TAG" != "$expected" ]; then
+            echo "::error::the tag $TAG does not name the package version $expected"
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -35,5 +50,46 @@ jobs:
       - name: Check release artifacts
         run: uv run $UV_SYNC_FLAGS pytest tests/packaging/test_release_artifacts.py
 
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist/
+
+  pypi:
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # the OIDC token PyPI exchanges for a short-lived upload token
+
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
       - name: Publish package distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+
+  testpypi:
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download release artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish package distributions to TestPyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/

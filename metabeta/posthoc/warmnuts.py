@@ -57,9 +57,11 @@ Normal, 'laplace' for GLMMs), then stacks per-dataset proposals along the
 batch dimension.
 """
 
-import argparse
+from __future__ import annotations
 
-import arviz as az
+import argparse
+from typing import TYPE_CHECKING
+
 import numpy as np
 import torch
 from torch import Tensor
@@ -68,6 +70,9 @@ from metabeta.models.approximator import Approximator
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.pymc import buildPymc, extractAll
 from metabeta.utils.results import Proposal
+
+if TYPE_CHECKING:
+    import arviz as az
 
 # Escalation thresholds shared with cache-invalidation checks (e.g. the
 # ablation harness refits cached pre-escalation fits that fail these).
@@ -481,6 +486,8 @@ class WarmNuts:
             )
 
     def _diagFromTrace(self, trace: az.InferenceData) -> dict:
+        import arviz as az
+
         n_divs = int(trace.sample_stats['diverging'].values.sum())
         n_draws_total = self.n_chains * self.draws
         try:

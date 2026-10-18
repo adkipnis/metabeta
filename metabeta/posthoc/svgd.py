@@ -57,6 +57,7 @@ from metabeta.utils.families import (
     logProbFfx,
     logProbSigma,
 )
+from metabeta.utils.linalg import choleskySolve
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.regularization import unconstrainedToCholesky
 
@@ -311,7 +312,7 @@ class SVGDRefiner:
             L_rfx = torch.diag_embed(sigma_rfx_c)
 
         eye = torch.eye(q, device=ffx.device, dtype=ffx.dtype).expand(b, s, q, q)
-        Sigma_inv = torch.cholesky_solve(eye, L_rfx)
+        Sigma_inv = choleskySolve(eye, L_rfx)
 
         s2e = sigma_eps.pow(2)
         M = Sigma_inv.unsqueeze(1) + ZtZ.unsqueeze(2) / s2e[:, None, :, None, None]
@@ -319,7 +320,7 @@ class SVGDRefiner:
         chol_M = torch.linalg.cholesky(M + jitter)
 
         rhs = Ztr / s2e[:, None, :, None]
-        rfx_mean = torch.cholesky_solve(rhs.unsqueeze(-1), chol_M).squeeze(-1)
+        rfx_mean = choleskySolve(rhs.unsqueeze(-1), chol_M).squeeze(-1)
 
         active = mask_m[:, :, None, None].float()
         z = torch.randn_like(rfx_mean)

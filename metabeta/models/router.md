@@ -128,8 +128,21 @@ Supported formula subset:
 Formula effects:
 
 - Fixed terms select and reorder columns in `X`.
+- A formula without fixed terms, e.g. `y ~ 1 + (1 | group)`, fits the intercept
+  only; without a formula, every preprocessed column is a fixed effect.
 - Random terms select and reorder columns in `Z`.
+- The networks were trained with `Z` equal to the leading columns of `X`, so the
+  model's `X` leads with the random slopes, in the random term's order, whatever
+  the formula's order. Every output (`param_names`, the summaries, the plot,
+  `scale_info`, `prior_params` and priors assigned by term name) follows the
+  formula's order; `result.batch` and `prepareData` keep the model's layout.
+- A formula no reordering can fit raises a `ValueError` naming the term: a random
+  slope missing from the fixed terms (`y ~ a + (1 + b | g)`), a random intercept
+  without a fixed one (`y ~ 0 + a + (1 | g)`), or the reverse (`y ~ a + (0 + a | g)`).
 - Categorical term names can match all dummy columns by prefix.
+- On a `DataFrame` with a formula, a freshly fitted preprocessor sees only the
+  target, the columns the terms name and the group column. Output names keep the
+  `DataFrame`'s spelling.
 
 Formula TODO:
 

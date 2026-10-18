@@ -12,7 +12,13 @@ from typing import Any
 import numpy as np
 import torch
 
-from metabeta.utils.constants import FFX_FAMILIES, LIKELIHOOD_FAMILIES, SIGMA_FAMILIES, hasSigmaEps
+from metabeta.utils.constants import (
+    FFX_FAMILIES,
+    LIKELIHOOD_FAMILIES,
+    LIKELIHOOD_NAME_TO_ID,
+    SIGMA_FAMILIES,
+    hasSigmaEps,
+)
 from metabeta.utils.experiments import CHECKPOINT_DIR
 from metabeta.utils.priors import bambiDefaultPriors
 
@@ -20,6 +26,31 @@ from metabeta.utils.priors import bambiDefaultPriors
 JOINT_CHECKPOINT_VERSION = 1
 DEFAULT_CHECKPOINT_PREFIXES = ('best', 'latest')
 MAX_ROUTER_Q = 5
+# lme4 syntax outside the networks' design: the error names it instead of misparsing it
+UNSUPPORTED_SYNTAX = (
+    (
+        r'\([^()|]*\|\|[^()]*\)',
+        'uncorrelated random effects are not supported; write (1 + x | g), which estimates '
+        'their correlation',
+    ),
+    (
+        r'\([^()|]*\|[^()]*[/:][^()]*\)',
+        'nested or crossed grouping factors are not supported; metabeta fits one grouping factor',
+    ),
+    (
+        r'[\w.]+\s*[:*]\s*[\w.]+',
+        'interactions are not supported. For a numeric interaction, center both columns and add '
+        "their product as its own column, e.g. df['a_b'] = (df['a'] - df['a'].mean()) * "
+        "(df['b'] - df['b'].mean()), then name a_b as a fixed term. Centering keeps the product "
+        'from being nearly collinear with a or b, which would drop one of them; its coefficient '
+        "is the interaction, and each main effect is the slope at the other column's mean",
+    ),
+    (
+        r'[A-Za-z_][\w.]*\([^()]*\)',
+        'function calls are not supported; transform the column in the DataFrame and name the '
+        'new column (for factor() or C(), convert it to strings, which are dummy-coded)',
+    ),
+)
 
 ROUTING_KEYS = (
     'likelihood_family',
@@ -45,7 +76,6 @@ Y_TYPE_TO_LIKELIHOOD = {
     'count': 2,
 }
 
-LIKELIHOOD_NAME_TO_ID = {name: i for i, name in enumerate(LIKELIHOOD_FAMILIES)}
 FFX_FAMILY_NAME_TO_ID = {name: i for i, name in enumerate(FFX_FAMILIES)}
 SIGMA_FAMILY_NAME_TO_ID = {name: i for i, name in enumerate(SIGMA_FAMILIES)}
 
@@ -87,6 +117,10 @@ class ScaleInfo:
     to_original_scale() converts to:
       ffx[0]: expected y at X=0  (comparable to lme4/statsmodels intercept)
       ffx[j]: Δy per one unit of predictor j
+
+    The random effects get the same map: a random slope on predictor j is divided by its SD
+    s_j, and the random intercept moves to x = 0 by subtracting Σ_j μ_j b_j / s_j, so per draw
+    b ↦ A b and Σ ↦ A Σ Aᵀ.
     """
 
     y_mean: float
@@ -94,6 +128,7 @@ class ScaleInfo:
     x_means: np.ndarray  # shape (d,) — 0.0 for intercept column
     x_stds: np.ndarray  # shape (d,) — 1.0 for intercept and dummy columns
     param_names: list[str]
+    random_names: list[str]  # 'Intercept' or a name in param_names, in the random-effect order
     has_intercept: bool = True
 
     def to_original_scale(self, ffx: torch.Tensor) -> torch.Tensor:
@@ -118,6 +153,66 @@ class ScaleInfo:
         if ffx.shape[-1] > d:
             return torch.cat([active_orig, ffx[..., d:]], dim=-1)
         return active_orig
+
+    def ffxPriorToOriginal(
+        self, loc: np.ndarray, scale: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Location and scale (d,) in original y/X units of independent fixed-effect priors with
+        ``loc`` and ``scale`` (d,) on the standardized (★) scale.
+
+        The map of to_original_scale is linear, so locations map exactly and scales add in
+        quadrature: for normal priors these are each marginal's mean and SD. The intercept at
+        X = 0 collects every slope on a predictor with a nonzero mean, so it is wider than the
+        intercept prior at the predictors' means.
+        """
+        loc_out = np.asarray(loc, dtype=float) * self.y_std / self.x_stds  # (d,)
+        scale_out = np.asarray(scale, dtype=float) * self.y_std / self.x_stds  # (d,)
+        if self.has_intercept:
+            coef = -np.asarray(self.x_means, dtype=float)  # intercept = coef · slopes + y_mean
+            coef[0] += 1.0
+            loc_out[0] = coef @ loc_out + self.y_mean
+            scale_out[0] = np.sqrt((coef**2) @ (scale_out**2))
+        return loc_out, scale_out
+
+    def rfxMap(self) -> np.ndarray:
+        """A (q, q), mapping the centered, standardized random-effect basis to the original."""
+        q = len(self.random_names)
+        A = np.eye(q)
+        for k, name in enumerate(self.random_names):
+            if name == 'Intercept':
+                continue
+            j = self.param_names.index(name)
+            A[k, k] = 1.0 / self.x_stds[j]
+            if 'Intercept' in self.random_names:
+                A[self.random_names.index('Intercept'), k] = -self.x_means[j] / self.x_stds[j]
+        return A
+
+    def rfxToOriginal(self, rfx: torch.Tensor) -> torch.Tensor:
+        """Per-group effects (..., q_padded) ↦ A b; padding columns are returned unchanged."""
+        q = len(self.random_names)
+        A = torch.tensor(self.rfxMap(), dtype=rfx.dtype, device=rfx.device)
+        return torch.cat([rfx[..., :q] @ A.T, rfx[..., q:]], dim=-1)
+
+    def sdCorrToOriginal(
+        self, sigma: torch.Tensor, corr: torch.Tensor | None
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """SDs (..., q_padded) and correlations (..., q_padded, q_padded) of the random effects
+        ↦ those of A Σ Aᵀ; padding entries are returned unchanged. A model with a single random
+        effect has no correlations (None)."""
+        q = len(self.random_names)
+        A = torch.tensor(self.rfxMap(), dtype=torch.float64, device=sigma.device)
+        sd = sigma[..., :q].double()
+        R = sd.new_ones(1, 1) if corr is None else corr[..., :q, :q].double()
+        cov = sd.unsqueeze(-1) * R * sd.unsqueeze(-2)  # (..., q, q)
+        cov = A @ cov @ A.T
+        sd_orig = cov.diagonal(dim1=-2, dim2=-1).sqrt()  # (..., q)
+        corr_orig = cov / (sd_orig.unsqueeze(-1) * sd_orig.unsqueeze(-2))
+        sigma_out = torch.cat([sd_orig.to(sigma.dtype), sigma[..., q:]], dim=-1)
+        if corr is None:
+            return sigma_out, None
+        corr_out = corr.clone()
+        corr_out[..., :q, :q] = corr_orig.to(corr.dtype)
+        return sigma_out, corr_out
 
 
 def routeValue(entry: Mapping[str, Any], key: str) -> Any:
@@ -154,6 +249,9 @@ def parseFormula(formula: str | None) -> FormulaSpec:
     target = lhs.strip().lower()
     if not target:
         raise ValueError('formula target is empty')
+    for pattern, hint in UNSUPPORTED_SYNTAX:
+        if found := re.search(pattern, rhs):
+            raise NotImplementedError(f'unsupported formula syntax {found.group(0)}: {hint}')
 
     random_matches = re.findall(r'\(([^|]+)\|([^)]+)\)', rhs)
     if len(random_matches) > 1:
@@ -209,9 +307,6 @@ def defaultRandomTerms(q: int, columns: Sequence[str]) -> tuple[str, ...]:
 
 
 def resolveFixedIndices(terms: Sequence[str], columns: Sequence[str]) -> list[int]:
-    if not terms:
-        return list(range(len(columns)))
-
     out: list[int] = []
     seen: set[int] = set()
     for term in terms:
@@ -235,6 +330,23 @@ def resolveColumnTerm(term: str, columns: Sequence[str]) -> list[int]:
         return prefixed
 
     raise KeyError(f'formula term not found in preprocessed columns: {term}')
+
+
+def restoreColumnCase(columns: Sequence[str], raw_columns: Sequence[str]) -> list[str]:
+    """Spell preprocessed column names as the DataFrame did.
+
+    DataPreprocessor lowercases names, and a one-hot dummy is '{column}_{level}', so each
+    name is a raw column or starts with one and '_'; the longest such column is its stem.
+    """
+    spelling = {str(c).lower(): str(c) for c in raw_columns}
+    stems = sorted(spelling, key=len, reverse=True)
+    restored = []
+    for column in columns:
+        stem = column
+        if stem not in spelling:
+            stem = next(s for s in stems if column.startswith(f'{s}_'))
+        restored.append(spelling[stem] + column[len(stem) :])
+    return restored
 
 
 def buildRandomDesign(

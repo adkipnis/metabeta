@@ -18,6 +18,7 @@ from metabeta.utils.constants import (
     hasSigmaEps,
     bambiFamilyName,
 )
+from metabeta.utils.linalg import choleskySolve
 from metabeta.utils.preprocessing import standardize
 from metabeta.utils.regularization import unconstrainedToCholesky
 
@@ -522,7 +523,7 @@ def logMarginalLikelihoodNormal(
         q = L_corr.shape[-1]
         L_Sigma = sigma_rfx.unsqueeze(-1) * L_corr                  # (b, s, q, q): D @ L_corr
         eye = torch.eye(q, dtype=L_Sigma.dtype, device=L_Sigma.device)
-        Sigma_inv = torch.cholesky_solve(eye.expand_as(L_Sigma), L_Sigma)
+        Sigma_inv = choleskySolve(eye.expand_as(L_Sigma), L_Sigma)
         diag_corr = L_corr.diagonal(dim1=-2, dim2=-1).clamp(min=1e-8)
         log_det_Sigma = 2.0 * (sigma_rfx.log() + diag_corr.log()).sum(-1)
 
@@ -539,7 +540,7 @@ def logMarginalLikelihoodNormal(
     log_det_M = torch.where(chol_ok, log_det_M, log_det_M.new_tensor(torch.inf))
 
     # h^T M^{-1} h via Cholesky solve
-    M_inv_h = torch.cholesky_solve(h.unsqueeze(-1), chol_M).squeeze(-1)  # (b, m, s, q)
+    M_inv_h = choleskySolve(h.unsqueeze(-1), chol_M).squeeze(-1)  # (b, m, s, q)
     hMh = (h * M_inv_h).sum(-1)                                    # (b, m, s)
 
     # log det V_i = log det M_i + log det Σ_rfx + n_i log σ²_eps
@@ -650,7 +651,7 @@ def sampleRfxConditionalNormal(
     # Σ_rfx⁻¹ via Cholesky solve
     q = L_rfx.shape[-1]
     eye = torch.eye(q, device=L_rfx.device, dtype=L_rfx.dtype)
-    Sigma_inv = torch.cholesky_solve(eye.expand_as(L_rfx), L_rfx)  # (b, s, q, q)
+    Sigma_inv = choleskySolve(eye.expand_as(L_rfx), L_rfx)  # (b, s, q, q)
 
     # M = Σ_rfx⁻¹ + ZᵀZ / σ²_eps  (b, m, s, q, q) — posterior precision
     s2e = sigma_eps.pow(2)  # (b, s)
@@ -665,7 +666,7 @@ def sampleRfxConditionalNormal(
     rhs = Ztr / s2e[:, None, :, None]  # (b, m, s, q)
     if degenerate.any():
         rhs = torch.where(degenerate[..., None], torch.zeros_like(rhs), rhs)
-    post_mean = torch.cholesky_solve(rhs.unsqueeze(-1), chol_M).squeeze(-1)  # (b, m, s, q)
+    post_mean = choleskySolve(rhs.unsqueeze(-1), chol_M).squeeze(-1)  # (b, m, s, q)
 
     # Sample: rfx = μ + chol_M⁻ᵀ z  where z ~ N(0, I)
     # chol_M is Chol(V⁻¹), so Chol(V) = chol_M⁻ᵀ (upper-triangular solve)

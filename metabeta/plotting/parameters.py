@@ -97,7 +97,7 @@ def plotParameters(
     """
 
     def _active_samples(prop: Proposal, idx: int) -> np.ndarray:
-        x = prop.samples_g[idx].numpy()
+        x = prop.samples_g[idx].cpu().numpy()
         if d_active is None and q_active is None:
             return x
         _d = d_active if d_active is not None else prop.d
@@ -116,7 +116,7 @@ def plotParameters(
     _q_c = q_active if q_active is not None else proposal.q
     _n_corr = 0
     if show_corr and proposal.corr_rfx is not None and _q_c >= 2:
-        corr_mat = proposal.corr_rfx[index].numpy()  # (S, q, q)
+        corr_mat = proposal.corr_rfx[index].cpu().numpy()  # (S, q, q)
         corr_cols = np.stack([corr_mat[:, i, j] for i in range(_q_c) for j in range(i)], axis=1)
         x = np.concatenate([x, corr_cols], axis=1)
         _n_corr = _q_c * (_q_c - 1) // 2

@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import contextlib
 import math
 import operator
-import sys
+import os
 import warnings
 
 import numpy as np
@@ -16,6 +17,7 @@ import pandas as pd
 import torch
 from tabulate import tabulate
 
+import metabeta
 from metabeta.datasets.preprocessor import DataPreprocessor, PreprocessReport
 from metabeta.evaluation import predictive as _predictive
 from metabeta.models.approximator import Approximator
@@ -29,7 +31,7 @@ from metabeta.posthoc.metropolis import (
     suggestPoolSize,
 )
 from metabeta.utils.config import ApproximatorConfig
-from metabeta.utils.constants import hasSigmaEps
+from metabeta.utils.constants import LIKELIHOOD_FAMILIES, hasSigmaEps
 from metabeta.utils.dataloader import (
     Dataloader,
     collateGrouped,
@@ -54,6 +56,7 @@ from metabeta.utils.api import (
     resolveFixedIndices,
     resolveLikelihoodFamily,
     resolvePriors,
+    restoreColumnCase,
     routeValue,
     routingSortKey,
     returnPreparedStage,
@@ -103,6 +106,9 @@ RANDOM_WALK_DEFAULT = {
     'cpu': LocalMoves(n_inner=2, gate_ess=IMH_ESS_WARN),
     'cuda': LocalMoves(n_chains=500, n_inner=4, gate_ess=IMH_ESS_WARN),
 }
+# warnings point at the user's call, the first frame outside metabeta and torch (torch's no_grad
+# wrapper sits between Api.sample and its caller)
+INTERNAL_PREFIXES = tuple(str(Path(m.__file__).parent) + os.sep for m in (metabeta, torch))
 
 
 def mapZScores(
@@ -163,12 +169,15 @@ class RouterResult:
 class Api:
     """Route dataloader-formatted datasets through a joint checkpoint.
 
-    Models are instantiated lazily when their first compatible batch is run.
+    Models are instantiated lazily when their first compatible batch is run, or all at
+    construction with ``warmup=True``.
 
     Tabular inputs are normalized through explicit stages: dataframe/parquet,
     preprocessed numpy dict, model dataset dict, then collated dataloader batch.
     Formula support is intentionally narrow and currently covers additive fixed
-    terms plus one lme4-style random-effect term.
+    terms plus one lme4-style random-effect term.  A categorical column enters as one
+    indicator per level except its most frequent level, the reference; R's
+    ``contr.treatment`` takes the first level instead.
     """
 
     @classmethod
@@ -188,14 +197,26 @@ class Api:
         Downloads and caches the checkpoint automatically on first call.
         Subsequent calls reuse the cache unless the upstream tag has moved.
 
+        Pretrained weights, downloaded by ``from_pretrained``: CC BY-NC-SA 4.0, non-commercial.
+
         Parameters
         ----------
         family:
-            Likelihood family — ``"normal"``, ``"bernoulli"``, or ``"poisson"``.
+            Likelihood family — ``"gaussian"`` (or ``"normal"``), ``"bernoulli"``, or
+            ``"poisson"``, in any case.
         cache_dir:
             Override the default HF Hub cache (``~/.cache/huggingface/hub``).
         force_download:
             Re-download even if a cached copy exists.
+        device:
+            Torch device the models run on, e.g. ``"cuda"`` for a GPU.
+        batch_size:
+            Number of datasets ``sample`` refines at a time; ``None`` refines them all at
+            once.  Lower it if many large datasets run out of memory.
+        warmup:
+            Build every submodel and run one discarded sampling pass on dummy data while
+            loading, so the first ``sample`` call is as fast as later ones.  ``False`` loads
+            faster and moves that cost to the first call.
         verbose:
             Print concise checkpoint download/load status messages.
         """
@@ -208,10 +229,10 @@ class Api:
             verbose=verbose,
         )
         if verbose:
-            print(f'Loading metabeta checkpoint on {device}...', file=sys.stderr, flush=True)
+            print(f'Loading metabeta checkpoint on {device}...', flush=True)
         api = cls(path, device=device, batch_size=batch_size, warmup=warmup)
         if verbose:
-            print('Metabeta checkpoint ready.', file=sys.stderr, flush=True)
+            print('Metabeta checkpoint ready.', flush=True)
         return api
 
     def __init__(
@@ -241,8 +262,11 @@ class Api:
         self._models: dict[str, Approximator] = {}
 
         if warmup:
+            # the first call's cost is paid once per process, not per submodel, so one pass on
+            # the smallest submodel suffices; building the others spares their first batch (#19)
+            self._warmupSubmodel(self.submodels[0])
             for entry in self.submodels:
-                self._warmupSubmodel(entry)
+                self.model(str(entry['id']))
 
     def model(self, submodel_id: str) -> Approximator:
         """Return the lazily instantiated model for ``submodel_id``."""
@@ -363,22 +387,25 @@ class Api:
         self,
         data: Any,
         *,
-        n_samples: int = 1,
-        diagnostics: bool = False,
+        n_samples: int = 1000,
+        loo: bool = False,
         refine: bool | str = True,
         k_threshold: float = PSIS_K_THRESHOLD,
         map_z_threshold: float = MAP_Z_THRESHOLD,
         random_walk: LocalMoves | bool = False,
         evidence: bool = False,
+        seed: int | None = None,
+        diagnostics: bool | None = None,  # deprecated alias of loo, removed in 0.7
         **prepare_kwargs: Any,
     ) -> RouterResult:
         """Sample from the posterior, routing each dataset to the smallest compatible submodel.
 
         By default (``refine=True``, i.e. ``refine='imh'``) the flow posterior is refined
         by Independence Metropolis-Hastings: the flow serves as the proposal of a Markov
-        chain targeting the exact rfx-marginalized posterior (Normal) or its Laplace
-        approximation (GLMMs), so the chain's stationary distribution does not depend on
-        flow accuracy.  Both refinements redraw the rfx from their conditional at the
+        chain targeting the exact rfx-marginalized posterior, in closed form (Normal) or
+        through unbiased importance-sampling estimates of the marginal likelihood with a
+        Laplace proposal (GLMMs, a pseudo-marginal chain), so the chain's stationary distribution does not
+        depend on flow accuracy.  Both refinements redraw the rfx from their conditional at the
         accepted (or weighted) globals, so the local posterior network is not run at all:
         its cost is skipped and the analytical rfx estimate seeds the Laplace mode search
         instead (only the raw flow, ``refine=False``, samples it).  The proposal pool is
@@ -389,12 +416,13 @@ class Api:
         reported in ``RouterResult.safeguards``; datasets with mean acceptance below
         ``IMH_ACCEPT_WARN`` trigger a warning recommending the suggested size or exact
         MCMC.  The IMH can only revisit pool members, so where the flow lacks tail mass its
-        chains repeat few states and the refined sample can be too narrow, which more draws do
-        not fix; datasets whose minimum bulk ESS over the global parameters falls below
+        chains repeat few states and the refined sample can be too narrow until n_samples is large;
+        datasets whose minimum bulk ESS over the global parameters falls below
         ``IMH_ESS_WARN`` are flagged with a warning.  ``random_walk=True`` continues the IMH
         on the flagged datasets with pseudo-marginal random-walk moves on the same target
-        (posthoc/metropolis.py, ``LocalMoves``; ``RANDOM_WALK_DEFAULT``, by device); below
-        ``IMH_ESS_NUTS`` they may not repair it fully, and exact MCMC is recommended there.  A
+        (posthoc/metropolis.py, ``LocalMoves``; ``RANDOM_WALK_DEFAULT``, by device) instead of
+        warning; below ``IMH_ESS_NUTS`` they may not repair it fully, and a warning recommends
+        exact MCMC there.  A
         ``LocalMoves`` instance sets them, and its own gate, explicitly.  Per dataset, the safeguards record
         the flag ('ess_flag'), whether the moves ran ('random_walk_ran') and their acceptance
         ('random_walk_accept', NaN where they did not run).
@@ -412,14 +440,30 @@ class Api:
         ``map_z_threshold`` trigger a warning.  All checks are reported in
         ``RouterResult.safeguards``.
 
+        Every call also stores the posterior predictive and a fit metric (R², AUC or deviance)
+        in ``RouterResult.diagnostics``.  ``loo=True`` adds the PSIS-LOO NLL and its Pareto k̂,
+        which cost about as much as the rest of the diagnostics together.
+
         ``evidence=True`` also returns each dataset's log marginal likelihood log p(y) on the raw
         response scale in ``RouterResult.evidence``; the log Bayes factor between two models of
         the same data is the difference of their ``log_evidence``.  It costs one more likelihood
         pass (posthoc/evidence.py), needs ``n_samples >= MIN_SAFEGUARD_SAMPLES`` and warns where
         the PSIS k̂ of that pass or, with refinement, of the flow pool's weights exceeds
         ``k_threshold``.
+
+        ``seed`` seeds torch for this call only: two calls with one seed return the same draws,
+        as after ``torch.manual_seed(seed)``, and the caller's CPU and CUDA random streams stay
+        as they were.
         """
 
+        if diagnostics is not None:
+            warnings.warn(
+                'diagnostics= is deprecated and will be removed in 0.7: every call now computes '
+                'the fit metric, and loo=True adds the LOO-NLL.',
+                FutureWarning,
+                skip_file_prefixes=INTERNAL_PREFIXES,
+            )
+            loo = loo or diagnostics
         method = {True: 'imh', False: None}.get(refine, refine)
         if method not in (None, 'imh', 'is'):
             raise ValueError(f"refine must be True, False, 'imh' or 'is' (got {refine!r})")
@@ -436,6 +480,7 @@ class Api:
         self._param_names: dict[str, list[str]] | None = None
         self._scale_info: 'ScaleInfo | None' = None
         self._group_labels: list[str] | None = None
+        self._ffx_order: list[int] | None = None
         batch = self.prepareData(data, **prepare_kwargs)
         if not isinstance(batch, dict) or not isCollatedBatch(batch):
             raise TypeError('sample requires data prepared to batch stage')
@@ -448,25 +493,26 @@ class Api:
         pool = n_samples
         if do_refine and method == 'imh':
             pool = IMH_N_CHAINS * (math.ceil(n_samples / IMH_N_CHAINS) + IMH_BURNIN)
-        proposal, stats = self._runRouted(batch, routes, n_samples=pool, local=not do_refine)
-        safeguards: dict[str, Any] | None = None
-        if do_refine:
-            proposal, safeguards = self._refineAndCheck(
-                proposal,
-                batch,
-                method=method,
-                k_threshold=k_threshold,
-                n_samples=n_samples,
-                moves=moves,
-            )
-        log_ev = None
-        if evidence:
-            pool_k = safeguards['psis_k'] if safeguards else None
-            log_ev = self._evidence(proposal, batch, k_threshold=k_threshold, pool_k=pool_k)
-        if stats is not None and n_samples >= MIN_SAFEGUARD_SAMPLES:
-            map_check = self._mapConsistency(proposal, stats, batch, threshold=map_z_threshold)
-            safeguards = {**(safeguards or {}), **map_check}
-        diags = self._computeDiagnostics(proposal, batch) if diagnostics else None
+        with _seeded(seed):
+            proposal, stats = self._runRouted(batch, routes, n_samples=pool, local=not do_refine)
+            safeguards: dict[str, Any] | None = None
+            if do_refine:
+                proposal, safeguards = self._refineAndCheck(
+                    proposal,
+                    batch,
+                    method=method,
+                    k_threshold=k_threshold,
+                    n_samples=n_samples,
+                    moves=moves,
+                )
+            log_ev = None
+            if evidence:
+                pool_k = safeguards['psis_k'] if safeguards else None
+                log_ev = self._evidence(proposal, batch, k_threshold=k_threshold, pool_k=pool_k)
+            if stats is not None and n_samples >= MIN_SAFEGUARD_SAMPLES:
+                map_check = self._mapConsistency(proposal, stats, batch, threshold=map_z_threshold)
+                safeguards = {**(safeguards or {}), **map_check}
+            diags = self._computeDiagnostics(proposal, batch, loo=loo)
         self._rescaleProposal(proposal, batch)
         prior_params: dict[str, np.ndarray] = {
             key: batch[key].float().cpu().numpy()
@@ -476,6 +522,7 @@ class Api:
         for key in ('family_ffx', 'family_sigma_rfx', 'family_sigma_eps'):
             if key in batch:
                 prior_params[key] = batch[key].long().cpu().numpy()
+        self._restoreFixedOrder(proposal, prior_params, diags, safeguards)
         ns_arr = batch['ns'].cpu().numpy() if 'ns' in batch else None
         return RouterResult(
             proposal=proposal,
@@ -488,14 +535,54 @@ class Api:
             group_names=self._group_labels,
             prior_params=prior_params or None,
             scale_info=self._scale_info,
-            batch=batch if diagnostics else None,
+            batch=batch,
             ns=ns_arr,
             safeguards=safeguards,
             evidence=log_ev,
         )
 
+    def _restoreFixedOrder(
+        self,
+        proposal: Proposal,
+        prior_params: dict[str, np.ndarray],
+        diags: dict[str, Any],
+        safeguards: dict[str, Any] | None,
+    ) -> None:
+        """Permute the fixed-effect columns from the model's layout (random slopes first) back
+        to the user's formula order. Padding columns stay in place, and ``result.batch`` keeps
+        the model's layout."""
+        order = self._ffx_order
+        if order is None or order == sorted(order):
+            return
+
+        def lead(n: int) -> list[int]:
+            return order + list(range(len(order), n))
+
+        g = proposal.samples_g
+        d = proposal.d
+        proposal.data['global']['samples'] = torch.cat([g[..., lead(d)], g[..., d:]], dim=-1)
+        for key in ('tau_ffx', 'nu_ffx'):
+            if key in prior_params:
+                prior_params[key] = prior_params[key][:, lead(prior_params[key].shape[1])]
+        if safeguards is not None and 'ess' in safeguards:  # (B, D_g), ffx columns first
+            safeguards['ess'] = safeguards['ess'][:, lead(safeguards['ess'].shape[1])]
+        if 'param_summary' in diags:
+            summary = diags['param_summary']['ffx']
+            diags['param_summary']['ffx'] = {
+                k: v[..., lead(v.shape[-1])] for k, v in summary.items()
+            }
+
+    @staticmethod
+    def _dummyResponse(family: int | None, n: int, rng: np.random.Generator) -> np.ndarray:
+        """``n`` responses the family's checkpoint accepts: 0/1, counts, else Gaussian."""
+        if family == 1:
+            return rng.integers(0, 2, size=n).astype(float)
+        if family == 2:
+            return rng.integers(0, 10, size=n).astype(float)
+        return rng.standard_normal(n)
+
     def _warmupSubmodel(self, entry: dict) -> None:
-        """Run one forward pass through a specific submodel using minimal dummy data."""
+        """Warm the default sampling path on minimal dummy data routed to ``entry``."""
         r = entry.get('routing', {})
         d = max(int(r.get('min_d', 1)), 2)  # at least intercept + one covariate
         q = int(r.get('min_q', 1))
@@ -507,13 +594,7 @@ class Api:
         n = min_m * min_n
 
         rng = np.random.default_rng(0)
-        dummy: dict[str, Any] = {}
-        if fam == 1:
-            dummy['_y'] = rng.integers(0, 2, size=n).astype(float)
-        elif fam == 2:
-            dummy['_y'] = rng.integers(0, 10, size=n).astype(float)
-        else:
-            dummy['_y'] = rng.standard_normal(n)
+        dummy: dict[str, Any] = {'_y': self._dummyResponse(fam, n, rng)}
         for j in range(d - 1):
             dummy[f'_x{j}'] = rng.standard_normal(n)
         dummy['_g'] = np.repeat(np.arange(min_m), min_n)
@@ -522,20 +603,15 @@ class Api:
         rfx_slopes = (' + ' + ' + '.join(f'_x{j}' for j in range(q - 1))) if q > 1 else ''
         formula = f'_y ~ {fixed} + (1{rfx_slopes} | _g)'
 
-        self.sample(
-            pd.DataFrame(dummy),
-            formula=formula,
-            n_samples=1,
-            diagnostics=False,
-            likelihood_family=fam,
-        )
+        self.warmup(pd.DataFrame(dummy), formula=formula, likelihood_family=fam)
 
     def warmup(self, data: Any = None, **prepare_kwargs: Any) -> None:
-        """Prime PyTorch's kernel cache with a single-sample forward pass.
+        """Run the default sampling path once, IMH at ``MIN_SAFEGUARD_SAMPLES`` draws, so the
+        first real call is as fast as later ones.  Its draws and warnings are discarded.
 
-        By default all submodels are warmed automatically at ``__init__`` time
-        (``warmup=True``).  Call this explicitly only if ``warmup=False`` was
-        passed or you want to warm a specific submodel with a real DataFrame.
+        ``warmup=True`` (the default) does this at ``__init__`` time; the cost it removes is
+        paid once per process, so one pass serves every submodel.  Call this explicitly only
+        if ``warmup=False`` was passed.
 
         ``data`` is optional when ``formula`` is passed as a keyword argument:
         a minimal dummy DataFrame is generated automatically from the formula
@@ -569,15 +645,16 @@ class Api:
             n = min_m * min_n
             dummy: dict[str, Any] = {}
             if spec.target:
-                dummy[spec.target] = (
-                    rng.integers(0, 2, size=n).astype(float) if fam == 1 else rng.standard_normal(n)
-                )
+                dummy[spec.target] = self._dummyResponse(fam, n, rng)
             for term in spec.fixed_terms:
                 dummy[term] = rng.standard_normal(n)
             if spec.group_name:
                 dummy[spec.group_name] = np.repeat(np.arange(min_m), min_n)
             data = pd.DataFrame(dummy)
-        self.sample(data, n_samples=1, diagnostics=False, **prepare_kwargs)
+        # the draws are discarded, and so are the warnings about them
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            self.sample(data, n_samples=MIN_SAFEGUARD_SAMPLES, **prepare_kwargs)
 
     @torch.no_grad()
     def forward(self, data: Any, **prepare_kwargs: Any) -> RouterResult:
@@ -644,21 +721,12 @@ class Api:
         )
 
     def _computeDiagnostics(
-        self, proposal: Proposal, batch: dict[str, torch.Tensor]
+        self, proposal: Proposal, batch: dict[str, torch.Tensor], *, loo: bool
     ) -> dict[str, Any]:
         lf = int(batch['likelihood_family'].flatten()[0].item())
         pp = _predictive.getPosteriorPredictive(proposal, batch, likelihood_family=lf)
-        log_p = pp.log_prob(batch['y'].unsqueeze(-1))  # (B, m, n, S)
-        ppc_nll = _predictive.posteriorPredictiveNLL(pp, batch, mode='mixture', log_p=log_p)
-        loo_nll_vals, pareto_k_vals = _predictive.psisLooNLL(
-            pp, batch, w=proposal.weights, reff=proposal.reff, log_p=log_p
-        )
 
         b = int(batch['X'].shape[0])
-        agg = (lambda t: t.item()) if b == 1 else (lambda t: t.mean().item())
-        loo_nll = agg(loo_nll_vals)
-        pareto_k = agg(pareto_k_vals)
-
         if lf == 0:
             vals = _predictive.posteriorPredictiveR2(pp, batch, w=proposal.weights)
             fit = vals.item() if b == 1 else vals.mean().item()
@@ -671,6 +739,16 @@ class Api:
             vals = _predictive.posteriorPredictiveDeviance(pp, batch, w=proposal.weights)
             fit = vals.item() if b == 1 else vals.mean().item()
             fit_label = 'Deviance' if b == 1 else 'Mean Deviance'
+        diags = {'fit': fit, 'fit_vals': vals, 'fit_label': fit_label, 'pp': pp}
+        if not loo:
+            return diags
+
+        # PSIS over every observation, the costly part, and the rest of what diagnostics=True gave
+        log_p = pp.log_prob(batch['y'].unsqueeze(-1))  # (B, m, n, S)
+        ppc_nll = _predictive.posteriorPredictiveNLL(pp, batch, mode='mixture', log_p=log_p)
+        loo_nll_vals, pareto_k_vals = _predictive.psisLooNLL(
+            pp, batch, w=proposal.weights, reff=proposal.reff, log_p=log_p
+        )
 
         def _summarize(samples: torch.Tensor, dim: int) -> dict[str, torch.Tensor]:
             s = samples.float()
@@ -687,18 +765,14 @@ class Api:
         }
         if proposal.has_sigma_eps:
             param_summary['sigma_eps'] = _summarize(proposal.sigma_eps, dim=-1)
-
-        return {
+        agg = (lambda t: t.item()) if b == 1 else (lambda t: t.mean().item())
+        return diags | {
             'ppc_nll': ppc_nll,
             'param_summary': param_summary,
-            'fit': fit,
-            'fit_vals': vals,
-            'fit_label': fit_label,
-            'loo_nll': loo_nll,
+            'loo_nll': agg(loo_nll_vals),
             'loo_nll_vals': loo_nll_vals,
-            'pareto_k': pareto_k,
+            'pareto_k': agg(pareto_k_vals),
             'pareto_k_vals': pareto_k_vals,
-            'pp': pp,
         }
 
     def _validateParameterKeys(self, batch: Mapping[str, Any]) -> None:
@@ -787,9 +861,11 @@ class Api:
     ) -> tuple[Proposal, dict[str, Any]]:
         """Refine the flow posterior ('imh' or 'is') and run the reliability checks.
 
-        Both methods share the same target: the exact rfx-marginalized posterior
-        (Normal) or its Laplace approximation (GLMMs), with rfx redrawn from the
-        matching conditional so the delivered draws form a consistent joint sample.
+        Both methods target the exact rfx-marginalized posterior for Normal. For GLMMs, 'imh'
+        targets the exact posterior through a pseudo-marginal chain on unbiased IS² estimates
+        of the marginal likelihood, and 'is' targets its Laplace approximation. Each redraws
+        the rfx from the matching conditional, so the delivered draws form a consistent joint
+        sample.
 
         'imh' (default) runs Independence Metropolis-Hastings with the flow pool as
         proposals: asymptotically exact in the pool size, no weight-degeneracy failure
@@ -861,7 +937,7 @@ class Api:
                 'inaccurate and the importance correction is not applicable, so the raw '
                 'posterior was returned there. Treat those results with caution and '
                 'consider exact MCMC (e.g. NUTS) instead.',
-                stacklevel=3,
+                skip_file_prefixes=INTERNAL_PREFIXES,
             )
         return proposal, {
             'refine_method': 'isMarginal' if lf == 0 else 'isLaplace',
@@ -924,44 +1000,47 @@ class Api:
         a_bar = accept.mean(dim=1)
         suggested = suggestPoolSize(accept)
         flag = (a_bar < IMH_ACCEPT_WARN).cpu().numpy()
-        if flag.any():
-            flagged = np.flatnonzero(flag)
+        ess_flag = ess_min < IMH_ESS_WARN
+        # where the random-walk moves ran, they continued the chains these two warnings describe
+        flagged = np.flatnonzero(flag & ~ran)
+        if flagged.size:
             a_vals = ', '.join(f'{a_bar[i]:.2f}' for i in flagged)
             s_vals = ', '.join(f'{int(suggested[i])}' for i in flagged)
+            respectively = ' (respectively)' if flagged.size > 1 else ''
             warnings.warn(
-                f'IMH acceptance is low for dataset(s) {flagged.tolist()} '
-                f'(mean acceptance {a_vals} < {IMH_ACCEPT_WARN:g}): the flow-posterior '
-                f'gap is large there and the refined sample may be under-dispersed. '
-                f'Re-run with n_samples of at least {s_vals} (respectively), or use '
-                'exact MCMC (e.g. NUTS) instead.',
-                stacklevel=4,
+                f'Low IMH acceptance for dataset(s) {flagged.tolist()}: {a_vals} < '
+                f'{IMH_ACCEPT_WARN:g}.\n'
+                'The network is far from the posterior, so the intervals can be too narrow. '
+                'Remedies, in order:\n'
+                f'  1. more draws: n_samples of at least {s_vals}{respectively}\n'
+                '  2. exact MCMC, e.g. NUTS',
+                skip_file_prefixes=INTERNAL_PREFIXES,
             )
-        ess_flag = ess_min < IMH_ESS_WARN
-        if ess_flag.any():
-            flagged = np.flatnonzero(ess_flag)
+        flagged = np.flatnonzero(ess_flag & ~ran)
+        if flagged.size:
             e_vals = ', '.join(f'{ess_min[i]:.0f}' for i in flagged)
-            todo, low = flagged[~ran[flagged]], flagged[ess_min[flagged] < IMH_ESS_NUTS]
-            advice = ''
-            if todo.size:
-                advice += (
-                    f'Re-run with random_walk=True to continue the IMH on {todo.tolist()} with '
-                    'random-walk moves on the same target, or use exact MCMC (e.g. NUTS '
-                    'warm-started from this posterior). '
-                )
-            if ran.any():
-                advice += f'Random-walk moves ran for {np.flatnonzero(ran).tolist()}. '
-            if low.size:
-                advice += (
-                    f'For {low.tolist()} (ESS < {IMH_ESS_NUTS:g}) random-walk moves narrow the '
-                    'gap but may not close it: check against exact MCMC there.'
-                )
+            low = flagged[ess_min[flagged] < IMH_ESS_NUTS]
+            caveat = f' (may not suffice for {low.tolist()})' if low.size else ''
             warnings.warn(
-                f'IMH effective sample size is low for dataset(s) {flagged.tolist()} '
-                f'(min bulk ESS over global parameters {e_vals} < {IMH_ESS_WARN:g}): the '
-                'chains revisit few distinct states, and the refined sample can be too narrow '
-                f'where the flow under-covers the posterior, which more draws do not fix. '
-                f'{advice.strip()}',
-                stacklevel=4,
+                f'Low effective sample size (ESS) for dataset(s) {flagged.tolist()}: min ESS '
+                f'{e_vals} < {IMH_ESS_WARN:g}.\n'
+                'The IMH chains repeat few draws, so the intervals can be too narrow. '
+                'Remedies, in order:\n'
+                '  1. more draws (n_samples)\n'
+                f'  2. random_walk=True{caveat}\n'
+                '  3. exact MCMC, e.g. NUTS',
+                skip_file_prefixes=INTERNAL_PREFIXES,
+            )
+        # the moves replace the ESS warning, except where the IMH left them too little to work with
+        low = np.flatnonzero(ran & (ess_min < IMH_ESS_NUTS))
+        if low.size:
+            e_vals = ', '.join(f'{ess_min[i]:.0f}' for i in low)
+            warnings.warn(
+                f'Very low IMH ESS before the random-walk moves for dataset(s) {low.tolist()}: '
+                f'{e_vals} < {IMH_ESS_NUTS:g}.\n'
+                'The moves may not close the gap, so the intervals can still be too narrow.\n'
+                'Remedy: check against exact MCMC, e.g. NUTS.',
+                skip_file_prefixes=INTERNAL_PREFIXES,
             )
         return proposal, {
             'refine_method': ('imhMarginal' if lf == 0 else 'imhPM') + ('+moves' if moves else ''),
@@ -997,12 +1076,12 @@ class Api:
             flagged = np.flatnonzero(flag)
             z_vals = ', '.join(f'{map_z[i]:.1f}' for i in flagged)
             warnings.warn(
-                f'MAP consistency check failed for dataset(s) {flagged.tolist()} '
-                f'(max |posterior mean − MAP| / posterior SD = {z_vals} > {threshold:g}): '
-                'the posterior disagrees with the analytical point estimates, which can '
-                'indicate data outside the training distribution. Treat those results '
-                'with caution and consider exact MCMC (e.g. NUTS) instead.',
-                stacklevel=3,
+                f'MAP check failed for dataset(s) {flagged.tolist()}: max |posterior mean − MAP| '
+                f'/ posterior SD = {z_vals} > {threshold:g}.\n'
+                'The posterior disagrees with the analytical point estimates, so the data may lie '
+                'outside what the network was trained on.\n'
+                'Remedy: exact MCMC, e.g. NUTS.',
+                skip_file_prefixes=INTERNAL_PREFIXES,
             )
         return {
             'map_z': map_z,
@@ -1042,7 +1121,7 @@ class Api:
                 'the log-evidence and any Bayes factor built on it may be inaccurate. Treat '
                 'those values with caution and consider bridge sampling on exact MCMC (e.g. NUTS) '
                 'draws instead.',
-                stacklevel=3,
+                skip_file_prefixes=INTERNAL_PREFIXES,
             )
         return {
             'log_evidence': log_ev,
@@ -1071,6 +1150,7 @@ class Api:
         dry_run: bool,
     ) -> dict[str, np.ndarray] | PreprocessReport:
         spec = parseFormula(formula)
+        raw_columns = list(df.columns)
         df = df.copy()
         df.columns = df.columns.str.lower()
 
@@ -1081,10 +1161,7 @@ class Api:
             df = df.rename(columns={target: 'y'})
 
         group_name = (group_name or spec.group_name or '').lower()
-        if group_name and group_name in df.columns:
-            self._group_labels = sorted(str(v) for v in df[group_name].dropna().unique())
-        else:
-            self._group_labels = None
+        terms = {*spec.fixed_terms, *spec.random_terms}
         if preprocessor is not None:
             prep = (
                 DataPreprocessor.load(preprocessor)
@@ -1093,16 +1170,34 @@ class Api:
             )
             if dry_run:
                 return prep.audit(df)
-            return attachPreprocessorMetadata(prep.transform(df), prep)
-
-        prep = DataPreprocessor(group_name=group_name)
-        if dry_run:
-            return prep.audit(df)
-        if not fit_preprocessor:
+            preprocessed = prep.transform(df)
+        else:
+            if formula is not None and group_name:
+                # fit on the formula's columns only, so an unrelated column cannot drop a named
+                # one through the correlation filter; a term may name a dummy, '{column}_{level}'.
+                # Without a group name the preprocessor needs every column to detect the group
+                named = {c for c in df.columns for t in terms if t == c or t.startswith(f'{c}_')}
+                df = df[[c for c in df.columns if c in {'y', group_name} | named]]
+            prep = DataPreprocessor(group_name=group_name)
+            if dry_run:
+                return prep.audit(df)
+            if not fit_preprocessor:
+                raise ValueError(
+                    'tabular router input requires a fitted preprocessor or fit_preprocessor=True'
+                )
+            preprocessed = prep.fit_transform(df)
+        # a dropped column would resolve to another one sharing its prefix, or to none
+        dropped = sorted(terms & prep._dropped_cols)
+        if dropped:
             raise ValueError(
-                'tabular router input requires a fitted preprocessor or fit_preprocessor=True'
+                f'the preprocessor dropped formula column(s) {dropped} as nearly collinear with '
+                f'another predictor (|r| > {prep.corr_threshold:g}) or near-constant: keep one '
+                'column of each collinear pair in the formula'
             )
-        return attachPreprocessorMetadata(prep.fit_transform(df), prep)
+        # every output name (parameters, summaries, plots) derives from these columns
+        columns = restoreColumnCase(preprocessed['columns'].tolist(), raw_columns)
+        preprocessed['columns'] = np.array(columns, dtype=str)
+        return attachPreprocessorMetadata(preprocessed, prep)
 
     def _buildModelDatasets(
         self,
@@ -1122,6 +1217,12 @@ class Api:
         if y_type == 'multiclass':
             raise ValueError('multiclass targets are not supported by the router')
         likelihood = resolveLikelihoodFamily(likelihood_family, y_type)
+        if y_type == 'binary' and likelihood == 0:
+            warnings.warn(
+                "the outcome is binary (0/1) but fitted with the 'normal' family; for a binary "
+                "outcome load Api.from_pretrained('bernoulli')",
+                skip_file_prefixes=INTERNAL_PREFIXES,
+            )
 
         X_pre = np.asarray(preprocessed['X'], dtype=float)
         y = np.asarray(preprocessed['y'])
@@ -1133,27 +1234,56 @@ class Api:
             raise ValueError('preprocessed X must have shape (n, d) aligned with y')
 
         spec = parseFormula(formula)
-        fixed_indices = resolveFixedIndices(spec.fixed_terms, columns)
+        # no formula: every column is a fixed effect; a formula without fixed terms
+        # (y ~ 1 + (1 | g)) fits the intercept only, as in lme4
+        fixed_indices = (
+            list(range(len(columns)))
+            if formula is None
+            else resolveFixedIndices(spec.fixed_terms, columns)
+        )
         self._warnInconsistentColumns(X_pre, columns, fixed_indices)
-        fixed_names = []
-        if spec.intercept:
-            X_parts = [np.ones((X_pre.shape[0], 1), dtype=float)]
-            fixed_names.append('Intercept')
-        else:
-            X_parts = []
-        X_parts += [X_pre[:, idx : idx + 1] for idx in fixed_indices]
-        fixed_names += [columns[idx] for idx in fixed_indices]
-        X = np.concatenate(X_parts, axis=1) if X_parts else np.empty((X_pre.shape[0], 0))
-
         random_terms = spec.random_terms
         if not random_terms:
             if q is None:
                 random_terms = ('1',)
             else:
                 random_terms = defaultRandomTerms(q, columns)
+        # the networks were trained with the random-effect design equal to the leading
+        # fixed-effect columns, so a random intercept pairs with the fixed one and every
+        # random slope is a fixed term
+        if '1' in random_terms and not spec.intercept:
+            added = '' if spec.random_terms else ', added because the formula has no random term,'
+            raise ValueError(
+                f'a random intercept{added} needs a fixed intercept: drop the 0 from the fixed '
+                'terms or suppress the random intercept with (0 + ... | group)'
+            )
+        if spec.intercept and '1' not in random_terms:
+            raise ValueError(
+                'a fixed intercept needs a random intercept: write (1 + ... | group) or '
+                'suppress the fixed intercept with 0 +'
+            )
+        # the model sees the random slopes first, in the random term's order; every output
+        # is mapped back to the user's order (`fixed_names`) through `_ffx_order`
+        slope_indices = resolveFixedIndices([t for t in random_terms if t != '1'], columns)
+        missing = [columns[idx] for idx in slope_indices if idx not in fixed_indices]
+        if missing:
+            raise ValueError(
+                f'random slope {", ".join(missing)} is not a fixed term: add it to the fixed terms'
+            )
+        other_indices = [idx for idx in fixed_indices if idx not in slope_indices]
+        intercept = [-1] if spec.intercept else []  # -1 stands for the column of ones
+        user_columns = intercept + fixed_indices
+        model_columns = intercept + slope_indices + other_indices
+        self._ffx_order = [model_columns.index(idx) for idx in user_columns]
+        fixed_names = ['Intercept' if idx < 0 else columns[idx] for idx in user_columns]
+        X_parts = [np.ones(len(y)) if idx < 0 else X_pre[:, idx] for idx in model_columns]
+        X = np.column_stack(X_parts) if X_parts else np.empty((X_pre.shape[0], 0))
+
         Z = buildRandomDesign(X_pre, columns, random_terms)
         random_names = self._randomNames(random_terms, columns)
         self._param_names = {'ffx': list(fixed_names), 'sigma_rfx': list(random_names)}
+        levels = preprocessed.get('group_levels')  # the preprocessor's label of each group code
+        self._group_labels = None if levels is None else [str(v) for v in levels]
 
         # Build scale info for optional back-transformation to original X units
         x_means_meta = np.asarray(
@@ -1163,22 +1293,15 @@ class Api:
         y_mean_meta = float(np.asarray(preprocessed.get('y_mean', 0.0)).item())
         y_std_meta = float(np.asarray(preprocessed.get('sd_y', 1.0)).item())
 
-        si_means = (
-            [0.0] + [float(x_means_meta[idx]) for idx in fixed_indices]
-            if spec.intercept
-            else [float(x_means_meta[idx]) for idx in fixed_indices]
-        )
-        si_stds = (
-            [1.0] + [float(x_stds_meta[idx]) for idx in fixed_indices]
-            if spec.intercept
-            else [float(x_stds_meta[idx]) for idx in fixed_indices]
-        )
+        si_means = [0.0 if idx < 0 else float(x_means_meta[idx]) for idx in user_columns]
+        si_stds = [1.0 if idx < 0 else float(x_stds_meta[idx]) for idx in user_columns]
         self._scale_info = ScaleInfo(
             y_mean=y_mean_meta,
             y_std=y_std_meta,
             x_means=np.array(si_means),
             x_stds=np.array(si_stds),
             param_names=list(fixed_names),
+            random_names=list(random_names),
             has_intercept=spec.intercept,
         )
 
@@ -1192,12 +1315,17 @@ class Api:
             raise ValueError('random-effect names must align with Z columns')
 
         sd_y = preprocessedSdY(preprocessed)
-        prior_variants = resolvePriors(
-            priors,
-            fixed_names=fixed_names,
-            random_names=random_names,
-            likelihood_family=likelihood,
-        )
+        # priors are given in the user's order, by name or by position; the model takes its own
+        to_model = [user_columns.index(idx) for idx in model_columns]
+        prior_variants = [
+            (name, values | {key: values[key][to_model] for key in ('nu_ffx', 'tau_ffx')})
+            for name, values in resolvePriors(
+                priors,
+                fixed_names=fixed_names,
+                random_names=random_names,
+                likelihood_family=likelihood,
+            )
+        ]
 
         groups = groups.astype(np.int64, copy=False)
         if np.any(groups < 0):
@@ -1279,7 +1407,7 @@ class Api:
                 f'near-constant predictor columns in design (std < 0.01): {near_constant}. '
                 'Verify DataPreprocessor was fitted before routing.',
                 RuntimeWarning,
-                stacklevel=4,
+                skip_file_prefixes=INTERNAL_PREFIXES,
             )
 
         if X_active.shape[1] >= 2 and len(near_constant) == 0:
@@ -1296,7 +1424,7 @@ class Api:
                     f'highly correlated predictor columns in design (|r| > 0.95): {pairs_str}. '
                     'Consider dropping one from the formula or re-fitting DataPreprocessor.',
                     RuntimeWarning,
-                    stacklevel=4,
+                    skip_file_prefixes=INTERNAL_PREFIXES,
                 )
 
     @staticmethod
@@ -1365,13 +1493,45 @@ class Api:
             if not failures:
                 return entry, failures_by_submodel
             failures_by_submodel[str(entry['id'])] = failures
+        misfit = self._misfit(batch, i, failures_by_submodel)
+        raise ValueError(f"dataset {i} is outside the checkpoint's limits: {misfit}")
 
-        warnings.warn(
-            f'dataset {i} is incompatible with every routed submodel',
-            RuntimeWarning,
-            stacklevel=2,
-        )
-        raise ValueError(f'dataset {i} is outside every routed submodel: {failures_by_submodel}')
+    def _misfit(
+        self,
+        batch: Mapping[str, torch.Tensor],
+        i: int,
+        failures_by_submodel: dict[str, list[str]],
+    ) -> str:
+        """Why dataset i fits no submodel: a family the checkpoint does not fit and the dimensions
+        outside the range its submodels cover together, else the failures of the submodel closest
+        to fitting."""
+        dims = self._datasetDimensions(batch, i)
+        misfits = []
+        family = dims['likelihood_family']
+        fitted = {
+            int(f) for e in self.submodels if (f := routeValue(e, 'likelihood_family')) is not None
+        }
+        if family is not None and fitted and family not in fitted:
+            name = LIKELIHOOD_FAMILIES[family]
+            supported = ', '.join(repr(LIKELIHOOD_FAMILIES[f]) for f in sorted(fitted))
+            misfits.append(
+                f"family '{name}' (supported: {supported}); load Api.from_pretrained('{name}')"
+            )
+        for label, low, high, min_key, max_key in (
+            ('groups', dims['m'], dims['m'], 'min_m', 'max_m'),
+            ('rows per group', dims['min_n_i'], dims['max_n_i'], 'min_n', 'max_n'),
+            ('rows', dims['n'], dims['n'], None, 'max_n_total'),
+            ('fixed effects', dims['d'], dims['d'], 'min_d', 'max_d'),
+            ('random effects', dims['q'], dims['q'], 'min_q', 'max_q'),
+        ):
+            lows = [int(v) for e in self.submodels if (v := routeValue(e, min_key)) is not None]
+            highs = [int(v) for e in self.submodels if (v := routeValue(e, max_key)) is not None]
+            lo, hi = min(lows, default=None), max(highs, default=None)
+            if (lo is not None and low < lo) or (hi is not None and high > hi):
+                value = low if low == high else f'{low} to {high}'
+                supported = f'up to {hi}' if lo is None else f'{lo} to {hi}'
+                misfits.append(f'{value} {label} (supported: {supported})')
+        return '; '.join(misfits or min(failures_by_submodel.values(), key=len))
 
     def _compatibilityFailures(
         self, batch: Mapping[str, torch.Tensor], i: int, entry: Mapping[str, Any]
@@ -1528,7 +1688,7 @@ class Api:
                             f'(mean={y_mean:.2f}, std={y_std:.2f}); '
                             'verify DataPreprocessor was applied before routing',
                             RuntimeWarning,
-                            stacklevel=2,
+                            skip_file_prefixes=INTERNAL_PREFIXES,
                         )
 
     def _validateRoutingInputs(self, batch: Mapping[str, Any]) -> None:
@@ -1555,31 +1715,35 @@ class Api:
     def plotPPD(
         self,
         result: RouterResult,
-        indices: Sequence[int] | None = None,
+        prior_ids: Sequence[int | str] | None = None,
         plot_dir: Path | None = None,
+        *,
+        seed: int | None = None,
+        indices: Sequence[int] | None = None,  # deprecated alias of prior_ids, removed in 0.7
     ) -> None:
         """Plot posterior predictive densities for datasets in result.
 
-        Requires ``sample()`` to have been called with ``diagnostics=True``.
-        y is shown on the standardized scale used internally by the model.
+        y is shown on the standardized scale used internally by the model.  ``seed`` works as in
+        ``sample``.
         """
         from metabeta.plotting.predictive import plotPPD as _plotPPD
 
         if result.diagnostics is None or result.batch is None:
-            raise ValueError('call sample() with diagnostics=True first')
-        pp = result.diagnostics.get('pp')
-        if pp is None:
-            raise ValueError('pp not found in diagnostics')
+            raise ValueError('result has no posterior predictive; call sample() first')
+        pp = result.diagnostics['pp']
         b = int(result.batch['y'].shape[0])
-        if indices is None:
-            indices = list(range(b))
-        _plotPPD(pp, result.batch, indices=indices, plot_dir=plot_dir)
+        prior_ids = _renamedArg('indices', indices, 'prior_ids', prior_ids)
+        rows = range(b) if prior_ids is None else [_priorRow(result, p) for p in prior_ids]
+        with _seeded(seed):
+            _plotPPD(pp, result.batch, indices=list(rows), plot_dir=plot_dir)
 
     def plotParameters(
         self,
         result: RouterResult,
-        index: int = 0,
+        prior_id: int | str = 0,
         with_prior: bool = True,
+        *,
+        index: int | None = None,  # deprecated alias of prior_id, removed in 0.7
         **kwargs: Any,
     ) -> Any:
         """Pair-grid of posterior parameter samples in original-scale units.
@@ -1596,26 +1760,26 @@ class Api:
             raise ValueError('RouterResult has no proposal; call sample() first')
         if result.scale_info is None:
             raise ValueError('RouterResult has no scale_info')
+        index = _priorRow(result, _renamedArg('index', index, 'prior_id', prior_id))
 
         prop = result.proposal
         si = result.scale_info
         has_eps = prop.has_sigma_eps
 
-        ffx_orig = si.to_original_scale(prop.ffx[index])       # (S, d)
-        srfx = prop.sigma_rfx[index]                            # (S, q)
+        # (S, d), (S, q), (S, q, q)
+        ffx_orig, srfx, corr_rfx = _globalDraws(prop, index, si, 'original')
         parts = [ffx_orig, srfx]
         if has_eps:
             parts.append(prop.sigma_eps[index].unsqueeze(-1))  # (S, 1)
         samples_g = torch.cat(parts, dim=-1).unsqueeze(0)      # (1, S, D)
 
-        corr_rfx = prop.corr_rfx
         post_orig = Proposal(
             proposed={
                 'global': {'samples': samples_g, 'log_prob': prop.log_prob_g[index : index + 1]},
                 'local': {k: v[index : index + 1] for k, v in prop.data['local'].items()},
             },
             has_sigma_eps=has_eps,
-            corr_rfx=corr_rfx[index : index + 1] if corr_rfx is not None else None,
+            corr_rfx=corr_rfx.unsqueeze(0) if corr_rfx is not None else None,
         )
 
         param_names = result.param_names or {}
@@ -1647,48 +1811,46 @@ class Api:
         result: RouterResult,
         *,
         ci: float = 0.95,
-        batch_index: int = 0,
-        x_scale: str = 'standardized',
+        prior_id: int | str = 0,
+        x_scale: str = 'original',
+        batch_index: int | None = None,  # deprecated alias of prior_id, removed in 0.7
     ) -> str:
         """Return a formatted posterior summary table for a sampled RouterResult.
 
-        Fit metrics (R²/AUC/Deviance), LOO-NLL, and Pareto k are shown when
-        ``sample()`` was called with ``diagnostics=True``.  For per-group random
-        effects use ``rfxTable()``.
+        ``prior_id`` picks the row: the name a prior had in ``sample(priors={name: ...})``,
+        or its index.  The last line lists the safeguards, then the fit metric
+        (R²/AUC/Deviance), then LOO-NLL and its LOO k̂ when ``sample()`` was called with
+        ``loo=True``.  For per-group random effects use ``rfxSummary()``.
         """
         if result.proposal is None:
             raise ValueError('RouterResult has no proposal; call sample() first')
+        batch_index = _priorRow(
+            result, _renamedArg('batch_index', batch_index, 'prior_id', prior_id)
+        )
         d = result.diagnostics or {}
         dims = (
             result.validation[batch_index]['dimensions']
             if result.validation and batch_index < len(result.validation)
             else {}
         )
-        bi = batch_index
+
+        def at(values: Any, default: Any = None) -> Any:
+            """This row's entry of a per-dataset array, as a Python scalar."""
+            return values[batch_index].item() if values is not None else default
+
         fit_vals = d.get('fit_vals')
-        fit = fit_vals[bi].item() if fit_vals is not None and bi < len(fit_vals) else d.get('fit')
-        loo_nll_vals = d.get('loo_nll_vals')
-        loo_nll = (
-            loo_nll_vals[bi].item()
-            if loo_nll_vals is not None and bi < len(loo_nll_vals)
-            else d.get('loo_nll')
-        )
-        pareto_k_vals = d.get('pareto_k_vals')
-        pareto_k = (
-            pareto_k_vals[bi].item()
-            if pareto_k_vals is not None and bi < len(pareto_k_vals)
-            else d.get('pareto_k')
-        )
+        fit = at(fit_vals, d.get('fit'))
+        loo_nll = at(d.get('loo_nll_vals'), d.get('loo_nll'))
+        pareto_k = at(d.get('pareto_k_vals'), d.get('pareto_k'))
         fit_label = d.get('fit_label', 'fit')
         if fit_vals is not None and fit_label.startswith('Mean '):
             fit_label = fit_label[5:]
         sg = result.safeguards or {}
-        psis_k_vals = sg.get('psis_k')
-        psis_k = (
-            float(psis_k_vals[bi]) if psis_k_vals is not None and bi < len(psis_k_vals) else None
-        )
-        map_z_vals = sg.get('map_z')
-        map_z = float(map_z_vals[bi]) if map_z_vals is not None and bi < len(map_z_vals) else None
+        psis_k = at(sg.get('psis_k'))
+        map_z = at(sg.get('map_z'))
+        accept = at(sg.get('accept_rate'))
+        ess_min = at(sg.get('ess_min'))
+        random_walk = at(sg.get('random_walk_ran'), False)
         return posteriorTable(
             result.proposal,
             result.param_names,
@@ -1699,6 +1861,9 @@ class Api:
             fit_label=fit_label,
             loo_nll=loo_nll,
             pareto_k=pareto_k,
+            accept_rate=accept,
+            ess_min=ess_min,
+            random_walk=random_walk,
             psis_k=psis_k,
             psis_k_threshold=sg.get('psis_k_threshold', PSIS_K_THRESHOLD),
             map_z=map_z,
@@ -1711,28 +1876,148 @@ class Api:
             m=dims.get('m'),
         )
 
+    def posteriorDraws(
+        self,
+        result: RouterResult,
+        *,
+        prior_id: int | str = 0,
+        x_scale: str = 'original',
+    ) -> pd.DataFrame:
+        """Return one dataset's posterior draws of the global parameters, one column each.
+
+        The columns carry the summary's names, order and scale: the fixed effects, ``σ_<term>``
+        per random effect, ``σ_Residual`` for the Gaussian family and ``Corr(<a>, <b>)`` per
+        pair of random effects.  Their means match ``posteriorSummary`` with the same arguments.
+        """
+        if result.proposal is None:
+            raise ValueError('RouterResult has no proposal; call sample() first')
+        proposal, bi = result.proposal, _priorRow(result, prior_id)
+        x_scale = _resolveXScale(x_scale, result.scale_info)
+        ffx, srfx, corr = _globalDraws(proposal, bi, result.scale_info, x_scale)
+        names = result.param_names or {}
+        ffx_names = names.get('ffx') or [f'ffx_{i}' for i in range(ffx.shape[-1])]
+        srfx_names = names.get('sigma_rfx') or [f'rfx_{i}' for i in range(srfx.shape[-1])]
+        q = len(srfx_names)
+        columns = {name: ffx[:, j] for j, name in enumerate(ffx_names)}
+        columns |= {f'σ_{name}': srfx[:, j] for j, name in enumerate(srfx_names)}
+        if proposal.has_sigma_eps:
+            columns['σ_Residual'] = proposal.sigma_eps[bi].float()
+        if corr is not None:
+            columns |= {
+                f'Corr({srfx_names[j]}, {srfx_names[k]})': corr[:, j, k]
+                for j in range(q)
+                for k in range(j + 1, q)
+            }
+        return pd.DataFrame({name: draws.cpu().numpy() for name, draws in columns.items()})
+
+    def groupDraws(
+        self,
+        result: RouterResult,
+        *,
+        prior_id: int | str = 0,
+        x_scale: str = 'original',
+    ) -> pd.DataFrame:
+        """Return each group's coefficient draws for the terms with random effects: the fixed
+        effect plus the group's deviation, like ``coef`` in lme4.
+
+        One row per draw and one column per (group, term), on the scale of ``rfxSummary``.
+        """
+        if result.proposal is None:
+            raise ValueError('RouterResult has no proposal; call sample() first')
+        bi = _priorRow(result, prior_id)
+        x_scale = _resolveXScale(x_scale, result.scale_info)
+        ffx, _, _ = _globalDraws(result.proposal, bi, result.scale_info, x_scale)  # (S, d)
+        rfx = result.proposal.rfx[bi].float()  # (m, S, q)
+        if x_scale == 'original':
+            rfx = result.scale_info.rfxToOriginal(rfx)
+        names = result.param_names or {}
+        terms = names['sigma_rfx']  # each has a fixed effect: prepareData refuses others
+        groups = result.group_names or [str(i) for i in range(rfx.shape[0])]
+        fixed = ffx[:, [names['ffx'].index(term) for term in terms]]  # (S, q)
+        coef = fixed + rfx[: len(groups), :, : len(terms)]  # (m, S, q)
+        columns = pd.MultiIndex.from_product([groups, terms], names=['group', 'term'])
+        return pd.DataFrame(coef.permute(1, 0, 2).flatten(1).cpu().numpy(), columns=columns)
+
+    def posteriorPredictive(
+        self,
+        result: RouterResult,
+        *,
+        prior_id: int | str = 0,
+        seed: int | None = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return the observed responses (n,) and one replicate per posterior draw (n, S).
+
+        Both are in the data's units, with the rows grouped as the model sees them rather than
+        in the data's order.  ``seed`` works as in ``sample``.
+        """
+        if result.diagnostics is None or result.batch is None:
+            raise ValueError('result has no posterior predictive; call sample() first')
+        bi = _priorRow(result, prior_id)
+        with _seeded(seed):
+            y_rep = result.diagnostics['pp'].sample()[bi][_rowMask(result, bi)]  # (n, S)
+        return _observedY(result, bi).cpu().numpy(), _toDataUnits(result, y_rep).cpu().numpy()
+
+    def bayesFactor(self, result: RouterResult, reference: RouterResult) -> pd.DataFrame:
+        """Return the Bayes factor (BF) of ``result``'s model over ``reference``'s, per prior.
+
+        Both results come from ``sample(evidence=True)`` on the same data; a result with one
+        row pairs with every row of the other.  ``strength`` grades the BF either way after
+        Kass and Raftery (1995), and ``PSIS k̂`` is the worse of the two evidence estimates'
+        diagnostics.
+        """
+        if result.evidence is None or reference.evidence is None:
+            raise ValueError('bayesFactor needs results of sample(evidence=True)')
+        y, y_ref = _observedY(result, 0), _observedY(reference, 0)
+        if y.shape != y_ref.shape or not torch.allclose(y.sort().values, y_ref.sort().values):
+            raise ValueError(
+                'a Bayes factor compares models of the same data; these results differ'
+            )
+        log_ev, log_ev_ref = result.evidence['log_evidence'], reference.evidence['log_evidence']
+        log_bf = log_ev - log_ev_ref  # a one-row result broadcasts
+        rows = result if len(log_ev) >= len(log_ev_ref) else reference
+        names = [entry.get('prior_name') for entry in rows.validation]
+        return pd.DataFrame(
+            {
+                'log BF': log_bf,
+                'BF': np.exp(log_bf),
+                'strength': [_bfStrength(b) for b in log_bf],
+                'PSIS k̂': np.maximum(result.evidence['psis_k'], reference.evidence['psis_k']),
+            },
+            index=pd.Index(range(len(names)) if None in names else names, name='prior'),
+        )
+
     def rfxSummary(
         self,
         result: RouterResult,
         *,
         ci: float = 0.95,
-        batch_index: int = 0,
+        prior_id: int | str = 0,
+        x_scale: str = 'original',
+        batch_index: int | None = None,  # deprecated alias of prior_id, removed in 0.7
     ) -> str:
         """Return a formatted per-group random effects summary for a sampled RouterResult.
 
         Produces one table per random-effect component (intercept, slope, …), each under
         its own header, rather than a single wide table with repeated column groups.
+        ``x_scale`` has the meaning it has in ``posteriorSummary``: on the original scale a
+        slope is per unit of its predictor and the intercept is the group's deviation at x = 0.
         """
         if result.proposal is None:
             raise ValueError('RouterResult has no proposal; call sample() first')
+        batch_index = _priorRow(
+            result, _renamedArg('batch_index', batch_index, 'prior_id', prior_id)
+        )
         fmt = 'github'
         alpha = (1 - ci) / 2
         lo_pct = f'{alpha * 100:g}%'
         hi_pct = f'{(1 - alpha) * 100:g}%'
 
         names = result.param_names or {}
-        rfx = result.proposal.rfx[batch_index].float()              # (m, S, q)
-        sigma_rfx = result.proposal.sigma_rfx[batch_index].float()  # (S, q)
+        x_scale = _resolveXScale(x_scale, result.scale_info)
+        _, sigma_rfx, _ = _globalDraws(result.proposal, batch_index, result.scale_info, x_scale)
+        rfx = result.proposal.rfx[batch_index].float()  # (m, S, q)
+        if x_scale == 'original':
+            rfx = result.scale_info.rfxToOriginal(rfx)
         m, _, q_model = rfx.shape
         srfx_names = names.get('sigma_rfx') or [f'rfx_{i}' for i in range(q_model)]
         n_rfx = len(srfx_names)
@@ -1799,6 +2084,100 @@ class Api:
         return '\n'.join(parts)
 
 
+def _resolveXScale(x_scale: str, scale_info: 'ScaleInfo | None') -> str:
+    """The scale a summary can print: 'original' needs the preprocessing's scale info."""
+    if x_scale == 'original' and scale_info is None:
+        warnings.warn(
+            'x_scale="original" requires scale_info; falling back to standardized. '
+            'Call router.sample() with fit_preprocessor=True to enable back-transformation.',
+            RuntimeWarning,
+            skip_file_prefixes=INTERNAL_PREFIXES,
+        )
+        return 'standardized'
+    return x_scale
+
+
+def _renamedArg(old: str, old_value: Any, new: str, new_value: Any) -> Any:
+    """The value of an argument renamed to ``new``, warning while callers still pass ``old``
+    (removed in 0.7, #32)."""
+    if old_value is None:
+        return new_value
+    warnings.warn(
+        f'{old}= is deprecated and will be removed in 0.7: use {new}=, which also takes a '
+        'prior name.',
+        FutureWarning,
+        skip_file_prefixes=INTERNAL_PREFIXES,
+    )
+    return old_value
+
+
+def _priorRow(result: RouterResult, prior_id: int | str) -> int:
+    """The row of ``prior_id`` in ``result``: its index, or the name the prior had in
+    ``sample(priors={name: ...})`` (#32)."""
+    if not isinstance(prior_id, str):
+        return int(prior_id)
+    names = [entry.get('prior_name') for entry in result.validation]
+    if prior_id not in names:
+        known = [name for name in names if name is not None]
+        raise KeyError(f'no prior named {prior_id!r} in this result; its priors are {known}')
+    return names.index(prior_id)
+
+
+@contextlib.contextmanager
+def _seeded(seed: int | None) -> Iterator[None]:
+    """Seed torch inside the block, then give the caller back its CPU and CUDA random state
+    (#32)."""
+    if seed is None:
+        yield
+        return
+    with torch.random.fork_rng(devices=range(torch.cuda.device_count())):
+        torch.manual_seed(seed)
+        yield
+
+
+def _rowMask(result: RouterResult, row: int) -> torch.Tensor:
+    """Which (group, slot) cells of a batch row hold data, as a boolean (m, n_i) mask."""
+    return result.batch['mask_n'][row].bool()
+
+
+def _toDataUnits(result: RouterResult, y: torch.Tensor) -> torch.Tensor:
+    """Responses on the data's scale: the Gaussian response is standardized in the batch, and
+    the scale info of the other families holds mean 0 and SD 1."""
+    si = result.scale_info
+    return y if si is None else y * si.y_std + si.y_mean
+
+
+def _observedY(result: RouterResult, row: int) -> torch.Tensor:
+    """A batch row's observed responses (n,) in the data's units, grouped as in the batch."""
+    return _toDataUnits(result, result.batch['y'][row][_rowMask(result, row)].float())
+
+
+# Kass and Raftery (1995), JASA 90:773, p. 777: upper BF bounds of each grade of evidence;
+# 'weak' shortens their "not worth more than a bare mention"
+BF_STRENGTH = ((3, 'weak'), (20, 'positive'), (150, 'strong'))
+
+
+def _bfStrength(log_bf: float) -> str:
+    """How strongly a Bayes factor favors one of its two models, either way (#33)."""
+    bf = math.exp(abs(log_bf))
+    return next((label for bound, label in BF_STRENGTH if bf < bound), 'very strong')
+
+
+def _globalDraws(
+    proposal: 'Proposal', batch_index: int, scale_info: 'ScaleInfo | None', x_scale: str
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    """One dataset's fixed-effect, random-effect SD and correlation draws on the scale a summary
+    prints, still padded as in the proposal (#31)."""
+    ffx = proposal.ffx[batch_index].float()  # (S, d)
+    srfx = proposal.sigma_rfx[batch_index].float()  # (S, q)
+    corr = proposal.corr_rfx
+    corr_b = corr[batch_index].float() if corr is not None else None  # (S, q, q)
+    if x_scale == 'original':
+        ffx = scale_info.to_original_scale(ffx)
+        srfx, corr_b = scale_info.sdCorrToOriginal(srfx, corr_b)
+    return ffx, srfx, corr_b
+
+
 def _priorStr(priors: Any) -> str:
     if priors is None:
         return 'default'
@@ -1811,65 +2190,60 @@ def _priorStr(priors: Any) -> str:
     return 'custom'
 
 
+SIGMA_PRIOR_SYMBOL = {'halfnormal': 'HN', 'halfstudent': 'HT₅', 'exponential': 'Exp'}
+
+
 def _buildPriorLines(
     ffx_names: list[str],
     srfx_names: list[str],
     prior_params: dict[str, np.ndarray],
     batch_index: int,
     scale_info: 'ScaleInfo | None' = None,
-    x_scale: str = 'standardized',
+    x_scale: str = 'original',
 ) -> list[str]:
     """Build per-parameter prior description lines for the summary header.
 
     Priors are stored on the fully-standardized (★) scale inside the model.
     This function rescales them to match whatever scale is being displayed:
 
-    - Default (standardized X, original y): multiply τ by σ_y.
+    - Standardized (x_scale='standardized', standardized X, original y): multiply ν, τ by σ_y.
       This gives the effective prior on β★_k × σ_y (Δy per SD of predictor).
       Intercept location remains 0 (model is centred at mean y).
 
-    - Original (x_scale='original'): multiply τ by σ_y/σ_{x_k}.
-      This gives the effective prior on β_k (Δy per unit of predictor).
-      Intercept location shifts to μ_y (since E[β_0] = μ_y when all priors
-      are centred and predictors are mean-zero after standardization).
-
-    σ_rfx are always displayed in original y units (rescaled by σ_y in the
-    proposal), so τ_rfx is always multiplied by σ_y regardless of x_scale.
+    - Original (x_scale='original', the default): each line describes the displayed parameter
+      (ScaleInfo.ffxPriorToOriginal): a slope's prior is scaled by σ_y/σ_{x_k}, and the
+      intercept at X = 0 collects the slopes' priors.  A random slope's SD prior is scaled the
+      same way.  Where the pushforward has no closed form (a Student-t intercept; the random
+      intercept's SD and the correlations once a random slope sits on a centered predictor),
+      the line states the specified prior and the predictors at whose means it applies.
     """
     from metabeta.utils.constants import FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF
 
     lines: list[str] = []
     n_ffx, n_rfx = len(ffx_names), len(srfx_names)
 
-    # In default mode priors stay in the fully standardized (★) space where the
-    # model operates.  In original mode they are rescaled to match the original
-    # y/X units shown for the estimates.
+    # the summary prints the draws in y units on both scales (Api._rescaleProposal), so the priors
+    # follow; the original scale also maps them to X units and moves the intercept to X = 0
     rescale = x_scale == 'original' and scale_info is not None
-    y_std = scale_info.y_std if rescale else 1.0
-    y_mean = scale_info.y_mean if rescale else 0.0
+    y_std = scale_info.y_std if scale_info is not None else 1.0
 
     if 'tau_ffx' in prior_params and 'nu_ffx' in prior_params:
-        tau = prior_params['tau_ffx'][batch_index, :n_ffx]
-        mu = prior_params['nu_ffx'][batch_index, :n_ffx]
+        tau = prior_params['tau_ffx'][batch_index, :n_ffx].astype(float)
+        nu = prior_params['nu_ffx'][batch_index, :n_ffx].astype(float)
         fam_id = int(prior_params['family_ffx'][batch_index]) if 'family_ffx' in prior_params else 0
         fam = FFX_FAMILIES[fam_id] if fam_id < len(FFX_FAMILIES) else 'normal'
-        for j, name in enumerate(ffx_names):
-            tau_j = float(tau[j]) * y_std
-            mu_j = float(mu[j]) * y_std
-            if rescale and j < len(scale_info.x_stds):
-                x_std_j = float(scale_info.x_stds[j])
-                if x_std_j > 0:
-                    tau_j /= x_std_j
-                # Intercept prior location shifts to μ_y in original space when
-                # ν★=0 and predictors are mean-zero after standardization.
-                if scale_info.has_intercept and j == 0:
-                    mu_j += y_mean
-
-            loc = f'{mu_j:.4g}' if abs(mu_j) > 1e-9 else '0'
-            if fam == 'normal':
-                lines.append(f'  {name} ~ N({loc}, {tau_j:.4g})')
-            else:
-                lines.append(f'  {name} ~ t₅({loc}, {tau_j:.4g})')
+        locs, scales, notes = nu * y_std, tau * y_std, [''] * n_ffx
+        if rescale:
+            locs, scales = scale_info.ffxPriorToOriginal(nu, tau)
+            centered = [n for n, mu in zip(ffx_names[1:], scale_info.x_means[1:]) if mu != 0]
+            if scale_info.has_intercept and fam != 'normal' and centered:
+                # a sum of Student-t terms is no Student-t: state the specified intercept prior
+                locs[0], scales[0] = nu[0] * y_std + scale_info.y_mean, tau[0] * y_std
+                notes[0] = _atMean(centered)
+        symbol = 'N' if fam == 'normal' else 't₅'
+        for name, loc_j, scale_j, note in zip(ffx_names, locs, scales, notes):
+            loc = f'{loc_j:.4g}' if abs(loc_j) > 1e-9 else '0'
+            lines.append(f'  {name} ~ {symbol}({loc}, {scale_j:.4g}){note}')
 
     if 'tau_rfx' in prior_params and n_rfx > 0:
         tau_r = prior_params['tau_rfx'][batch_index, :n_rfx]
@@ -1879,19 +2253,27 @@ def _buildPriorLines(
             else 0
         )
         fam = SIGMA_FAMILIES[fam_id] if fam_id < len(SIGMA_FAMILIES) else 'halfnormal'
+        # only the random intercept's row of ScaleInfo.rfxMap mixes effects: its SD and the
+        # correlations keep the specified prior, at the means of the random slopes' predictors
+        at_mean = ''
+        if rescale and 'Intercept' in scale_info.random_names:
+            i = scale_info.random_names.index('Intercept')
+            row = scale_info.rfxMap()[i]
+            at_mean = _atMean(
+                [n for k, n in enumerate(scale_info.random_names) if k != i and row[k] != 0]
+            )
         for j, name in enumerate(srfx_names):
-            # σ_rfx is always displayed in y units; rescale τ_rfx in original mode
+            # σ_rfx is always displayed in y units; rescale τ_rfx in original mode, where a
+            # slope SD is divided by its predictor's SD (the intercept's x_std is 1)
             tau_j = float(tau_r[j]) * y_std
-            if fam == 'halfnormal':
-                lines.append(f'  σ_{name} ~ HN({tau_j:.4g})')
-            elif fam == 'halfstudent':
-                lines.append(f'  σ_{name} ~ HT₅({tau_j:.4g})')
-            else:
-                lines.append(f'  σ_{name} ~ Exp({tau_j:.4g})')
+            if rescale:
+                tau_j /= float(scale_info.x_stds[scale_info.param_names.index(name)])
+            note = at_mean if name == 'Intercept' else ''
+            lines.append(f'  σ_{name} ~ {SIGMA_PRIOR_SYMBOL[fam]}({tau_j:.4g}){note}')
         if 'eta_rfx' in prior_params and n_rfx > 1:
             eta = float(prior_params['eta_rfx'][batch_index])
             if eta > 0:
-                lines.append(f'  Corr ~ LKJ({eta:.2g})')
+                lines.append(f'  Corr ~ LKJ({eta:.2g}){at_mean}')
 
     if 'tau_eps' in prior_params:
         tau_e = float(np.asarray(prior_params['tau_eps']).ravel()[batch_index]) * y_std
@@ -1901,14 +2283,14 @@ def _buildPriorLines(
             else 1
         )
         fam = SIGMA_FAMILIES[fam_id] if fam_id < len(SIGMA_FAMILIES) else 'halfstudent'
-        if fam == 'halfnormal':
-            lines.append(f'  σ_Residual ~ HN({tau_e:.4g})')
-        elif fam == 'halfstudent':
-            lines.append(f'  σ_Residual ~ HT₅({tau_e:.4g})')
-        else:
-            lines.append(f'  σ_Residual ~ Exp({tau_e:.4g})')
+        lines.append(f'  σ_Residual ~ {SIGMA_PRIOR_SYMBOL[fam]}({tau_e:.4g})')
 
     return lines
+
+
+def _atMean(predictors: list[str]) -> str:
+    """Where a prior line without closed form applies: at the means of `predictors`."""
+    return f' at mean {", ".join(predictors)}' if predictors else ''
 
 
 def posteriorTable(
@@ -1922,6 +2304,9 @@ def posteriorTable(
     fit_label: str = 'fit',
     loo_nll: float | None = None,
     pareto_k: float | None = None,
+    accept_rate: float | None = None,
+    ess_min: float | None = None,
+    random_walk: bool = False,
     psis_k: float | None = None,
     psis_k_threshold: float = PSIS_K_THRESHOLD,
     map_z: float | None = None,
@@ -1929,7 +2314,7 @@ def posteriorTable(
     ci: float = 0.95,
     batch_index: int = 0,
     scale_info: 'ScaleInfo | None' = None,
-    x_scale: str = 'standardized',
+    x_scale: str = 'original',
     n: int | None = None,
     m: int | None = None,
 ) -> str:
@@ -1937,30 +2322,17 @@ def posteriorTable(
 
     Sections: Fixed Effects (mean, SD, CI, P(>0), contraction), Standard
     Deviations (sigma_rfx + residual), and Correlations (posterior mean, when
-    q > 1).  For per-group random effects use ``Api.rfxTable()``.
+    q > 1).  For per-group random effects use ``Api.rfxSummary()``.
     Contraction requires ``prior_params`` (populated automatically by
-    ``Api.sample()``).  Fit metrics require ``diagnostics=True``.
+    ``Api.sample()``).  LOO-NLL and LOO k̂ require ``loo=True``.
     """
     fmt = 'github'
     alpha = (1 - ci) / 2
     lo_pct = f'{alpha * 100:g}%'
     hi_pct = f'{(1 - alpha) * 100:g}%'
 
-    ffx = proposal.ffx[batch_index].float()  # (S, d)
-    if x_scale == 'original':
-        if scale_info is None:
-            import warnings
-
-            warnings.warn(
-                'x_scale="original" requires scale_info; falling back to standardized. '
-                'Call router.sample() with fit_preprocessor=True to enable back-transformation.',
-                RuntimeWarning,
-                stacklevel=2,
-            )
-            x_scale = 'standardized'
-        else:
-            ffx = scale_info.to_original_scale(ffx)
-    srfx = proposal.sigma_rfx[batch_index].float()  # (S, q)
+    x_scale = _resolveXScale(x_scale, scale_info)
+    ffx, srfx, corr_b = _globalDraws(proposal, batch_index, scale_info, x_scale)
     S = ffx.shape[0]
 
     names = param_names or {}
@@ -1985,12 +2357,12 @@ def posteriorTable(
     _ffx_prior_var_multiplier = 1.0  # 1.0 for Normal; df/(df-2) for Student-t
     if prior_params is not None and 'tau_ffx' in prior_params and 'nu_ffx' in prior_params:
         n_ffx_active = len(ffx_names)
-        tau_arr = prior_params['tau_ffx'][batch_index, :n_ffx_active].copy().astype(float)
-        if scale_info is not None:
-            for j in range(n_ffx_active):
-                x_std_j = float(scale_info.x_stds[j]) if j < len(scale_info.x_stds) else 1.0
-                denom = x_std_j if x_scale == 'original' else 1.0
-                tau_arr[j] *= scale_info.y_std / max(denom, 1e-12)
+        tau_arr = prior_params['tau_ffx'][batch_index, :n_ffx_active].astype(float)
+        if x_scale == 'original':
+            nu_arr = prior_params['nu_ffx'][batch_index, :n_ffx_active]
+            tau_arr = scale_info.ffxPriorToOriginal(nu_arr, tau_arr)[1]
+        elif scale_info is not None:
+            tau_arr = tau_arr * scale_info.y_std
         if 'family_ffx' in prior_params:
             fam_id = int(prior_params['family_ffx'][batch_index])
             fam = FFX_FAMILIES[fam_id] if fam_id < len(FFX_FAMILIES) else 'normal'
@@ -2092,9 +2464,7 @@ def posteriorTable(
     # ── Correlations ──────────────────────────────────────────────────────────
     n_rfx = len(srfx_names)
     if n_rfx > 1:
-        corr = proposal.corr_rfx
-        if corr is not None:
-            corr_b = corr[batch_index].float()  # (S, q, q) or (q, q)
+        if corr_b is not None:
             corr_mean = corr_b.mean(0) if corr_b.dim() == 3 else corr_b
             corr_rows = [
                 [srfx_names[j]] + [corr_mean[j, k].item() for k in range(n_rfx)]
@@ -2112,19 +2482,25 @@ def posteriorTable(
             ]
 
     # ── footer ────────────────────────────────────────────────────────────────
+    # safeguards first, then the fit metrics
     footer_parts = [f'draws = {S}']
+    if accept_rate is not None:
+        footer_parts.append(f'acceptance = {accept_rate:.2f}')
+    if ess_min is not None:
+        note = ' (random-walk moves ran)' if random_walk else ''
+        footer_parts.append(f'min ESS = {ess_min:.0f}{note}')
+    if psis_k is not None:
+        note = '' if psis_k <= psis_k_threshold else ' (⚠ unreliable — consider MCMC)'
+        footer_parts.append(f'PSIS k̂ = {psis_k:.3f}{note}')
+    if map_z is not None:
+        note = '' if map_z <= map_z_threshold else ' (⚠ disagrees with MAP — consider MCMC)'
+        footer_parts.append(f'MAP z = {map_z:.1f}{note}')
     if fit is not None:
         footer_parts.append(f'{fit_label} = {fit:.3f}')
     if loo_nll is not None:
         footer_parts.append(f'LOO-NLL = {loo_nll:.3f}')
     if pareto_k is not None:
-        footer_parts.append(f'Pareto k = {pareto_k:.3f}')
-    if psis_k is not None:
-        note = 'refined' if psis_k <= psis_k_threshold else '⚠ unreliable — consider MCMC'
-        footer_parts.append(f'PSIS k̂ = {psis_k:.3f} ({note})')
-    if map_z is not None:
-        note = '' if map_z <= map_z_threshold else ' (⚠ disagrees with MAP — consider MCMC)'
-        footer_parts.append(f'MAP z = {map_z:.1f}{note}')
+        footer_parts.append(f'LOO k̂ = {pareto_k:.3f}')
     parts += ['', '   '.join(footer_parts)]
 
     return '\n'.join(parts)

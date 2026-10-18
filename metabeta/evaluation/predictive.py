@@ -161,8 +161,8 @@ def psisLooNLL(
 
     # PSIS per observation — psislw expects (n_obs, n_draws) with last axis = samples.
     # Only run PSIS on real (non-padded) observations; scatter results back afterward.
-    valid = mask.reshape(b * m * n).numpy()  # (b*m*n,) bool
-    log_w_flat = log_w.detach().reshape(b * m * n, s).numpy()
+    valid = mask.reshape(b * m * n).cpu().numpy()  # (b*m*n,) bool
+    log_w_flat = log_w.detach().reshape(b * m * n, s).cpu().numpy()
     log_w_valid = log_w_flat[valid]          # (n_valid, s)
 
     with warnings.catch_warnings():

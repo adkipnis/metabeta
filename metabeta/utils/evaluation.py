@@ -5,10 +5,11 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from metabeta.utils.families import POISSON_ETA_CLIP_MAX
+from metabeta.utils.families import POISSON_ETA_CLIP_MAX, sampleSigmaTorch
 from metabeta.utils.fits import REFERENCE_TAG, fitPath, loadFits
 
 if TYPE_CHECKING:
+    from metabeta.utils.api import ScaleInfo
     from metabeta.utils.results import Proposal
 
 
@@ -342,7 +343,7 @@ def makePriorPDFs(
     batch_index selects which prior variant to use when prior_params has multiple rows
     (e.g. from a batched-priors sample() call).
     """
-    from scipy.stats import norm, halfnorm, t as student_t
+    from scipy.stats import expon, norm, halfnorm, t as student_t
     from metabeta.utils.constants import FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF
 
     pp, si = result.prior_params, result.scale_info  # type: ignore[attr-defined]
@@ -351,17 +352,12 @@ def makePriorPDFs(
     q = len(result.param_names['sigma_rfx'])  # type: ignore[attr-defined]
     bi = batch_index
 
-    tau_f = np.asarray(pp['tau_ffx'][bi, :d], dtype=float) * sd_y
-    nu_f = np.asarray(pp['nu_ffx'][bi, :d], dtype=float) * sd_y
     tau_r = np.asarray(pp['tau_rfx'][bi, :q], dtype=float) * sd_y
 
     fam_ffx_id = int(pp['family_ffx'][bi]) if 'family_ffx' in pp else 0
     fam_rfx_id = int(pp['family_sigma_rfx'][bi]) if 'family_sigma_rfx' in pp else 0
     fam_ffx = FFX_FAMILIES[fam_ffx_id] if fam_ffx_id < len(FFX_FAMILIES) else 'normal'
     fam_rfx = SIGMA_FAMILIES[fam_rfx_id] if fam_rfx_id < len(SIGMA_FAMILIES) else 'halfnormal'
-
-    x_stds = np.asarray(si.x_stds, dtype=float)
-    x_means = np.asarray(si.x_means, dtype=float)
 
     def _sym_pdf(mu: float, sigma: float, fam: str) -> tuple[np.ndarray, np.ndarray]:
         span = max(sigma * 6, 1e-9)
@@ -375,28 +371,30 @@ def makePriorPDFs(
         xg = np.linspace(0.0, span, n_grid)
         if fam == 'halfnormal':
             return xg, halfnorm.pdf(xg, scale=tau)
+        if fam == 'exponential':
+            return xg, expon.pdf(xg, scale=tau)
         return xg, np.where(xg >= 0, 2 * student_t.pdf(xg, df=STUDENT_DF, loc=0, scale=tau), 0.0)
 
     pdfs: list[tuple[np.ndarray, np.ndarray]] = []
 
-    # FFX: back-transform to original scale analytically.
-    # After to_original_scale (linear map):
-    #   slope_orig[j] = ffx[j] / x_stds[j]   for j ≥ 1
-    #   intercept_orig = ffx[0] + y_mean − Σ_{j≥1}(ffx[j] / x_stds[j] * x_means[j])
-    # → slope_orig[j] ~ N(nu_f[j]/x_stds[j], tau_f[j]/x_stds[j])
-    # → intercept_orig is Gaussian with mean/var computed below
-    mu_int = float(nu_f[0] + si.y_mean - sum(nu_f[j] / x_stds[j] * x_means[j] for j in range(1, d)))
-    var_int = float(
-        tau_f[0] ** 2 + sum((tau_f[j] * x_means[j] / x_stds[j]) ** 2 for j in range(1, d))
-    )
-    pdfs.append(_sym_pdf(mu_int, float(np.sqrt(var_int)), fam_ffx))
+    # FFX: to_original_scale is linear, so the priors map in closed form (exact for normal priors)
+    loc_f, scale_f = si.ffxPriorToOriginal(pp['nu_ffx'][bi, :d], pp['tau_ffx'][bi, :d])
+    for j in range(d):
+        pdfs.append(_sym_pdf(float(loc_f[j]), float(scale_f[j]), fam_ffx))
 
-    for j in range(1, d):
-        pdfs.append(_sym_pdf(float(nu_f[j] / x_stds[j]), float(tau_f[j] / x_stds[j]), fam_ffx))
-
-    # sigma_rfx
+    # sigma_rfx and correlations: Σ ↦ A Σ Aᵀ (ScaleInfo.sdCorrToOriginal). An effect whose row
+    # of A has one entry keeps its prior family, its SD scaled by |A_kk| (1/s_k for a slope).
+    # A row that mixes effects (the random intercept once a random slope sits on a centered
+    # predictor) has no closed form: its SD and correlations are pushed through A by Monte Carlo.
+    A = si.rfxMap()  # (q, q)
+    mixed = (A != 0).sum(axis=1) > 1  # (q,)
+    if mixed.any():
+        sd_mc, corr_mc = _pushRfxPrior(si, tau_r, fam_rfx_id, float(pp['eta_rfx'].ravel()[bi]))
     for j in range(q):
-        pdfs.append(_half_pdf(float(tau_r[j]), fam_rfx))
+        if mixed[j]:
+            pdfs.append(_kdePdf(sd_mc[:, j], n_grid, 'positive'))
+        else:
+            pdfs.append(_half_pdf(float(tau_r[j] * abs(A[j, j])), fam_rfx))
 
     # sigma_eps
     if result.proposal.has_sigma_eps:  # type: ignore[attr-defined]
@@ -407,21 +405,63 @@ def makePriorPDFs(
         fam_eps = SIGMA_FAMILIES[fam_eps_id] if fam_eps_id < len(SIGMA_FAMILIES) else 'halfstudent'
         pdfs.append(_half_pdf(tau_e, fam_eps))
 
-    # LKJ marginals for correlation parameters
+    # LKJ marginals for correlation parameters, in the plot's lower-triangle order
     # Under LKJ(eta), each off-diagonal rho has marginal (1+rho)/2 ~ Beta(alpha, alpha)
     # where alpha = eta + (q-2)/2.  Jacobian of rho = 2x-1 gives p(rho) = p_Beta(x) / 2.
-    d_corr = result.proposal.d_corr  # type: ignore[attr-defined]
-    if d_corr > 0 and 'eta_rfx' in pp:
+    pairs = [(i, j) for i in range(q) for j in range(i)]
+    if pairs and 'eta_rfx' in pp:
         from scipy.stats import beta as beta_dist
 
         eta = float(np.asarray(pp['eta_rfx']).ravel()[bi])
         alpha = eta + (q - 2) / 2
         xg = np.linspace(-1.0, 1.0, n_grid)
         pdf_lkj = beta_dist.pdf((1 + xg) / 2, alpha, alpha) / 2
-        for _ in range(d_corr):
-            pdfs.append((xg, pdf_lkj))
+        for i, j in pairs:
+            if mixed[i] or mixed[j]:
+                pdfs.append(_kdePdf(corr_mc[:, i, j], n_grid, 'unit'))
+            else:
+                pdfs.append((xg, pdf_lkj))
 
     return pdfs
+
+
+def _pushRfxPrior(
+    si: 'ScaleInfo', tau: np.ndarray, family: int, eta: float, n: int = 20_000
+) -> tuple[np.ndarray, np.ndarray]:
+    """Random-effect SDs (n, q) and correlations (n, q, q) drawn from the prior (SDs from
+    `family` with scales `tau`, correlations LKJ(eta), or none for eta = 0) and mapped to the
+    original scale. A fixed seed on a forked generator keeps the overlay reproducible and
+    leaves the caller's random stream untouched."""
+    q = len(tau)
+    with torch.random.fork_rng(devices=[]):
+        torch.manual_seed(0)
+        scale = torch.tensor(tau, dtype=torch.float64).unsqueeze(0)  # (1, q)
+        sigma = sampleSigmaTorch(scale, torch.tensor([family]), (n,))[:, 0]  # (n, q)
+        if eta > 0:
+            L = torch.distributions.LKJCholesky(q, concentration=eta).sample((n,))
+            corr = L @ L.mT  # (n, q, q)
+        else:
+            corr = torch.eye(q, dtype=torch.float64).expand(n, q, q)
+    sd, corr = si.sdCorrToOriginal(sigma, corr.double())
+    return sd.numpy(), corr.numpy()
+
+
+def _kdePdf(draws: np.ndarray, n_grid: int, support: str) -> tuple[np.ndarray, np.ndarray]:
+    """Density of Monte Carlo draws on their support, 'positive' (0, ∞) or 'unit' (-1, 1).
+
+    The Gaussian KDE runs on the unbounded scale z = log x or atanh x, so mass piled at a bound
+    is resolved, and maps back with the Jacobian dz/dx; the grid is uniform in z over the draws'
+    0.05%-99.95% quantiles."""
+    from scipy.stats import gaussian_kde
+
+    to_z, from_z, dz_dx = {
+        'positive': (np.log, np.exp, lambda x: 1 / x),
+        'unit': (np.arctanh, np.tanh, lambda x: 1 / (1 - x**2)),
+    }[support]
+    z = to_z(draws)
+    zg = np.linspace(*np.quantile(z, [0.0005, 0.9995]), n_grid)
+    xg = from_z(zg)
+    return xg, gaussian_kde(z)(zg) * dz_dx(xg)
 
 
 def dictMean(td: dict[str, torch.Tensor]) -> float:

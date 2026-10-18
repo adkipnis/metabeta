@@ -345,9 +345,8 @@ def test_router_rejects_dataset_outside_training_dimensions(tmp_path: Path):
     _write_joint_checkpoint(joint_path)
     router = Api(joint_path, warmup=False)
 
-    with pytest.warns(RuntimeWarning, match='incompatible'):
-        with pytest.raises(ValueError, match='outside every routed submodel'):
-            router._routeBatch(_batch(d=9, q=3))
+    with pytest.raises(ValueError, match=r'9 fixed effects \(supported: 1 to 8\)'):
+        router._routeBatch(_batch(d=9, q=3))
 
 
 def test_router_checks_between_and_within_group_degrees_of_freedom(tmp_path: Path):
@@ -355,13 +354,12 @@ def test_router_checks_between_and_within_group_degrees_of_freedom(tmp_path: Pat
     _write_joint_checkpoint(joint_path)
     router = Api(joint_path, warmup=False)
 
-    with pytest.warns(RuntimeWarning, match='incompatible'):
-        with pytest.raises(ValueError, match='min_bg_df'):
-            router._routeBatch(_batch(d=4, q=2, m=6, n_i=10))
+    with pytest.raises(ValueError, match='min_bg_df'):
+        router._routeBatch(_batch(d=4, q=2, m=6, n_i=10))
 
-    with pytest.warns(RuntimeWarning, match='incompatible'):
-        with pytest.raises(ValueError, match='min_within_df'):
-            router._routeBatch(_batch(d=4, q=2, m=12, n_i=3))
+    # min_n = 5 binds before q + min_within_df = 4, so the error names the rows per group
+    with pytest.raises(ValueError, match=r'3 rows per group \(supported: 5 to 250\)'):
+        router._routeBatch(_batch(d=4, q=2, m=12, n_i=3))
 
 
 def test_router_prepares_preprocessed_numpy_dict_with_formula_and_default_priors(
@@ -387,9 +385,10 @@ def test_router_prepares_preprocessed_numpy_dict_with_formula_and_default_priors
     assert batch['tau_rfx'].shape == (1, 2)
 
     first = math_preprocessed['X'][0]
+    # the model's X leads with the random slope (ses), whatever the formula's order
     assert torch.allclose(
         batch['X'][0, 0, 0, :3],
-        torch.tensor([1.0, first[1], first[0]], dtype=batch['X'].dtype),
+        torch.tensor([1.0, first[0], first[1]], dtype=batch['X'].dtype),
     )
     assert torch.allclose(
         batch['Z'][0, 0, 0, :2],
@@ -421,8 +420,9 @@ def test_router_accepts_canonical_fit_style_priors(
     )
 
     assert router.route(batch) == ['math-small']
-    assert torch.allclose(batch['nu_ffx'], torch.tensor([[1.0, 2.0, 3.0]]))
-    assert torch.allclose(batch['tau_ffx'], torch.tensor([[3.0, 2.0, 1.0]]))
+    # given in the formula's order; the batch has the model's, random slope first: 1, ses, meanses
+    assert torch.allclose(batch['nu_ffx'], torch.tensor([[1.0, 3.0, 2.0]]))
+    assert torch.allclose(batch['tau_ffx'], torch.tensor([[3.0, 1.0, 2.0]]))
     assert torch.allclose(batch['tau_rfx'], torch.tensor([[1.5, 0.5]]))
     assert torch.allclose(batch['tau_eps'], torch.tensor([1.2]))
     assert torch.equal(batch['family_ffx'], torch.tensor([0]))
@@ -460,12 +460,13 @@ def test_router_expands_multiple_named_term_priors_per_dataset(
 
     assert router.route(batch) == ['math-small', 'math-small']
     assert batch['X'].shape[0] == 2
+    # the batch's fixed-effect columns lead with the random slope: Intercept, ses, meanses
     assert torch.allclose(batch['nu_ffx'][0], torch.tensor([1.0, 0.0, 0.0]))
-    assert torch.allclose(batch['tau_ffx'][0], torch.tensor([3.0, 2.5, 0.5]))
+    assert torch.allclose(batch['tau_ffx'][0], torch.tensor([3.0, 0.5, 2.5]))
     assert torch.allclose(batch['tau_rfx'][0], torch.tensor([2.5, 0.7]))
     assert torch.allclose(batch['tau_eps'][0], torch.tensor(1.2))
     assert torch.allclose(batch['eta_rfx'][0], torch.tensor(0.0))
-    assert torch.allclose(batch['tau_ffx'][1], torch.tensor([2.5, 0.1, 2.5]))
+    assert torch.allclose(batch['tau_ffx'][1], torch.tensor([2.5, 2.5, 0.1]))
     assert torch.allclose(batch['tau_rfx'][1], torch.tensor([0.3, 2.5]))
     assert torch.equal(batch['_router_prior_index'], torch.tensor([0, 1]))
     assert torch.equal(batch['_router_source_index'], torch.tensor([0, 0]))
@@ -1114,7 +1115,8 @@ def test_router_sample_returns_valid_proposal(tmp_path: Path):
     assert len(result.validation) == 1
     assert result.proposal.samples_g.shape[0] == 1
     assert result.proposal.n_samples == 5
-    assert result.diagnostics is None
+    assert 'pp' in result.diagnostics
+    assert 'loo_nll' not in result.diagnostics
 
 
 def test_router_sample_with_precomputed_stats_runs(tmp_path: Path):
@@ -1133,20 +1135,31 @@ def test_router_sample_with_precomputed_stats_runs(tmp_path: Path):
     assert result.proposal.n_samples == 3
 
 
-def test_router_sample_returns_diagnostics_when_requested(tmp_path: Path):
+def test_router_sample_adds_loo_when_requested(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2)
     router = Api(joint_path, warmup=False)
 
     batch = _exact_batch(d=4, q=2)
-    result = router.sample(batch, n_samples=10, diagnostics=True)
+    result = router.sample(batch, n_samples=10, loo=True)
 
-    assert result.diagnostics is not None
+    assert result.diagnostics['loo_nll_vals'].shape == (1,)
     assert 'ppc_nll' in result.diagnostics
     assert 'param_summary' in result.diagnostics
     assert 'ffx' in result.diagnostics['param_summary']
     assert 'sigma_rfx' in result.diagnostics['param_summary']
     assert result.diagnostics['ppc_nll'].shape == (1,)
+
+
+def test_router_sample_diagnostics_is_a_deprecated_alias_of_loo(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2)
+    router = Api(joint_path, warmup=False)
+
+    with pytest.warns(FutureWarning, match='loo=True'):
+        result = router.sample(_exact_batch(d=4, q=2), n_samples=10, diagnostics=True)
+
+    assert 'loo_nll' in result.diagnostics
 
 
 def test_router_log_prob_accepts_valid_parameters(tmp_path: Path):
