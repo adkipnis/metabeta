@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from email.parser import Parser
+import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tarfile
@@ -10,6 +12,7 @@ import tomllib
 import zipfile
 
 from packaging.requirements import Requirement
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -96,6 +99,16 @@ def _metadata() -> Parser:
         return Parser().parsestr(wheel.read(metadata_name).decode())
 
 
+def _notebook_cells() -> list[tuple[str, dict]]:
+    notebooks = sorted((ROOT / 'demos').glob('*.ipynb'))
+    assert notebooks, 'no notebooks under demos/'
+    return [
+        (notebook.name, cell)
+        for notebook in notebooks
+        for cell in json.loads(notebook.read_text())['cells']
+    ]
+
+
 def test_release_artifact_contents() -> None:
     _require_artifacts()
 
@@ -148,6 +161,36 @@ def test_release_metadata_installs_next_to_colab() -> None:
         assert core.get(name) == floor, name
     assert 'arviz' not in core
     assert 'arviz' in research
+
+
+def test_release_metadata_license() -> None:
+    _require_artifacts()
+
+    metadata = _metadata()
+    assert metadata['License-Expression'] == 'Apache-2.0'
+    assert metadata.get_all('License-File') == ['LICENSE']
+
+
+def test_citation_version_matches_pyproject() -> None:
+    citation = yaml.safe_load((ROOT / 'CITATION.cff').read_text())
+    assert citation['version'] == VERSION
+
+
+def test_notebook_pins_match_pyproject() -> None:
+    for name, cell in _notebook_cells():
+        for pin in re.findall(r'metabeta==([^\s\'"]+)', ''.join(cell['source'])):
+            assert pin == VERSION, f'{name} pins metabeta=={pin}'
+
+
+def test_notebook_images_render_on_colab() -> None:
+    # Colab renders neither cell attachments nor images at paths relative to the notebook
+    for name, cell in _notebook_cells():
+        assert 'attachments' not in cell, f'{name} has a cell attachment'
+        source = ''.join(cell['source'])
+        images = re.findall(r'!\[[^\]]*\]\(([^)\s]+)', source)
+        images += re.findall(r'<img[^>]*\ssrc=["\']([^"\']+)', source)
+        for image in images:
+            assert image.startswith('https://'), f'{name} shows the image {image}'
 
 
 def test_release_metadata_public_surface() -> None:
