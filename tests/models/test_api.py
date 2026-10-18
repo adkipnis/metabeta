@@ -502,3 +502,18 @@ def test_named_column_the_correlation_filter_drops_raises(api: Api, partner: str
             n_samples=8,
             fit_preprocessor=True,
         )
+
+
+@pytest.mark.parametrize('m', [3, 210])
+def test_too_few_or_too_many_groups_raise_one_concise_error(api: Api, m: int):
+    df = _sleepstudy(m=m)
+
+    with warnings.catch_warnings(record=True) as caught, pytest.raises(ValueError) as error:
+        warnings.simplefilter('always')
+        api.sample(
+            df, formula='Reaction ~ Days + (1 | Subject)', n_samples=8, fit_preprocessor=True
+        )
+
+    assert f'{m} groups (supported: 5 to 200)' in str(error.value)
+    assert 'tiny' not in str(error.value)  # no failure list per submodel
+    assert not [w for w in caught if issubclass(w.category, RuntimeWarning)]
