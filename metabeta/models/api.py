@@ -1219,15 +1219,15 @@ class Api:
         slope_indices = [
             idx for term in random_terms if term != '1' for idx in resolveColumnTerm(term, columns)
         ]
-        model_indices = slope_indices + [idx for idx in fixed_indices if idx not in slope_indices]
-        intercept = [-1] if spec.intercept else []
-        model_columns = intercept + model_indices
-        self._ffx_order = [model_columns.index(idx) for idx in intercept + fixed_indices]
-        fixed_names = ['Intercept'] * len(intercept) + [columns[idx] for idx in fixed_indices]
-        model_names = ['Intercept'] * len(intercept) + [columns[idx] for idx in model_indices]
-        X_parts = [np.ones((X_pre.shape[0], 1), dtype=float)] * len(intercept)
-        X_parts += [X_pre[:, idx : idx + 1] for idx in model_indices]
-        X = np.concatenate(X_parts, axis=1) if X_parts else np.empty((X_pre.shape[0], 0))
+        other_indices = [idx for idx in fixed_indices if idx not in slope_indices]
+        intercept = [-1] if spec.intercept else []  # -1 stands for the column of ones
+        user_columns = intercept + fixed_indices
+        model_columns = intercept + slope_indices + other_indices
+        self._ffx_order = [model_columns.index(idx) for idx in user_columns]
+        fixed_names = ['Intercept' if idx < 0 else columns[idx] for idx in user_columns]
+        model_names = ['Intercept' if idx < 0 else columns[idx] for idx in model_columns]
+        X_parts = [np.ones(len(y)) if idx < 0 else X_pre[:, idx] for idx in model_columns]
+        X = np.column_stack(X_parts) if X_parts else np.empty((X_pre.shape[0], 0))
 
         Z = buildRandomDesign(X_pre, columns, random_terms)
         random_names = self._randomNames(random_terms, columns)
