@@ -1832,6 +1832,12 @@ class Api:
         )
         map_z_vals = sg.get('map_z')
         map_z = float(map_z_vals[bi]) if map_z_vals is not None and bi < len(map_z_vals) else None
+        accept_vals = sg.get('accept_rate')
+        accept = (
+            float(accept_vals[bi]) if accept_vals is not None and bi < len(accept_vals) else None
+        )
+        ess_vals = sg.get('ess_min')
+        ess_min = float(ess_vals[bi]) if ess_vals is not None and bi < len(ess_vals) else None
         return posteriorTable(
             result.proposal,
             result.param_names,
@@ -1842,6 +1848,8 @@ class Api:
             fit_label=fit_label,
             loo_nll=loo_nll,
             pareto_k=pareto_k,
+            accept_rate=accept,
+            ess_min=ess_min,
             psis_k=psis_k,
             psis_k_threshold=sg.get('psis_k_threshold', PSIS_K_THRESHOLD),
             map_z=map_z,
@@ -2090,6 +2098,8 @@ def posteriorTable(
     fit_label: str = 'fit',
     loo_nll: float | None = None,
     pareto_k: float | None = None,
+    accept_rate: float | None = None,
+    ess_min: float | None = None,
     psis_k: float | None = None,
     psis_k_threshold: float = PSIS_K_THRESHOLD,
     map_z: float | None = None,
@@ -2278,6 +2288,10 @@ def posteriorTable(
         footer_parts.append(f'LOO-NLL = {loo_nll:.3f}')
     if pareto_k is not None:
         footer_parts.append(f'Pareto k = {pareto_k:.3f}')
+    if accept_rate is not None:
+        footer_parts.append(f'acceptance = {accept_rate:.2f}')
+    if ess_min is not None:
+        footer_parts.append(f'min ESS = {ess_min:.0f}')
     if psis_k is not None:
         note = 'refined' if psis_k <= psis_k_threshold else '⚠ unreliable — consider MCMC'
         footer_parts.append(f'PSIS k̂ = {psis_k:.3f} ({note})')
