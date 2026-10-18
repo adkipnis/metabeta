@@ -40,7 +40,7 @@ import pandas as pd
 from metabeta import Api
 
 df = pd.read_csv('https://vincentarelbundock.github.io/Rdatasets/csv/lme4/sleepstudy.csv')
-mb = Api.from_pretrained('normal')
+mb = Api.from_pretrained('gaussian')
 result = mb.sample(df, formula='Reaction ~ Days + (Days | Subject)')
 print(mb.posteriorSummary(result))
 ```
