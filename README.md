@@ -62,7 +62,7 @@ Standard Deviations:
 | Days      |  6.394 | 1.481 |  3.946 |   6.195 |   9.584 |
 | Residual  | 25.713 | 1.515 | 22.652 |  25.686 |  28.791 |
 ...
-draws = 1000   acceptance = 0.77   min ESS = 430   PSIS k̂ = 0.245 (refined)   MAP z = 0.5
+draws = 1000   acceptance = 0.77   min ESS = 430   PSIS k̂ = 0.245 (refined)   MAP z = 0.5   R² = 0.827
 ```
 
 - **Units**: ms, and ms per day for `Days` (lme4: 251.4 and 10.47).
@@ -99,6 +99,8 @@ Diagnostics, in `result.safeguards` and the summary's last line:
   (PSIS); lower is better.
 - `MAP z`: the distance between the posterior mean and the maximum a posteriori (MAP) estimate, in
   posterior SDs.
+- `R²`, `AUC` or `Deviance`, by family: how well the posterior predicts the data (in
+  `result.diagnostics`).
 
 `sample` warns when IMH acceptance, the ESS or `MAP z` crosses its threshold.
 
