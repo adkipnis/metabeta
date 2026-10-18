@@ -1940,6 +1940,82 @@ class Api:
             }
         return pd.DataFrame({name: draws.cpu().numpy() for name, draws in columns.items()})
 
+    def groupDraws(
+        self,
+        result: RouterResult,
+        *,
+        prior_id: int | str = 0,
+        x_scale: str = 'original',
+    ) -> pd.DataFrame:
+        """Return each group's coefficient draws for the terms with random effects: the fixed
+        effect plus the group's deviation, like ``coef`` in lme4.
+
+        One row per draw and one column per (group, term), on the scale of ``rfxSummary``.
+        """
+        if result.proposal is None:
+            raise ValueError('RouterResult has no proposal; call sample() first')
+        bi = _priorRow(result, prior_id)
+        x_scale = _resolveXScale(x_scale, result.scale_info)
+        ffx, _, _ = _globalDraws(result.proposal, bi, result.scale_info, x_scale)  # (S, d)
+        rfx = result.proposal.rfx[bi].float()  # (m, S, q)
+        if x_scale == 'original':
+            rfx = result.scale_info.rfxToOriginal(rfx)
+        names = result.param_names or {}
+        terms = names['sigma_rfx']  # each has a fixed effect: prepareData refuses others
+        groups = result.group_names or [str(i) for i in range(rfx.shape[0])]
+        fixed = ffx[:, [names['ffx'].index(term) for term in terms]]  # (S, q)
+        coef = fixed + rfx[: len(groups), :, : len(terms)]  # (m, S, q)
+        columns = pd.MultiIndex.from_product([groups, terms], names=['group', 'term'])
+        return pd.DataFrame(coef.permute(1, 0, 2).flatten(1).cpu().numpy(), columns=columns)
+
+    def posteriorPredictive(
+        self,
+        result: RouterResult,
+        *,
+        prior_id: int | str = 0,
+        seed: int | None = None,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return the observed responses (n,) and one replicate per posterior draw (n, S).
+
+        Both are in the data's units, with the rows grouped as the model sees them rather than
+        in the data's order.  ``seed`` works as in ``sample``.
+        """
+        if result.diagnostics is None or result.batch is None:
+            raise ValueError('result has no posterior predictive; call sample() first')
+        bi = _priorRow(result, prior_id)
+        with _seeded(seed):
+            y_rep = result.diagnostics['pp'].sample()[bi][_rowMask(result, bi)]  # (n, S)
+        return _observedY(result, bi).cpu().numpy(), _toDataUnits(result, y_rep).cpu().numpy()
+
+    def bayesFactor(self, result: RouterResult, reference: RouterResult) -> pd.DataFrame:
+        """Return the Bayes factor (BF) of ``result``'s model over ``reference``'s, per prior.
+
+        Both results come from ``sample(evidence=True)`` on the same data; a result with one
+        row pairs with every row of the other.  ``strength`` grades the BF either way after
+        Kass and Raftery (1995), and ``PSIS k̂`` is the worse of the two evidence estimates'
+        diagnostics.
+        """
+        if result.evidence is None or reference.evidence is None:
+            raise ValueError('bayesFactor needs results of sample(evidence=True)')
+        y, y_ref = _observedY(result, 0), _observedY(reference, 0)
+        if y.shape != y_ref.shape or not torch.allclose(y.sort().values, y_ref.sort().values):
+            raise ValueError(
+                'a Bayes factor compares models of the same data; these results differ'
+            )
+        log_ev, log_ev_ref = result.evidence['log_evidence'], reference.evidence['log_evidence']
+        log_bf = log_ev - log_ev_ref  # a one-row result broadcasts
+        rows = result if len(log_ev) >= len(log_ev_ref) else reference
+        names = [entry.get('prior_name') for entry in rows.validation]
+        return pd.DataFrame(
+            {
+                'log BF': log_bf,
+                'BF': np.exp(log_bf),
+                'strength': [_bfStrength(b) for b in log_bf],
+                'PSIS k̂': np.maximum(result.evidence['psis_k'], reference.evidence['psis_k']),
+            },
+            index=pd.Index(range(len(names)) if None in names else names, name='prior'),
+        )
+
     def rfxSummary(
         self,
         result: RouterResult,
@@ -2091,6 +2167,33 @@ def _seeded(seed: int | None) -> Iterator[None]:
     with torch.random.fork_rng(devices=range(torch.cuda.device_count())):
         torch.manual_seed(seed)
         yield
+
+
+def _rowMask(result: RouterResult, row: int) -> torch.Tensor:
+    """Which (group, slot) cells of a batch row hold data, as a boolean (m, n_i) mask."""
+    return result.batch['mask_n'][row].bool()
+
+
+def _toDataUnits(result: RouterResult, y: torch.Tensor) -> torch.Tensor:
+    """Responses on the data's scale: the Gaussian response is standardized in the batch, and
+    the scale info of the other families holds mean 0 and SD 1."""
+    si = result.scale_info
+    return y if si is None else y * si.y_std + si.y_mean
+
+
+def _observedY(result: RouterResult, row: int) -> torch.Tensor:
+    """A batch row's observed responses (n,) in the data's units, grouped as in the batch."""
+    return _toDataUnits(result, result.batch['y'][row][_rowMask(result, row)].float())
+
+
+# Kass and Raftery (1995), JASA 90:773, p. 777: upper BF bounds of each grade of evidence
+BF_STRENGTH = ((3, 'not worth more than a bare mention'), (20, 'positive'), (150, 'strong'))
+
+
+def _bfStrength(log_bf: float) -> str:
+    """How strongly a Bayes factor favors one of its two models, either way (#33)."""
+    bf = math.exp(abs(log_bf))
+    return next((label for bound, label in BF_STRENGTH if bf < bound), 'very strong')
 
 
 def _globalDraws(
