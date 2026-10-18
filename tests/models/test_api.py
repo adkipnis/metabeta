@@ -649,3 +649,19 @@ def test_sample_returns_1000_refined_draws_by_default(api: Api):
 
     assert result.proposal.n_samples == 1000
     assert result.safeguards['accept_rate'].shape == (1,)  # the IMH ran
+
+
+@pytest.mark.parametrize(
+    'warm',
+    [
+        lambda path: Api(path, warmup=True),
+        lambda path: Api(path, warmup=False).warmup(
+            formula='Reaction ~ Days + (1 + Days | Subject)'
+        ),
+    ],
+    ids=['construction', 'formula'],
+)
+def test_warmup_emits_no_warnings(api: Api, warm):
+    _, caught = _warningsOf(lambda: warm(api.joint_checkpoint))
+
+    assert [str(w.message) for w in caught] == []
