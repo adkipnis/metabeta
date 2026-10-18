@@ -3,7 +3,9 @@
 Every test goes through `Api` on the tiny-Approximator joint checkpoint, never a private helper.
 """
 
+import logging
 from pathlib import Path
+import warnings
 
 import matplotlib
 
@@ -88,3 +90,26 @@ def test_no_formula_uses_every_other_column_as_a_fixed_effect(api: Api):
     )
 
     assert result.param_names == {'ffx': ['Intercept', 'Days', 'Noise'], 'sigma_rfx': ['Intercept']}
+
+
+def test_preprocessing_ignores_a_collinear_column_the_formula_does_not_name(
+    api: Api, caplog: pytest.LogCaptureFixture
+):
+    df = _sleepstudy()
+    days2 = 2 * df['Days'] + np.random.default_rng(1).normal(0, 0.01, len(df))
+    formula = 'Reaction ~ Days + (1 + Days | Subject)'
+
+    torch.manual_seed(0)
+    reference = api.sample(df, formula=formula, n_samples=8, fit_preprocessor=True)
+    torch.manual_seed(0)
+    with warnings.catch_warnings(record=True) as caught, caplog.at_level(logging.INFO):
+        warnings.simplefilter('always')
+        result = api.sample(
+            df.assign(Days2=days2), formula=formula, n_samples=8, fit_preprocessor=True
+        )
+
+    assert result.param_names == reference.param_names
+    for key in ('ffx', 'sigma_rfx', 'rfx'):
+        assert torch.equal(getattr(result.proposal, key), getattr(reference.proposal, key))
+    messages = [str(w.message) for w in caught] + [r.getMessage() for r in caplog.records]
+    assert not any('days2' in message.lower() for message in messages)
