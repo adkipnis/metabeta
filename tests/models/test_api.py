@@ -3,6 +3,7 @@
 Every test goes through `Api` on the tiny-Approximator joint checkpoint, never a private helper.
 """
 
+import inspect
 import logging
 from pathlib import Path
 import re
@@ -665,3 +666,34 @@ def test_warmup_emits_no_warnings(api: Api, warm):
     _, caught = _warningsOf(lambda: warm(api.joint_checkpoint))
 
     assert [str(w.message) for w in caught] == []
+
+
+def test_from_pretrained_documents_every_argument():
+    doc = inspect.getdoc(Api.from_pretrained)
+
+    for name in inspect.signature(Api.from_pretrained).parameters:
+        assert re.search(rf'^{name}:$', doc, re.MULTILINE), name
+
+
+def test_docstrings_name_only_methods_the_api_has():
+    module = inspect.getmodule(Api)
+    objects = [obj for _, obj in inspect.getmembers(module) if inspect.getmodule(obj) is module]
+    objects += [member for _, member in inspect.getmembers(Api)]
+    docs = [inspect.getdoc(obj) or '' for obj in objects]
+    named = {name for doc in docs for name in re.findall(r'``(?:Api\.)?(\w+)\(\)``', doc)}
+
+    assert 'sample' in named
+    assert named - set(dir(Api)) == set()
+
+
+def test_categorical_reference_is_the_most_frequent_level(api: Api):
+    rng = np.random.default_rng(1)
+    treatment = np.where(rng.random(120) < 0.3, 'ctrl', 'drug')  # 'drug' is the modal level
+
+    result = api.sample(
+        _sleepstudy(Treatment=treatment),
+        formula='Reaction ~ Days + Treatment + (1 | Subject)',
+        n_samples=8,
+    )
+
+    assert result.param_names['ffx'] == ['Intercept', 'Days', 'Treatment_ctrl']
