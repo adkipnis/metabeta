@@ -1161,13 +1161,6 @@ class Api:
             df = df.rename(columns={target: 'y'})
 
         group_name = (group_name or spec.group_name or '').lower()
-        if group_name and group_name in df.columns:
-            # the preprocessor codes groups in the column's sorted order (numeric for integer
-            # ids), so the labels follow that order, not the order of their strings
-            labels = df[group_name].dropna().sort_values().unique()
-            self._group_labels = [str(v) for v in labels]
-        else:
-            self._group_labels = None
         terms = {*spec.fixed_terms, *spec.random_terms}
         if preprocessor is not None:
             prep = (
@@ -1289,6 +1282,8 @@ class Api:
         Z = buildRandomDesign(X_pre, columns, random_terms)
         random_names = self._randomNames(random_terms, columns)
         self._param_names = {'ffx': list(fixed_names), 'sigma_rfx': list(random_names)}
+        levels = preprocessed.get('group_levels')  # the preprocessor's label of each group code
+        self._group_labels = None if levels is None else [str(v) for v in levels]
 
         # Build scale info for optional back-transformation to original X units
         x_means_meta = np.asarray(

@@ -410,6 +410,23 @@ def test_integer_group_ids_label_their_own_rows(api: Api):
     assert max(rows, key=lambda group: rows[group][1]) == '10'
 
 
+def test_a_group_without_responses_takes_no_label(api: Api):
+    df = _sleepstudy()
+    df['Subject'] = np.repeat(np.arange(12), 10)
+    df.loc[df['Subject'] == 3, 'Reaction'] = np.nan  # the preprocessor drops these rows
+    df.loc[df['Subject'] == 10, 'Reaction'] += 300
+
+    result = api.sample(
+        df, formula='Reaction ~ Days + (1 | Subject)', n_samples=64, fit_preprocessor=True
+    )
+
+    labels = [str(i) for i in range(12) if i != 3]
+    rows, _ = _rfxRows(api.rfxSummary(result), 'Intercept')
+    assert list(rows) == labels
+    assert max(rows, key=lambda group: rows[group][1]) == '10'
+    assert api.groupDraws(result).columns.get_level_values('group').unique().tolist() == labels
+
+
 def _gridDraws(grid) -> np.ndarray:
     """The draws a plotParameters grid shows, (S, D), read from its upper scatter cells."""
     n = grid.axes.shape[0]
