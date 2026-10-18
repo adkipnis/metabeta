@@ -468,3 +468,23 @@ def test_unsupported_formula_syntax_is_named(api: Api, formula: str, syntax: str
 
     with pytest.raises(NotImplementedError, match=re.escape(syntax)):
         api.sample(df, formula=formula, n_samples=8, fit_preprocessor=True)
+
+
+@pytest.mark.parametrize('interaction', ['a:b', 'a*b'])
+def test_interaction_error_gives_the_centered_product_column(api: Api, interaction: str):
+    df = _sleepstudy(b=np.random.default_rng(1).normal(size=120)).rename(columns={'Days': 'a'})
+
+    with pytest.raises(NotImplementedError) as error:
+        api.sample(
+            df,
+            formula=f'Reaction ~ {interaction} + (1 | Subject)',
+            n_samples=8,
+            fit_preprocessor=True,
+        )
+
+    assert "df['a_b'] = (df['a'] - df['a'].mean()) * (df['b'] - df['b'].mean())" in str(error.value)
+    df['a_b'] = (df['a'] - df['a'].mean()) * (df['b'] - df['b'].mean())
+    result = api.sample(
+        df, formula='Reaction ~ a + b + a_b + (1 | Subject)', n_samples=8, fit_preprocessor=True
+    )
+    assert result.param_names['ffx'] == ['Intercept', 'a', 'b', 'a_b']
