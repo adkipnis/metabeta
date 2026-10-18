@@ -81,7 +81,7 @@ On a MacBook (Apple M3 CPU), the refined posterior with 4,000 draws returns in a
 a second per dataset for all three outcome families at representative dataset sizes; on a
 GPU the same call takes about a tenth of a second.
 
-See [demos/01_quickstart.ipynb](demos/01_quickstart.ipynb) for the full `sleepstudy`
+See [demos/01-quickstart.ipynb](demos/01-quickstart.ipynb) for the full `sleepstudy`
 walkthrough and [demos/priors.ipynb](demos/priors.ipynb) for an exemplary prior-sensitivity
 analysis.
 
