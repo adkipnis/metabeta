@@ -1160,6 +1160,14 @@ class Api:
                     'tabular router input requires a fitted preprocessor or fit_preprocessor=True'
                 )
             preprocessed = prep.fit_transform(df)
+        # a dropped column would resolve to another one sharing its prefix, or to none
+        dropped = sorted({*spec.fixed_terms, *spec.random_terms} & prep._dropped_cols)
+        if dropped:
+            raise ValueError(
+                f'the preprocessor dropped formula column(s) {dropped} as nearly collinear with '
+                f'another predictor (|r| > {prep.corr_threshold:g}) or near-constant: keep one '
+                'column of each collinear pair in the formula'
+            )
         # every output name (parameters, summaries, plots) derives from these columns
         columns = restoreColumnCase(preprocessed['columns'].tolist(), raw_columns)
         preprocessed['columns'] = np.array(columns, dtype=str)
