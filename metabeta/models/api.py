@@ -522,7 +522,7 @@ class Api:
         for key in ('family_ffx', 'family_sigma_rfx', 'family_sigma_eps'):
             if key in batch:
                 prior_params[key] = batch[key].long().cpu().numpy()
-        self._restoreFixedOrder(proposal, prior_params, diags)
+        self._restoreFixedOrder(proposal, prior_params, diags, safeguards)
         ns_arr = batch['ns'].cpu().numpy() if 'ns' in batch else None
         return RouterResult(
             proposal=proposal,
@@ -546,6 +546,7 @@ class Api:
         proposal: Proposal,
         prior_params: dict[str, np.ndarray],
         diags: dict[str, Any],
+        safeguards: dict[str, Any] | None,
     ) -> None:
         """Permute the fixed-effect columns from the model's layout (random slopes first) back
         to the user's formula order. Padding columns stay in place, and ``result.batch`` keeps
@@ -563,6 +564,8 @@ class Api:
         for key in ('tau_ffx', 'nu_ffx'):
             if key in prior_params:
                 prior_params[key] = prior_params[key][:, lead(prior_params[key].shape[1])]
+        if safeguards is not None and 'ess' in safeguards:  # (B, D_g), ffx columns first
+            safeguards['ess'] = safeguards['ess'][:, lead(safeguards['ess'].shape[1])]
         if 'param_summary' in diags:
             summary = diags['param_summary']['ffx']
             diags['param_summary']['ffx'] = {
