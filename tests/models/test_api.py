@@ -5,6 +5,7 @@ Every test goes through `Api` on the tiny-Approximator joint checkpoint, never a
 
 import logging
 from pathlib import Path
+import re
 import warnings
 
 import matplotlib
@@ -448,3 +449,22 @@ def test_random_walk_reports_one_line_instead_of_the_chain_warnings(api: Api):
     assert ('NUTS' in str(line.message)) == (safeguards['ess_min'][0] < 10)
     for key in ('accept_rate', 'accept_flag', 'suggested_n_samples', 'ess', 'ess_min', 'ess_flag'):
         np.testing.assert_array_equal(safeguards[key], reference.safeguards[key], err_msg=key)
+
+
+@pytest.mark.parametrize(
+    ('formula', 'syntax'),
+    [
+        ('Reaction ~ Days + (1 || Subject)', '(1 || Subject)'),
+        ('Reaction ~ Days + (1 | Subject/Site)', '(1 | Subject/Site)'),
+        ('Reaction ~ Days:Noise + (1 | Subject)', 'Days:Noise'),
+        ('Reaction ~ Days*Noise + (1 | Subject)', 'Days*Noise'),
+        ('Reaction ~ log(Days) + (1 | Subject)', 'log(Days)'),
+        ('Reaction ~ factor(Days) + (1 | Subject)', 'factor(Days)'),
+        ('Reaction ~ C(Days) + (1 | Subject)', 'C(Days)'),
+    ],
+)
+def test_unsupported_formula_syntax_is_named(api: Api, formula: str, syntax: str):
+    df = _sleepstudy(Noise=np.random.default_rng(1).normal(size=120))
+
+    with pytest.raises(NotImplementedError, match=re.escape(syntax)):
+        api.sample(df, formula=formula, n_samples=8, fit_preprocessor=True)
