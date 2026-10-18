@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
+from scipy import stats
 import torch
 
 from metabeta.models.api import Api
@@ -307,3 +308,43 @@ def test_integer_group_ids_label_their_own_rows(api: Api):
     rows, _ = _rfxRows(api.rfxSummary(result), 'Intercept')
     assert list(rows) == [str(i) for i in range(12)]
     assert max(rows, key=lambda group: rows[group][1]) == '10'
+
+
+def _gridDraws(grid) -> np.ndarray:
+    """The draws a plotParameters grid shows, (S, D), read from its upper scatter cells."""
+    n = grid.axes.shape[0]
+    first = grid.axes[0, 1].collections[0].get_offsets()[:, 1]
+    rest = [grid.axes[0, j].collections[0].get_offsets()[:, 0] for j in range(1, n)]
+    return np.column_stack([first, *rest]).astype(float)
+
+
+def _priorCurve(grid, i: int) -> tuple[np.ndarray, np.ndarray]:
+    """The prior overlay (x, density) drawn on the grid's i-th diagonal cell."""
+    ax = grid.axes[i, i]
+    twins = [a for a in grid.figure.axes if a is not ax and a.bbox.bounds == ax.bbox.bounds]
+    (line,) = [line for a in twins for line in a.get_lines()]
+    return np.asarray(line.get_xdata(), float), np.asarray(line.get_ydata(), float)
+
+
+def test_parameter_plot_draws_random_effects_and_slope_prior_at_days_zero(api: Api):
+    df = _sleepstudy()
+    result = api.sample(
+        df, formula='Reaction ~ Days + (1 + Days | Subject)', n_samples=64, fit_preprocessor=True
+    )
+    mu, s = df['Days'].mean(), df['Days'].std(ddof=0)
+    c = mu / s
+    sd0, sd1, rho = _randomSlopeDraws(result)
+    sd0_orig = np.sqrt(sd0**2 - 2 * c * rho * sd0 * sd1 + c**2 * sd1**2)
+    rho_orig = (rho * sd0 * sd1 - c * sd1**2) / s / (sd0_orig * sd1 / s)
+
+    grid = api.plotParameters(result)
+    draws = _gridDraws(grid)  # Intercept, Days, σ_Intercept, σ_Days, σ_ε, ρ
+    x, density = _priorCurve(grid, 3)
+    plt.close(grid.figure)
+
+    assert draws.shape[1] == 6
+    np.testing.assert_allclose(draws[:, 2], sd0_orig, rtol=1e-4)
+    np.testing.assert_allclose(draws[:, 3], sd1 / s, rtol=1e-4)
+    np.testing.assert_allclose(draws[:, 5], rho_orig, rtol=1e-4, atol=1e-5)
+    tau = result.prior_params['tau_rfx'][0, 1] * df['Reaction'].std(ddof=0) / s
+    np.testing.assert_allclose(density, stats.halfnorm.pdf(x, scale=tau), rtol=1e-5)
