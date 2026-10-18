@@ -137,8 +137,8 @@ package = true
 # scamd, so venv recreation on the cluster cannot silently drop pymc/rpy2/bambi again
 default-groups = ["dev", "simulation", "research"]
 environments = [
-    "sys_platform == 'linux' and python_version == '3.12'",
-    "sys_platform == 'darwin' and python_version == '3.12'",
+    "sys_platform == 'linux'",
+    "sys_platform == 'darwin'",
 ]
 
 [[tool.uv.index]]
