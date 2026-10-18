@@ -126,7 +126,8 @@ def test_release_artifact_contents() -> None:
     assert f'{SDIST_ROOT}/demos/01-quickstart.ipynb' in sdist_names
     assert f'{SDIST_ROOT}/demos/02-families.ipynb' in sdist_names
     assert f'{SDIST_ROOT}/demos/intro.ipynb' not in sdist_names
-    assert f'{SDIST_ROOT}/demos/priors.ipynb' in sdist_names
+    assert f'{SDIST_ROOT}/demos/03-priors.ipynb' in sdist_names
+    assert f'{SDIST_ROOT}/demos/priors.ipynb' not in sdist_names
 
 
 def test_release_metadata_dependencies() -> None:

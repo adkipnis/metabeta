@@ -82,7 +82,7 @@ a second per dataset for all three outcome families at representative dataset si
 GPU the same call takes about a tenth of a second.
 
 See [demos/01-quickstart.ipynb](demos/01-quickstart.ipynb) for the full `sleepstudy`
-walkthrough and [demos/priors.ipynb](demos/priors.ipynb) for an exemplary prior-sensitivity
+walkthrough and [demos/03-priors.ipynb](demos/03-priors.ipynb) for an exemplary prior-sensitivity
 analysis.
 
 
