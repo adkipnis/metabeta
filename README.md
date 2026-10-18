@@ -169,7 +169,7 @@ random-walk moves (`random_walk=True`). `02-families` compares a Poisson fit wit
 ## Citing
 
 ```bibtex
-@misc{kipnis2026prioramortized,
+@misc{kipnis.2026,
   title         = {Prior-Amortized In-Context {Bayesian} Inference for Generalized Linear
                    Mixed-Effects Models},
   author        = {Kipnis, Alex and Binz, Marcel and Schulz, Eric},
