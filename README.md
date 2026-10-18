@@ -79,33 +79,31 @@ draws = 1000   acceptance = 0.78   min ESS = 456   PSIS k̂ = 0.240   MAP z = 0.
 | [02-families](https://github.com/adkipnis/metabeta/blob/main/demos/02-families.ipynb) | Bernoulli and Poisson outcomes | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/adkipnis/metabeta/blob/main/demos/02-families.ipynb) |
 | [03-priors](https://github.com/adkipnis/metabeta/blob/main/demos/03-priors.ipynb) | Custom priors and Bayes factors | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/adkipnis/metabeta/blob/main/demos/03-priors.ipynb) |
 
-## How it works
+## How it was built
 
 <img src="https://raw.githubusercontent.com/adkipnis/metabeta/main/assets/overview.svg" width="100%" alt="Top: training datasets are simulated from priors over the fixed effects, the random-effect SDs and their correlations. Bottom: summary networks condense each group, then all groups; flows map the summary and the prior to posterior draws.">
 
-**Simulation** (figure, top): every training dataset is a random GLMM.
+**Simulation** (figure, top)
 
 - **Sizes**: the numbers of predictors d, random effects q, groups m and rows per group
-  n<sub>i</sub> are drawn first, favoring the small sizes common in applied work.
-- **Priors**: the prior families and their scales are drawn next, so the prior becomes an input.
-- **Parameters**: the fixed effects β, random-effect SDs σ and correlations R come from these
-  priors. Each group's random effects α<sub>i</sub> are normal, with SDs σ and correlations R.
-- **Predictors**: X comes from synthetic tables, built from random causal models as in TabPFN, or
-  from subsamples of real tables.
+  n<sub>i</sub> are drawn first.
+- **Priors**: the prior families and their scales are drawn next.
+- **Parameters**: the fixed effects β, random-effect SDs σ and correlations R are drawn from these
+  priors.
+- **Predictors**: X is sampled from synthetic tables, built from random structural causal models as in TabPFN/TabICL, or subsampled from hundreds of real tabular datasets.
 - **Outcomes**: y is drawn from the GLMM, given X and the parameters.
 
-**Training** (figure, bottom): the networks learn to recover the parameters behind each dataset.
+**Training** (figure, bottom)
 
-- **Summaries**: Σ<sub>l</sub> condenses each group's rows into a vector, and Σ<sub>g</sub>
-  condenses these vectors into one summary s. Both ignore the order of rows and groups.
-- **Shortcuts**: quick analytical estimates, the prior and the dataset's sizes join the summaries.
+- **Summaries**: Σ<sub>l</sub> condenses all rows per group into a vector, and Σ<sub>g</sub>
+  condenses these vectors into one summary s. Both are invariant wrt. the order of rows and groups.
+- **Augmentation**: efficient analytical estimates and the prior join the summaries.
 - **Posterior**: normalizing flows turn random noise u into posterior draws. Π<sub>g</sub> draws
   β, σ and R from s; Π<sub>l</sub> draws each group's α<sub>i</sub> from its summary and a draw
   of Π<sub>g</sub>.
-- **Objective**: all networks train together, so that the true parameters get high posterior
-  density.
+- **Objective**: all networks are train end-to-end to optimize the probability of the true parameters under the proposed posterior.
 
-A fit is then one pass through the trained networks, and Metropolis–Hastings refines its draws.
+A GLMM fit is then a forward pass through the trained networks. Metropolis–Hastings refines its draws to grant the estimated posterior asymptotic exactness.
 
 ## FAQ
 
