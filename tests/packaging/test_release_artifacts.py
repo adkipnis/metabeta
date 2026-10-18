@@ -124,6 +124,7 @@ def test_release_artifact_contents() -> None:
     for prefix in SDIST_EXCLUDED_PREFIXES:
         assert not any(name.startswith(prefix) for name in sdist_names), prefix
     assert f'{SDIST_ROOT}/demos/01_quickstart.ipynb' in sdist_names
+    assert f'{SDIST_ROOT}/demos/02_families.ipynb' in sdist_names
     assert f'{SDIST_ROOT}/demos/intro.ipynb' not in sdist_names
     assert f'{SDIST_ROOT}/demos/priors.ipynb' in sdist_names
 
