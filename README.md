@@ -96,12 +96,13 @@ draws = 1000   acceptance = 0.78   min ESS = 456   PSIS k̂ = 0.240   MAP z = 0.
 **Training** (figure, bottom)
 
 - **Summaries**: Σ<sub>l</sub> condenses all rows per group into a vector, and Σ<sub>g</sub>
-  condenses these vectors into one summary s. Both are invariant wrt. the order of rows and groups.
+  condenses these vectors into one summary s. Both ignore the order of rows and groups.
 - **Augmentation**: efficient analytical estimates and the prior join the summaries.
 - **Posterior**: normalizing flows turn random noise u into posterior draws. Π<sub>g</sub> draws
   β, σ and R from s; Π<sub>l</sub> draws each group's α<sub>i</sub> from its summary and a draw
   of Π<sub>g</sub>.
-- **Objective**: all networks are train end-to-end to optimize the probability of the true parameters under the proposed posterior.
+- **Objective**: all networks are trained end-to-end to optimize the probability of the true
+  parameters under the proposed posterior.
 
 A GLMM fit is then a forward pass through the trained networks. Metropolis–Hastings refines its draws to grant the estimated posterior asymptotic exactness.
 
