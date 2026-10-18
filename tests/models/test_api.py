@@ -401,3 +401,27 @@ def test_prior_overlays_without_closed_form_match_the_pushforward(api: Api):
     for key, draws in [('sd0', sd0_orig), ('rho', rho_orig)]:
         cdf = _cdfAt(curves[key], np.quantile(draws, levels))
         np.testing.assert_allclose(cdf, levels, atol=0.015, err_msg=key)
+
+
+def _warningsOf(call) -> tuple[object, list[warnings.WarningMessage]]:
+    """The result of `call()` and every warning it emits."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always')
+        result = call()
+    return result, caught
+
+
+def test_low_ess_warning_suggests_more_draws_and_points_at_the_call(api: Api):
+    _, caught = _warningsOf(
+        lambda: api.sample(
+            _sleepstudy(),
+            formula='Reaction ~ Days + (1 + Days | Subject)',
+            n_samples=64,
+            fit_preprocessor=True,
+        )
+    )
+
+    (ess,) = [w for w in caught if 'effective sample size' in str(w.message)]
+    assert 'n_samples' in str(ess.message)
+    assert 'do not fix' not in str(ess.message)
+    assert ess.filename == __file__
