@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # the lockfile's versions
+          - python: '3.12'
+            install: uv sync --locked --no-default-groups --group dev
+          # every direct dependency at its floor, close to Colab's preinstalled versions;
+          # uv pip resolves the package and the dev group alone, whereas the lock's single
+          # resolution also meets the simulation group's scamd, which needs pandas>=2.3.3
+          - python: '3.13'
+            install: uv venv && uv pip install --resolution lowest-direct -e . --group dev
+    name: Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+
+    # the project's default-groups pull in the research extra (rpy2 needs R in PATH,
+    # pymc/scamd are heavy); CI only needs the core package + dev tooling,
+    # so both installs leave the defaults out and no later uv call syncs
+    env:
+      UV_PYTHON: ${{ matrix.python }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.1.0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install package and dev tooling
+        run: ${{ matrix.install }}
+
+      - name: Check formatting
+        run: uv run --no-sync blue --check --diff metabeta tests
+
+      - name: Run tests
+        run: uv run --no-sync pytest tests/models tests/evaluation tests/utils
+
+      - name: Build release artifacts
+        run: uv build
+
+      - name: Check release artifacts
+        run: uv run --no-sync pytest tests/packaging/test_release_artifacts.py
