@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from pathlib import Path
-import sys
 
 from metabeta.utils.constants import LIKELIHOOD_FAMILIES
 
@@ -53,7 +52,6 @@ def download_checkpoint(
         print(
             f'Resolving metabeta {family!r} checkpoint from '
             f'Hugging Face ({HF_REPO_ID}@{CHECKPOINT_VERSION})...',
-            file=sys.stderr,
             flush=True,
         )
 
@@ -65,5 +63,5 @@ def download_checkpoint(
         force_download=force_download,
     )
     if verbose:
-        print(f'Using checkpoint: {local_path}', file=sys.stderr, flush=True)
+        print(f'Using checkpoint: {local_path}', flush=True)
     return Path(local_path)

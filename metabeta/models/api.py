@@ -9,7 +9,6 @@ from typing import Any
 import math
 import operator
 import os
-import sys
 import warnings
 
 import numpy as np
@@ -215,10 +214,10 @@ class Api:
             verbose=verbose,
         )
         if verbose:
-            print(f'Loading metabeta checkpoint on {device}...', file=sys.stderr, flush=True)
+            print(f'Loading metabeta checkpoint on {device}...', flush=True)
         api = cls(path, device=device, batch_size=batch_size, warmup=warmup)
         if verbose:
-            print('Metabeta checkpoint ready.', file=sys.stderr, flush=True)
+            print('Metabeta checkpoint ready.', flush=True)
         return api
 
     def __init__(
