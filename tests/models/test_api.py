@@ -348,3 +348,21 @@ def test_parameter_plot_draws_random_effects_and_slope_prior_at_days_zero(api: A
     np.testing.assert_allclose(draws[:, 5], rho_orig, rtol=1e-4, atol=1e-5)
     tau = result.prior_params['tau_rfx'][0, 1] * df['Reaction'].std(ddof=0) / s
     np.testing.assert_allclose(density, stats.halfnorm.pdf(x, scale=tau), rtol=1e-5)
+
+
+def test_exponential_sd_prior_is_drawn_as_an_exponential(api: Api):
+    df = _sleepstudy()
+    result = api.sample(
+        df,
+        formula='Reaction ~ Days + (1 + Days | Subject)',
+        n_samples=64,
+        fit_preprocessor=True,
+        priors={'random_sd': {'family': 'exponential', 'Days': {'tau': 0.7}}},
+    )
+
+    grid = api.plotParameters(result)
+    x, density = _priorCurve(grid, 3)  # σ_Days
+    plt.close(grid.figure)
+
+    scale = 0.7 * df['Reaction'].std(ddof=0) / df['Days'].std(ddof=0)
+    np.testing.assert_allclose(density, stats.expon.pdf(x, scale=scale), rtol=1e-5)
