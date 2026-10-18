@@ -198,7 +198,6 @@ class Api:
         Subsequent calls reuse the cache unless the upstream tag has moved.
 
         Pretrained weights, downloaded by ``from_pretrained``: CC BY-NC-SA 4.0, non-commercial.
-        For commercial use contact alexander.kipnis@helmholtz-munich.de.
 
         Parameters
         ----------
