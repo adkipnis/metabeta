@@ -549,3 +549,17 @@ def test_imh_footer_reports_acceptance_min_ess_and_k_hat(api: Api):
     assert footer['min ESS'] == f"{safeguards['ess_min'][0]:.0f}"
     assert footer['PSIS k̂'].startswith(f"{safeguards['psis_k'][0]:.3f}")
     assert list(_footer(api.posteriorSummary(raw))) == ['draws', 'MAP z']
+
+
+def test_from_pretrained_writes_its_status_to_stdout(
+    api: Api, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
+):
+    monkeypatch.setattr(
+        'huggingface_hub.hf_hub_download', lambda **kwargs: str(api.joint_checkpoint)
+    )
+
+    Api.from_pretrained('normal', warmup=False, verbose=True)
+
+    out, err = capsys.readouterr()
+    assert 'checkpoint' in out
+    assert err == ''
