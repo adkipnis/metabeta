@@ -31,7 +31,14 @@ UNSUPPORTED_SYNTAX = (
         r'\([^()|]*\|[^()]*[/:][^()]*\)',
         'nested or crossed grouping factors are not supported; metabeta fits one grouping factor',
     ),
-    (r'[\w.]+\s*[:*]\s*[\w.]+', 'interactions are not supported'),
+    (
+        r'[\w.]+\s*[:*]\s*[\w.]+',
+        'interactions are not supported. For a numeric interaction, center both columns and add '
+        "their product as its own column, e.g. df['a_b'] = (df['a'] - df['a'].mean()) * "
+        "(df['b'] - df['b'].mean()), then name a_b as a fixed term. Centering keeps the product "
+        'from being nearly collinear with a or b, which would drop one of them; its coefficient '
+        "is the interaction, and each main effect is the slope at the other column's mean",
+    ),
     (
         r'[A-Za-z_][\w.]*\([^()]*\)',
         'function calls are not supported; transform the column in the DataFrame and name the '
