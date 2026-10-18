@@ -2209,6 +2209,9 @@ def _priorStr(priors: Any) -> str:
     return 'custom'
 
 
+SIGMA_PRIOR_SYMBOL = {'halfnormal': 'HN', 'halfstudent': 'HT₅', 'exponential': 'Exp'}
+
+
 def _buildPriorLines(
     ffx_names: list[str],
     srfx_names: list[str],
@@ -2242,7 +2245,6 @@ def _buildPriorLines(
     # follow; the original scale also maps them to X units and moves the intercept to X = 0
     rescale = x_scale == 'original' and scale_info is not None
     y_std = scale_info.y_std if scale_info is not None else 1.0
-    y_mean = scale_info.y_mean if rescale else 0.0
 
     if 'tau_ffx' in prior_params and 'nu_ffx' in prior_params:
         tau = prior_params['tau_ffx'][batch_index, :n_ffx].astype(float)
@@ -2255,7 +2257,7 @@ def _buildPriorLines(
             centered = [n for n, mu in zip(ffx_names[1:], scale_info.x_means[1:]) if mu != 0]
             if scale_info.has_intercept and fam != 'normal' and centered:
                 # a sum of Student-t terms is no Student-t: state the specified intercept prior
-                locs[0], scales[0] = nu[0] * y_std + y_mean, tau[0] * y_std
+                locs[0], scales[0] = nu[0] * y_std + scale_info.y_mean, tau[0] * y_std
                 notes[0] = _atMean(centered)
         symbol = 'N' if fam == 'normal' else 't₅'
         for name, loc_j, scale_j, note in zip(ffx_names, locs, scales, notes):
@@ -2286,12 +2288,7 @@ def _buildPriorLines(
             if rescale:
                 tau_j /= float(scale_info.x_stds[scale_info.param_names.index(name)])
             note = at_mean if name == 'Intercept' else ''
-            if fam == 'halfnormal':
-                lines.append(f'  σ_{name} ~ HN({tau_j:.4g}){note}')
-            elif fam == 'halfstudent':
-                lines.append(f'  σ_{name} ~ HT₅({tau_j:.4g}){note}')
-            else:
-                lines.append(f'  σ_{name} ~ Exp({tau_j:.4g}){note}')
+            lines.append(f'  σ_{name} ~ {SIGMA_PRIOR_SYMBOL[fam]}({tau_j:.4g}){note}')
         if 'eta_rfx' in prior_params and n_rfx > 1:
             eta = float(prior_params['eta_rfx'][batch_index])
             if eta > 0:
@@ -2305,12 +2302,7 @@ def _buildPriorLines(
             else 1
         )
         fam = SIGMA_FAMILIES[fam_id] if fam_id < len(SIGMA_FAMILIES) else 'halfstudent'
-        if fam == 'halfnormal':
-            lines.append(f'  σ_Residual ~ HN({tau_e:.4g})')
-        elif fam == 'halfstudent':
-            lines.append(f'  σ_Residual ~ HT₅({tau_e:.4g})')
-        else:
-            lines.append(f'  σ_Residual ~ Exp({tau_e:.4g})')
+        lines.append(f'  σ_Residual ~ {SIGMA_PRIOR_SYMBOL[fam]}({tau_e:.4g})')
 
     return lines
 
@@ -2385,7 +2377,7 @@ def posteriorTable(
     if prior_params is not None and 'tau_ffx' in prior_params and 'nu_ffx' in prior_params:
         n_ffx_active = len(ffx_names)
         tau_arr = prior_params['tau_ffx'][batch_index, :n_ffx_active].astype(float)
-        if scale_info is not None and x_scale == 'original':
+        if x_scale == 'original':
             nu_arr = prior_params['nu_ffx'][batch_index, :n_ffx_active]
             tau_arr = scale_info.ffxPriorToOriginal(nu_arr, tau_arr)[1]
         elif scale_info is not None:
