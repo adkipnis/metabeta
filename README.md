@@ -4,7 +4,6 @@
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23458113.svg)](https://doi.org/10.5281/zenodo.23458113)
 [![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-checkpoints-yellow)](https://huggingface.co/adkipnis/metabeta)
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/adkipnis/metabeta/blob/main/demos/01-quickstart.ipynb)
-[![License](https://img.shields.io/badge/license-code%20Apache--2.0%20%C2%B7%20weights%20CC%20BY--NC--SA%204.0-blue)](https://github.com/adkipnis/metabeta#license)
 
 # metabeta
 
