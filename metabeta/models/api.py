@@ -1733,11 +1733,13 @@ class Api:
         prior_ids: Sequence[int | str] | None = None,
         plot_dir: Path | None = None,
         *,
+        seed: int | None = None,
         indices: Sequence[int] | None = None,  # deprecated alias of prior_ids, removed in 0.6
     ) -> None:
         """Plot posterior predictive densities for datasets in result.
 
-        y is shown on the standardized scale used internally by the model.
+        y is shown on the standardized scale used internally by the model.  ``seed`` works as in
+        ``sample``.
         """
         from metabeta.plotting.predictive import plotPPD as _plotPPD
 
@@ -1749,7 +1751,8 @@ class Api:
         b = int(result.batch['y'].shape[0])
         prior_ids = _renamedArg('indices', indices, 'prior_ids', prior_ids)
         rows = range(b) if prior_ids is None else [_priorRow(result, p) for p in prior_ids]
-        _plotPPD(pp, result.batch, indices=list(rows), plot_dir=plot_dir)
+        with _seeded(seed):
+            _plotPPD(pp, result.batch, indices=list(rows), plot_dir=plot_dir)
 
     def plotParameters(
         self,
