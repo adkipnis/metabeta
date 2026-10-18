@@ -9,6 +9,8 @@ import tarfile
 import tomllib
 import zipfile
 
+from packaging.requirements import Requirement
+
 
 ROOT = Path(__file__).resolve().parents[2]
 DIST = ROOT / 'dist'
@@ -70,6 +72,15 @@ REPO_ONLY_DEPS = {
     'scamd',
 }
 
+# Colab's preinstalled versions (Python 3.13); a higher floor makes pip replace them, and
+# arviz 1.x breaks Colab's pymc, which needs arviz<1
+COLAB_FLOORS = {
+    'pandas': '>=2.2.3',
+    'scikit-learn': '>=1.6.1',
+    'matplotlib': '>=3.10.0',
+    'arviz-stats': '>=1.3.0',
+}
+
 
 def _require_artifacts() -> None:
     missing = [str(path.relative_to(ROOT)) for path in (WHEEL, SDIST) if not path.exists()]
@@ -121,6 +132,21 @@ def test_release_metadata_dependencies() -> None:
         'Provides-Extra'
     )
     assert any(req.startswith('pymc') for req in research_requirements)
+
+
+def test_release_metadata_installs_next_to_colab() -> None:
+    _require_artifacts()
+
+    metadata = _metadata()
+    requirements = [Requirement(req) for req in metadata.get_all('Requires-Dist')]
+    core = {req.name: str(req.specifier) for req in requirements if req.marker is None}
+    research = {req.name for req in requirements if str(req.marker) == 'extra == "research"'}
+
+    assert metadata['Requires-Python'] == '>=3.12'
+    for name, floor in COLAB_FLOORS.items():
+        assert core.get(name) == floor, name
+    assert 'arviz' not in core
+    assert 'arviz' in research
 
 
 def test_release_metadata_public_surface() -> None:
