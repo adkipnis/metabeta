@@ -193,4 +193,4 @@ All versions share the DOI [10.5281/zenodo.23458113](https://doi.org/10.5281/zen
 ## License
 
 - Code: Apache-2.0.
-- Pretrained weights, downloaded by `from_pretrained`: CC BY-NC-SA 4.0, non-commercial.
+- Weights: CC BY-NC-SA 4.0.
