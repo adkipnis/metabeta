@@ -106,8 +106,8 @@ RANDOM_WALK_DEFAULT = {
     'cpu': LocalMoves(n_inner=2, gate_ess=IMH_ESS_WARN),
     'cuda': LocalMoves(n_chains=500, n_inner=4, gate_ess=IMH_ESS_WARN),
 }
-# warnings about a sample() call point at its caller, the first frame outside metabeta and torch
-# (torch's no_grad wrapper sits between Api.sample and the caller)
+# warnings point at the user's call, the first frame outside metabeta and torch (torch's no_grad
+# wrapper sits between Api.sample and its caller)
 INTERNAL_PREFIXES = tuple(str(Path(m.__file__).parent) + os.sep for m in (metabeta, torch))
 
 
@@ -897,7 +897,7 @@ class Api:
                 'inaccurate and the importance correction is not applicable, so the raw '
                 'posterior was returned there. Treat those results with caution and '
                 'consider exact MCMC (e.g. NUTS) instead.',
-                stacklevel=3,
+                skip_file_prefixes=INTERNAL_PREFIXES,
             )
         return proposal, {
             'refine_method': 'isMarginal' if lf == 0 else 'isLaplace',
@@ -990,8 +990,8 @@ class Api:
                 'chains revisit few distinct states, and the refined sample can be too narrow. The '
                 'ESS grows with n_samples, so re-run with more draws first; if it stays low, the '
                 'flow under-covers the posterior there. Re-run with random_walk=True to continue '
-                'the IMH with random-walk moves on the same target, or use exact MCMC (e.g. NUTS '
-                f'warm-started from this posterior).{advice}',
+                'the IMH with random-walk moves on the same target, or use exact MCMC (e.g. '
+                f'NUTS).{advice}',
                 skip_file_prefixes=INTERNAL_PREFIXES,
             )
         if ran.any():
@@ -1048,7 +1048,7 @@ class Api:
                 'the posterior disagrees with the analytical point estimates, which can '
                 'indicate data outside the training distribution. Treat those results '
                 'with caution and consider exact MCMC (e.g. NUTS) instead.',
-                stacklevel=3,
+                skip_file_prefixes=INTERNAL_PREFIXES,
             )
         return {
             'map_z': map_z,
@@ -1088,7 +1088,7 @@ class Api:
                 'the log-evidence and any Bayes factor built on it may be inaccurate. Treat '
                 'those values with caution and consider bridge sampling on exact MCMC (e.g. NUTS) '
                 'draws instead.',
-                stacklevel=3,
+                skip_file_prefixes=INTERNAL_PREFIXES,
             )
         return {
             'log_evidence': log_ev,
@@ -1389,7 +1389,7 @@ class Api:
                 f'near-constant predictor columns in design (std < 0.01): {near_constant}. '
                 'Verify DataPreprocessor was fitted before routing.',
                 RuntimeWarning,
-                stacklevel=4,
+                skip_file_prefixes=INTERNAL_PREFIXES,
             )
 
         if X_active.shape[1] >= 2 and len(near_constant) == 0:
@@ -1406,7 +1406,7 @@ class Api:
                     f'highly correlated predictor columns in design (|r| > 0.95): {pairs_str}. '
                     'Consider dropping one from the formula or re-fitting DataPreprocessor.',
                     RuntimeWarning,
-                    stacklevel=4,
+                    skip_file_prefixes=INTERNAL_PREFIXES,
                 )
 
     @staticmethod
@@ -1670,7 +1670,7 @@ class Api:
                             f'(mean={y_mean:.2f}, std={y_std:.2f}); '
                             'verify DataPreprocessor was applied before routing',
                             RuntimeWarning,
-                            stacklevel=2,
+                            skip_file_prefixes=INTERNAL_PREFIXES,
                         )
 
     def _validateRoutingInputs(self, batch: Mapping[str, Any]) -> None:
@@ -1966,7 +1966,7 @@ def _resolveXScale(x_scale: str, scale_info: 'ScaleInfo | None') -> str:
             'x_scale="original" requires scale_info; falling back to standardized. '
             'Call router.sample() with fit_preprocessor=True to enable back-transformation.',
             RuntimeWarning,
-            stacklevel=3,
+            skip_file_prefixes=INTERNAL_PREFIXES,
         )
         return 'standardized'
     return x_scale
