@@ -566,6 +566,7 @@ class DataPreprocessor:
 
         # --- group extraction ---
         groups: np.ndarray | None = None
+        group_levels: np.ndarray | None = None  # the label of each group code
         group_name = self._group_name_fitted
         if group_name and group_name in df.columns:
             df = df.sort_values(by=group_name)
@@ -574,7 +575,7 @@ class DataPreprocessor:
                 y = y[sort_idx]
             df = df.reset_index(drop=True)
             groups_raw = df.pop(group_name)
-            groups, _ = pd.factorize(groups_raw)
+            groups, group_levels = pd.factorize(groups_raw)
             # pd.factorize assigns -1 to NaN values; drop those rows so that
             # group IDs are always contiguous non-negative integers (0, 1, ...)
             if np.any(groups == -1):
@@ -642,6 +643,7 @@ class DataPreprocessor:
             'X': X.astype(np.float64),
             'y': y,
             'groups': groups,
+            'group_levels': None if group_levels is None else np.asarray(group_levels),
             'columns': np.array(self._output_columns, dtype=str),
             'd': d_minus_1 + 1,
             'n': n,
@@ -933,6 +935,7 @@ class DataPreprocessor:
         self._group_name_fitted = group_name
 
         groups: np.ndarray | None = None
+        group_levels: np.ndarray | None = None  # the label of each group code
         if group_name and group_name in df.columns:
             df = df.sort_values(by=group_name)
             sort_idx = df.index.values
@@ -940,7 +943,7 @@ class DataPreprocessor:
                 y = y[sort_idx]
             df = df.reset_index(drop=True)
             groups_raw = df.pop(group_name)
-            groups, _ = pd.factorize(groups_raw)
+            groups, group_levels = pd.factorize(groups_raw)
             # pd.factorize assigns -1 to NaN values; drop those rows so that
             # group IDs are always contiguous non-negative integers (0, 1, ...)
             if np.any(groups == -1):
@@ -1017,6 +1020,8 @@ class DataPreprocessor:
                     y = y[keep]
                 if groups is not None:
                     groups = groups[keep]
+                    # rows are sorted by group, so the surviving codes keep their order
+                    group_levels = group_levels[np.unique(groups)]
                     groups, _ = pd.factorize(pd.Series(groups))
 
         # --- classify columns ---
@@ -1090,6 +1095,7 @@ class DataPreprocessor:
             'X': X.astype(np.float64),
             'y': y_out,
             'groups': groups,
+            'group_levels': None if group_levels is None else np.asarray(group_levels),
             'columns': np.array(self._output_columns, dtype=str),
             'd': d_minus_1 + 1,
             'n': n,
