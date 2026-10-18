@@ -438,6 +438,7 @@ class Api:
         self._param_names: dict[str, list[str]] | None = None
         self._scale_info: 'ScaleInfo | None' = None
         self._group_labels: list[str] | None = None
+        self._ffx_order: list[int] | None = None
         batch = self.prepareData(data, **prepare_kwargs)
         if not isinstance(batch, dict) or not isCollatedBatch(batch):
             raise TypeError('sample requires data prepared to batch stage')
@@ -478,6 +479,7 @@ class Api:
         for key in ('family_ffx', 'family_sigma_rfx', 'family_sigma_eps'):
             if key in batch:
                 prior_params[key] = batch[key].long().cpu().numpy()
+        self._restoreFixedOrder(proposal, prior_params, diags)
         ns_arr = batch['ns'].cpu().numpy() if 'ns' in batch else None
         return RouterResult(
             proposal=proposal,
@@ -495,6 +497,34 @@ class Api:
             safeguards=safeguards,
             evidence=log_ev,
         )
+
+    def _restoreFixedOrder(
+        self,
+        proposal: Proposal,
+        prior_params: dict[str, np.ndarray],
+        diags: dict[str, Any] | None,
+    ) -> None:
+        """Permute the fixed-effect columns from the model's layout (random slopes first) back
+        to the user's formula order. Padding columns stay in place, and ``result.batch`` keeps
+        the model's layout."""
+        order = self._ffx_order
+        if order is None or order == sorted(order):
+            return
+
+        def lead(n: int) -> list[int]:
+            return order + list(range(len(order), n))
+
+        g = proposal.samples_g
+        d = proposal.d
+        proposal.data['global']['samples'] = torch.cat([g[..., lead(d)], g[..., d:]], dim=-1)
+        for key in ('tau_ffx', 'nu_ffx'):
+            if key in prior_params:
+                prior_params[key] = prior_params[key][:, lead(prior_params[key].shape[1])]
+        if diags is not None:
+            summary = diags['param_summary']['ffx']
+            diags['param_summary']['ffx'] = {
+                k: v[..., lead(v.shape[-1])] for k, v in summary.items()
+            }
 
     def _warmupSubmodel(self, entry: dict) -> None:
         """Run one forward pass through a specific submodel using minimal dummy data."""
@@ -1184,14 +1214,18 @@ class Api:
                     f'random slope {", ".join(missing)} is not a fixed term: add it to the '
                     'fixed terms'
                 )
-        fixed_names = []
-        if spec.intercept:
-            X_parts = [np.ones((X_pre.shape[0], 1), dtype=float)]
-            fixed_names.append('Intercept')
-        else:
-            X_parts = []
-        X_parts += [X_pre[:, idx : idx + 1] for idx in fixed_indices]
-        fixed_names += [columns[idx] for idx in fixed_indices]
+        # the model sees the random slopes first, in the random term's order; every output
+        # is mapped back to the user's order (`fixed_names`) through `_ffx_order`
+        slope_indices = [
+            idx for term in random_terms if term != '1' for idx in resolveColumnTerm(term, columns)
+        ]
+        model_indices = slope_indices + [idx for idx in fixed_indices if idx not in slope_indices]
+        intercept = [-1] if spec.intercept else []
+        model_columns = intercept + model_indices
+        self._ffx_order = [model_columns.index(idx) for idx in intercept + fixed_indices]
+        fixed_names = ['Intercept'] * len(intercept) + [columns[idx] for idx in fixed_indices]
+        X_parts = [np.ones((X_pre.shape[0], 1), dtype=float)] * len(intercept)
+        X_parts += [X_pre[:, idx : idx + 1] for idx in model_indices]
         X = np.concatenate(X_parts, axis=1) if X_parts else np.empty((X_pre.shape[0], 0))
 
         Z = buildRandomDesign(X_pre, columns, random_terms)
