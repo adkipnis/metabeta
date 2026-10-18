@@ -133,14 +133,6 @@ def test_random_terms_the_fixed_terms_cannot_lead_with_raise(api: Api, formula: 
         api.sample(df, formula=formula, n_samples=8, fit_preprocessor=True)
 
 
-def _fixedEffectRows(summary: str) -> dict[str, str]:
-    """The Fixed Effects table of a posteriorSummary, one row per parameter name."""
-    lines = summary.splitlines()
-    start = lines.index('Fixed Effects:') + 3  # header and separator
-    rows = lines[start : lines.index('', start)]
-    return {row.split('|')[1].strip(): row for row in rows}
-
-
 def test_fixed_term_order_does_not_change_the_fit(api: Api):
     df = _sleepstudy(Noise=np.random.default_rng(1).normal(size=120))
     kwargs = dict(n_samples=64, fit_preprocessor=True)
@@ -159,8 +151,8 @@ def test_fixed_term_order_does_not_change_the_fit(api: Api):
     for key in ('sigma_rfx', 'rfx'):
         assert torch.equal(getattr(later.proposal, key), getattr(first.proposal, key))
 
-    first_rows = _fixedEffectRows(api.posteriorSummary(first))
-    later_rows = _fixedEffectRows(api.posteriorSummary(later))
+    first_rows = _tableRows(api.posteriorSummary(first), 'Fixed Effects:')
+    later_rows = _tableRows(api.posteriorSummary(later), 'Fixed Effects:')
     assert list(later_rows) == ['Intercept', 'Noise', 'Days']
     assert later_rows == first_rows
     grid = api.plotParameters(later)
@@ -204,20 +196,28 @@ def _randomSlopeDraws(result) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return sigma[:, 0], sigma[:, 1], rho
 
 
+def _interceptAtDaysZero(sd0, sd1, rho, df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+    """σ_Intercept and ρ on the original scale from their standardized draws.
+
+    b0 + b1 (x - mu) / s = (b0 - c b1) + (b1 / s) x with c = mu / s, so per draw the covariance of
+    (b0', b1') follows from Var(b0 - c b1), Var(b1) / s^2 and Cov(b0 - c b1, b1 / s).
+    """
+    mu, s = df['Days'].mean(), df['Days'].std(ddof=0)
+    c = mu / s
+    sd0_orig = np.sqrt(sd0**2 - 2 * c * rho * sd0 * sd1 + c**2 * sd1**2)
+    rho_orig = (rho * sd0 * sd1 - c * sd1**2) / s / (sd0_orig * sd1 / s)
+    return sd0_orig, rho_orig
+
+
 def test_default_summary_reports_random_effects_at_days_zero(api: Api):
     df = _sleepstudy()
     result = api.sample(
         df, formula='Reaction ~ Days + (1 + Days | Subject)', n_samples=64, fit_preprocessor=True
     )
 
-    # b0 + b1 (x - mu) / s = (b0 - b1 mu / s) + (b1 / s) x, so per draw the covariance of
-    # (b0', b1') follows from Var(b0 - c b1), Var(b1) / s^2 and Cov(b0 - c b1, b1 / s), c = mu / s
-    mu, s = df['Days'].mean(), df['Days'].std(ddof=0)
-    c = mu / s
+    s = df['Days'].std(ddof=0)
     sd0, sd1, rho = _randomSlopeDraws(result)
-    sd0_orig = np.sqrt(sd0**2 - 2 * c * rho * sd0 * sd1 + c**2 * sd1**2)
-    sd1_orig = sd1 / s
-    rho_orig = (rho * sd0 * sd1 - c * sd1**2) / s / (sd0_orig * sd1_orig)
+    sd0_orig, rho_orig = _interceptAtDaysZero(sd0, sd1, rho, df)
 
     summary = api.posteriorSummary(result)
     sds = _tableRows(summary, 'Standard Deviations:')
@@ -405,11 +405,9 @@ def test_parameter_plot_draws_random_effects_and_slope_prior_at_days_zero(api: A
     result = api.sample(
         df, formula='Reaction ~ Days + (1 + Days | Subject)', n_samples=64, fit_preprocessor=True
     )
-    mu, s = df['Days'].mean(), df['Days'].std(ddof=0)
-    c = mu / s
+    s = df['Days'].std(ddof=0)
     sd0, sd1, rho = _randomSlopeDraws(result)
-    sd0_orig = np.sqrt(sd0**2 - 2 * c * rho * sd0 * sd1 + c**2 * sd1**2)
-    rho_orig = (rho * sd0 * sd1 - c * sd1**2) / s / (sd0_orig * sd1 / s)
+    sd0_orig, rho_orig = _interceptAtDaysZero(sd0, sd1, rho, df)
 
     grid = api.plotParameters(result)
     draws = _gridDraws(grid)  # Intercept, Days, σ_Intercept, σ_Days, σ_ε, ρ
@@ -467,9 +465,7 @@ def test_prior_overlays_without_closed_form_match_the_pushforward(api: Api):
     eta = float(result.prior_params['eta_rfx'][0])
     sd0, sd1 = np.abs(rng.normal(size=(2, n))) * tau[:, None]
     rho = 2 * rng.beta(eta, eta, n) - 1
-    c, s = df['Days'].mean() / df['Days'].std(ddof=0), df['Days'].std(ddof=0)
-    sd0_orig = np.sqrt(sd0**2 - 2 * c * rho * sd0 * sd1 + c**2 * sd1**2)
-    rho_orig = (rho * sd0 * sd1 - c * sd1**2) / s / (sd0_orig * sd1 / s)
+    sd0_orig, rho_orig = _interceptAtDaysZero(sd0, sd1, rho, df)
 
     levels = np.array([0.1, 0.25, 0.5, 0.75, 0.9])
     for key, draws in [('sd0', sd0_orig), ('rho', rho_orig)]:
