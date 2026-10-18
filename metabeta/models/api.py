@@ -961,8 +961,10 @@ class Api:
         a_bar = accept.mean(dim=1)
         suggested = suggestPoolSize(accept)
         flag = (a_bar < IMH_ACCEPT_WARN).cpu().numpy()
-        if flag.any():
-            flagged = np.flatnonzero(flag)
+        ess_flag = ess_min < IMH_ESS_WARN
+        # where the random-walk moves ran, they continued the chains these two warnings describe
+        if (flag & ~ran).any():
+            flagged = np.flatnonzero(flag & ~ran)
             a_vals = ', '.join(f'{a_bar[i]:.2f}' for i in flagged)
             s_vals = ', '.join(f'{int(suggested[i])}' for i in flagged)
             warnings.warn(
@@ -973,23 +975,14 @@ class Api:
                 'exact MCMC (e.g. NUTS) instead.',
                 skip_file_prefixes=INTERNAL_PREFIXES,
             )
-        ess_flag = ess_min < IMH_ESS_WARN
-        if ess_flag.any():
-            flagged = np.flatnonzero(ess_flag)
+        if (ess_flag & ~ran).any():
+            flagged = np.flatnonzero(ess_flag & ~ran)
             e_vals = ', '.join(f'{ess_min[i]:.0f}' for i in flagged)
-            todo, low = flagged[~ran[flagged]], flagged[ess_min[flagged] < IMH_ESS_NUTS]
+            low = flagged[ess_min[flagged] < IMH_ESS_NUTS]
             advice = ''
-            if todo.size:
-                advice += (
-                    f'Re-run with random_walk=True to continue the IMH on {todo.tolist()} with '
-                    'random-walk moves on the same target, or use exact MCMC (e.g. NUTS '
-                    'warm-started from this posterior). '
-                )
-            if ran.any():
-                advice += f'Random-walk moves ran for {np.flatnonzero(ran).tolist()}. '
             if low.size:
-                advice += (
-                    f'For {low.tolist()} (ESS < {IMH_ESS_NUTS:g}) random-walk moves narrow the '
+                advice = (
+                    f' For {low.tolist()} (ESS < {IMH_ESS_NUTS:g}) random-walk moves narrow the '
                     'gap but may not close it: check against exact MCMC there.'
                 )
             warnings.warn(
@@ -997,7 +990,24 @@ class Api:
                 f'(min bulk ESS over global parameters {e_vals} < {IMH_ESS_WARN:g}): the '
                 'chains revisit few distinct states, and the refined sample can be too narrow. The '
                 'ESS grows with n_samples, so re-run with more draws first; if it stays low, the '
-                f'flow under-covers the posterior there. {advice.strip()}',
+                'flow under-covers the posterior there. Re-run with random_walk=True to continue '
+                'the IMH with random-walk moves on the same target, or use exact MCMC (e.g. NUTS '
+                f'warm-started from this posterior).{advice}',
+                skip_file_prefixes=INTERNAL_PREFIXES,
+            )
+        if ran.any():
+            moved = np.flatnonzero(ran)
+            e_vals = ', '.join(f'{ess_min[i]:.0f}' for i in moved)
+            low = moved[ess_min[moved] < IMH_ESS_NUTS]
+            note = ''
+            if low.size:
+                note = (
+                    f' For {low.tolist()} (ESS < {IMH_ESS_NUTS:g}) they narrow the gap but may not '
+                    'close it: check against exact MCMC (e.g. NUTS) there.'
+                )
+            warnings.warn(
+                f'Random-walk moves ran for dataset(s) {moved.tolist()} (IMH min bulk ESS '
+                f'{e_vals}).{note}',
                 skip_file_prefixes=INTERNAL_PREFIXES,
             )
         return proposal, {
