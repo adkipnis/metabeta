@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+import contextlib
 import math
 import operator
 import os
@@ -394,6 +395,7 @@ class Api:
         map_z_threshold: float = MAP_Z_THRESHOLD,
         random_walk: LocalMoves | bool = False,
         evidence: bool = False,
+        seed: int | None = None,
         diagnostics: bool | None = None,  # deprecated alias of loo, removed in 0.6
         **prepare_kwargs: Any,
     ) -> RouterResult:
@@ -448,6 +450,10 @@ class Api:
         pass (posthoc/evidence.py), needs ``n_samples >= MIN_SAFEGUARD_SAMPLES`` and warns where
         the PSIS k̂ of that pass or, with refinement, of the flow pool's weights exceeds
         ``k_threshold``.
+
+        ``seed`` seeds torch for this call only: two calls with one seed return the same draws,
+        as after ``torch.manual_seed(seed)``, and the caller's CPU and CUDA random streams stay
+        as they were.
         """
 
         if diagnostics is not None:
@@ -487,25 +493,26 @@ class Api:
         pool = n_samples
         if do_refine and method == 'imh':
             pool = IMH_N_CHAINS * (math.ceil(n_samples / IMH_N_CHAINS) + IMH_BURNIN)
-        proposal, stats = self._runRouted(batch, routes, n_samples=pool, local=not do_refine)
-        safeguards: dict[str, Any] | None = None
-        if do_refine:
-            proposal, safeguards = self._refineAndCheck(
-                proposal,
-                batch,
-                method=method,
-                k_threshold=k_threshold,
-                n_samples=n_samples,
-                moves=moves,
-            )
-        log_ev = None
-        if evidence:
-            pool_k = safeguards['psis_k'] if safeguards else None
-            log_ev = self._evidence(proposal, batch, k_threshold=k_threshold, pool_k=pool_k)
-        if stats is not None and n_samples >= MIN_SAFEGUARD_SAMPLES:
-            map_check = self._mapConsistency(proposal, stats, batch, threshold=map_z_threshold)
-            safeguards = {**(safeguards or {}), **map_check}
-        diags = self._computeDiagnostics(proposal, batch, loo=loo)
+        with _seeded(seed):
+            proposal, stats = self._runRouted(batch, routes, n_samples=pool, local=not do_refine)
+            safeguards: dict[str, Any] | None = None
+            if do_refine:
+                proposal, safeguards = self._refineAndCheck(
+                    proposal,
+                    batch,
+                    method=method,
+                    k_threshold=k_threshold,
+                    n_samples=n_samples,
+                    moves=moves,
+                )
+            log_ev = None
+            if evidence:
+                pool_k = safeguards['psis_k'] if safeguards else None
+                log_ev = self._evidence(proposal, batch, k_threshold=k_threshold, pool_k=pool_k)
+            if stats is not None and n_samples >= MIN_SAFEGUARD_SAMPLES:
+                map_check = self._mapConsistency(proposal, stats, batch, threshold=map_z_threshold)
+                safeguards = {**(safeguards or {}), **map_check}
+            diags = self._computeDiagnostics(proposal, batch, loo=loo)
         self._rescaleProposal(proposal, batch)
         prior_params: dict[str, np.ndarray] = {
             key: batch[key].float().cpu().numpy()
@@ -1723,8 +1730,10 @@ class Api:
     def plotPPD(
         self,
         result: RouterResult,
-        indices: Sequence[int] | None = None,
+        prior_ids: Sequence[int | str] | None = None,
         plot_dir: Path | None = None,
+        *,
+        indices: Sequence[int] | None = None,  # deprecated alias of prior_ids, removed in 0.6
     ) -> None:
         """Plot posterior predictive densities for datasets in result.
 
@@ -1738,15 +1747,17 @@ class Api:
         if pp is None:
             raise ValueError('pp not found in diagnostics')
         b = int(result.batch['y'].shape[0])
-        if indices is None:
-            indices = list(range(b))
-        _plotPPD(pp, result.batch, indices=indices, plot_dir=plot_dir)
+        prior_ids = _renamedArg('indices', indices, 'prior_ids', prior_ids)
+        rows = range(b) if prior_ids is None else [_priorRow(result, p) for p in prior_ids]
+        _plotPPD(pp, result.batch, indices=list(rows), plot_dir=plot_dir)
 
     def plotParameters(
         self,
         result: RouterResult,
-        index: int = 0,
+        prior_id: int | str = 0,
         with_prior: bool = True,
+        *,
+        index: int | None = None,  # deprecated alias of prior_id, removed in 0.6
         **kwargs: Any,
     ) -> Any:
         """Pair-grid of posterior parameter samples in original-scale units.
@@ -1763,6 +1774,7 @@ class Api:
             raise ValueError('RouterResult has no proposal; call sample() first')
         if result.scale_info is None:
             raise ValueError('RouterResult has no scale_info')
+        index = _priorRow(result, _renamedArg('index', index, 'prior_id', prior_id))
 
         prop = result.proposal
         si = result.scale_info
@@ -1814,17 +1826,22 @@ class Api:
         result: RouterResult,
         *,
         ci: float = 0.95,
-        batch_index: int = 0,
+        prior_id: int | str = 0,
         x_scale: str = 'original',
+        batch_index: int | None = None,  # deprecated alias of prior_id, removed in 0.6
     ) -> str:
         """Return a formatted posterior summary table for a sampled RouterResult.
 
-        The last line lists the safeguards, then the fit metric (R²/AUC/Deviance), then
-        LOO-NLL and its LOO k̂ when ``sample()`` was called with ``loo=True``.  For
-        per-group random effects use ``rfxSummary()``.
+        ``prior_id`` picks the row: the name a prior had in ``sample(priors={name: ...})``,
+        or its index.  The last line lists the safeguards, then the fit metric
+        (R²/AUC/Deviance), then LOO-NLL and its LOO k̂ when ``sample()`` was called with
+        ``loo=True``.  For per-group random effects use ``rfxSummary()``.
         """
         if result.proposal is None:
             raise ValueError('RouterResult has no proposal; call sample() first')
+        batch_index = _priorRow(
+            result, _renamedArg('batch_index', batch_index, 'prior_id', prior_id)
+        )
         d = result.diagnostics or {}
         dims = (
             result.validation[batch_index]['dimensions']
@@ -1893,7 +1910,7 @@ class Api:
         self,
         result: RouterResult,
         *,
-        batch_index: int = 0,
+        prior_id: int | str = 0,
         x_scale: str = 'original',
     ) -> pd.DataFrame:
         """Return one dataset's posterior draws of the global parameters, one column each.
@@ -1904,7 +1921,7 @@ class Api:
         """
         if result.proposal is None:
             raise ValueError('RouterResult has no proposal; call sample() first')
-        proposal, bi = result.proposal, batch_index
+        proposal, bi = result.proposal, _priorRow(result, prior_id)
         x_scale = _resolveXScale(x_scale, result.scale_info)
         ffx, srfx, corr = _globalDraws(proposal, bi, result.scale_info, x_scale)
         names = result.param_names or {}
@@ -1928,8 +1945,9 @@ class Api:
         result: RouterResult,
         *,
         ci: float = 0.95,
-        batch_index: int = 0,
+        prior_id: int | str = 0,
         x_scale: str = 'original',
+        batch_index: int | None = None,  # deprecated alias of prior_id, removed in 0.6
     ) -> str:
         """Return a formatted per-group random effects summary for a sampled RouterResult.
 
@@ -1940,6 +1958,9 @@ class Api:
         """
         if result.proposal is None:
             raise ValueError('RouterResult has no proposal; call sample() first')
+        batch_index = _priorRow(
+            result, _renamedArg('batch_index', batch_index, 'prior_id', prior_id)
+        )
         fmt = 'github'
         alpha = (1 - ci) / 2
         lo_pct = f'{alpha * 100:g}%'
@@ -2032,6 +2053,44 @@ def _resolveXScale(x_scale: str, scale_info: 'ScaleInfo | None') -> str:
         )
         return 'standardized'
     return x_scale
+
+
+def _renamedArg(old: str, old_value: Any, new: str, new_value: Any) -> Any:
+    """The value of an argument renamed to ``new``, warning while callers still pass ``old``
+    (removed in 0.6, #32)."""
+    if old_value is None:
+        return new_value
+    warnings.warn(
+        f'{old}= is deprecated and will be removed in 0.6: use {new}=, which also takes a '
+        'prior name.',
+        FutureWarning,
+        skip_file_prefixes=INTERNAL_PREFIXES,
+    )
+    return old_value
+
+
+def _priorRow(result: RouterResult, prior_id: int | str) -> int:
+    """The row of ``prior_id`` in ``result``: its index, or the name the prior had in
+    ``sample(priors={name: ...})`` (#32)."""
+    if not isinstance(prior_id, str):
+        return int(prior_id)
+    names = [entry.get('prior_name') for entry in result.validation]
+    if prior_id not in names:
+        known = [name for name in names if name is not None]
+        raise KeyError(f'no prior named {prior_id!r} in this result; its priors are {known}')
+    return names.index(prior_id)
+
+
+@contextlib.contextmanager
+def _seeded(seed: int | None) -> Iterator[None]:
+    """Seed torch inside the block, then give the caller back its CPU and CUDA random state
+    (#32)."""
+    if seed is None:
+        yield
+        return
+    with torch.random.fork_rng(devices=range(torch.cuda.device_count())):
+        torch.manual_seed(seed)
+        yield
 
 
 def _globalDraws(
