@@ -642,3 +642,10 @@ def test_warnings_point_at_the_call(api: Api, call, message: str):
 
     (warning,) = [w for w in caught if message in str(w.message)]
     assert warning.filename == __file__
+
+
+def test_sample_returns_1000_refined_draws_by_default(api: Api):
+    result = api.sample(_sleepstudy(), formula=_FORMULA)
+
+    assert result.proposal.n_samples == 1000
+    assert result.safeguards['accept_rate'].shape == (1,)  # the IMH ran
