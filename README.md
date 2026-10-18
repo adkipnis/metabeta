@@ -7,11 +7,7 @@
 
 # metabeta
 
-Fit Bayesian generalized linear mixed-effects models (GLMMs) in under a second, from a pandas
-DataFrame and an lme4-style formula. metabeta does amortized inference with pretrained neural
-networks.
-
-<img src="https://raw.githubusercontent.com/adkipnis/metabeta/main/assets/overview.svg" width="100%" alt="Top: training datasets are simulated from priors over the fixed effects, the random-effect SDs and their correlations. Bottom: summary networks condense each group, then all groups; flows map the summary and the prior to posterior draws.">
+Bayesian inference for GLMMs (generalized linear mixed-effects models) in under a second:
 
 - **Full posterior in one call** for Gaussian, Bernoulli and Poisson outcomes: fixed effects,
   random effects, and their standard deviations (SDs) and correlations.
@@ -28,11 +24,9 @@ networks.
 pip install metabeta
 ```
 
-The pretrained checkpoints download from [Hugging Face](https://huggingface.co/adkipnis/metabeta)
-on first use.
+The pretrained checkpoints download from [Hugging Face](https://huggingface.co/adkipnis/metabeta) on first use.
 
-To work on the code, with [uv](https://docs.astral.sh/uv/):
-
+For development:
 ```bash
 git clone https://github.com/adkipnis/metabeta && cd metabeta && uv sync
 ```
@@ -86,6 +80,8 @@ draws = 1000   acceptance = 0.77   min ESS = 430   PSIS k̂ = 0.245 (refined)   
 
 ## How it works
 
+<img src="https://raw.githubusercontent.com/adkipnis/metabeta/main/assets/overview.svg" width="100%" alt="Top: training datasets are simulated from priors over the fixed effects, the random-effect SDs and their correlations. Bottom: summary networks condense each group, then all groups; flows map the summary and the prior to posterior draws.">
+
 1. **Training**: the networks learn from simulated GLMM datasets with random sizes, priors and
    parameters (figure, top).
 2. **Summary**: Σ<sub>l</sub> summarizes each group, and Σ<sub>g</sub> summarizes across groups
@@ -94,7 +90,6 @@ draws = 1000   acceptance = 0.77   min ESS = 430   PSIS k̂ = 0.245 (refined)   
    draws. Π<sub>g</sub> draws the fixed effects β, random-effect SDs σ and correlations R;
    Π<sub>l</sub> draws each group's random effects α<sub>i</sub>.
 4. **Refinement**: independence Metropolis–Hastings (IMH) uses the flow's draws as proposals.
-   The chain targets the exact posterior; the networks' accuracy only affects its efficiency.
 
 Diagnostics, in `result.safeguards` and the summary's last line:
 
@@ -130,7 +125,7 @@ pass `device='cuda'` to `Api.from_pretrained`.
 <details>
 <summary><b>When should I fall back to NUTS?</b></summary>
 
-When `sample` still warns after you apply its suggested remedy, such as more draws or
+When `sample` still warns after you apply its suggested remedy, e.g. more draws or
 random-walk moves (`random_walk=True`). `02-families` compares a Poisson fit with NUTS.
 
 </details>
