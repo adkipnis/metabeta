@@ -7,18 +7,19 @@
 
 # metabeta
 
-Amortized Bayesian inference for generalized linear mixed-effects models (GLMMs). Pretrained
-networks turn a pandas DataFrame and an lme4-style formula into posterior draws in under a second.
+Fit Bayesian generalized linear mixed-effects models (GLMMs) in under a second, from a pandas
+DataFrame and an lme4-style formula. metabeta does amortized inference with pretrained neural
+networks.
 
 <img src="https://raw.githubusercontent.com/adkipnis/metabeta/main/assets/overview.svg" width="100%" alt="Top: training datasets are simulated from priors over the fixed effects, the random-effect SDs and their correlations. Bottom: summary networks condense each group, then all groups; flows map the summary and the prior to posterior draws.">
 
-- **Full posterior in one call** for normal, Bernoulli and Poisson outcomes: fixed effects,
+- **Full posterior in one call** for Gaussian, Bernoulli and Poisson outcomes: fixed effects,
   random effects, and their standard deviations (SDs) and correlations.
-- **Priors as input**: change them without retraining, fit several at once, compare models by
+- **Priors as input**: you can change them without retraining, fit several at once, and compare models using
   Bayes factors.
-- **Corrected**: Metropolis–Hastings refines the networks' draws against the likelihood.
-- **Checked**: every fit reports diagnostics and warns with a remedy when one fails.
-- **Results in your data's units**: lme4-style tables, per-group effects, pair plots and
+- **Asymptotically exact**: Metropolis–Hastings refines the networks' posterior samples against the exact unnormalized posterior.
+- **Diagnostics included**: every fit reports diagnostics and suggests a remedy.
+- **A familiar workflow**: lme4-style tables, per-group effects, pair plots and
   posterior predictive checks.
 
 ## Installation
@@ -71,41 +72,29 @@ draws = 1000   acceptance = 0.77   min ESS = 430   PSIS k̂ = 0.245 (refined)   
 ```
 
 - **Units**: ms, and ms per day for `Days` (lme4: 251.4 and 10.47).
-- **Elided lines**: the priors and the random-effect correlation.
-- **Last line**: the diagnostics, explained in [How it works](#how-it-works).
+- **Last line**: the diagnostics are explained in [How it works](#how-it-works).
 - **More**: `mb.rfxSummary(result)` prints each subject's random effects, and
-  `mb.plotParameters(result)` draws the pair plot.
+  `mb.plotParameters(result)` visualizes posterior draws.
 
 ## Tutorials
 
-All notebooks run on a CPU runtime.
-
-| Notebook | What it shows | |
+| Notebook | Content | |
 |---|---|---|
-| [01-quickstart](https://github.com/adkipnis/metabeta/blob/main/demos/01-quickstart.ipynb) | sleepstudy (normal): summary, per-subject random effects, pair plot, diagnostics, lme4 comparison | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/adkipnis/metabeta/blob/main/demos/01-quickstart.ipynb) |
-| [02-families](https://github.com/adkipnis/metabeta/blob/main/demos/02-families.ipynb) | cbpp (Bernoulli) and Salamanders (Poisson): submodel routing, posterior predictive checks, random-walk moves against NUTS | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/adkipnis/metabeta/blob/main/demos/02-families.ipynb) |
-| [03-priors](https://github.com/adkipnis/metabeta/blob/main/demos/03-priors.ipynb) | specifying priors, fitting three in one call, Bayes factors | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/adkipnis/metabeta/blob/main/demos/03-priors.ipynb) |
+| [01-quickstart](https://github.com/adkipnis/metabeta/blob/main/demos/01-quickstart.ipynb) | First fit: summaries, plots and diagnostics | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/adkipnis/metabeta/blob/main/demos/01-quickstart.ipynb) |
+| [02-families](https://github.com/adkipnis/metabeta/blob/main/demos/02-families.ipynb) | Bernoulli and Poisson outcomes | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/adkipnis/metabeta/blob/main/demos/02-families.ipynb) |
+| [03-priors](https://github.com/adkipnis/metabeta/blob/main/demos/03-priors.ipynb) | Custom priors and Bayes factors | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/adkipnis/metabeta/blob/main/demos/03-priors.ipynb) |
 
 ## How it works
 
-The networks (figure):
-
-1. **Training**: they learn from simulated GLMM datasets with random sizes, priors and parameters
-   (top).
+1. **Training**: the networks learn from simulated GLMM datasets with random sizes, priors and
+   parameters (figure, top).
 2. **Summary**: Σ<sub>l</sub> summarizes each group, and Σ<sub>g</sub> summarizes across groups
-   (bottom).
+   (figure, bottom).
 3. **Posterior**: normalizing flows turn the summary, analytical estimates and the prior into
    draws. Π<sub>g</sub> draws the fixed effects β, random-effect SDs σ and correlations R;
    Π<sub>l</sub> draws each group's random effects α<sub>i</sub>.
-4. **Routing**: each checkpoint holds four network sizes, and `sample` uses the smallest that fits
-   the data.
-
-Refinement, with `n_samples` ≥ 64 (default 1000):
-
-1. The global flow proposes draws for independence Metropolis–Hastings (IMH).
-2. The chain targets the posterior with the random effects integrated out: exactly (normal) or by
-   a Laplace approximation (Bernoulli, Poisson).
-3. The random effects are then redrawn from their conditional posterior.
+4. **Refinement**: independence Metropolis–Hastings (IMH) uses the flow's draws as proposals.
+   The chain targets the exact posterior; the networks' accuracy only affects its efficiency.
 
 Diagnostics, in `result.safeguards` and the summary's last line:
 
@@ -116,91 +105,63 @@ Diagnostics, in `result.safeguards` and the summary's last line:
 - `MAP z`: the distance between the posterior mean and the maximum a posteriori (MAP) estimate, in
   posterior SDs.
 
-`sample` warns, naming a remedy, when the acceptance, the ESS or `MAP z` crosses its threshold.
-
-An ESS below 150 can leave intervals too narrow, typically because the flow lacks tail mass.
-`random_walk=True` then adds random-walk moves on the same target, for those datasets only.
+`sample` warns when IMH acceptance, the ESS or `MAP z` crosses its threshold.
 
 ## Research workflow
 
-The repository also holds the code that builds the checkpoints.
+The repository also holds the code that builds the checkpoints. After `uv sync`, run these
+scripts in order (each takes `--help`):
 
-- `uv sync` installs its dependencies, including the research extra (PyMC, bambi, statsmodels
-  and others).
-- For a pip install, add the research extra with `pip install "metabeta[research]"`.
-
-The pipeline, one script per step (each lists its options with `--help`):
-
-1. `metabeta/simulation/generate.py` simulates training, validation and test datasets.
-2. `metabeta/training/train.py` trains the networks for one family and size.
-3. `metabeta/evaluation/evaluate.py` measures recovery, coverage, calibration and predictive fit,
-   also against reference fits such as NUTS.
-4. `scripts/build_ckpt.py` bundles the sizes into one checkpoint per family.
-
-| Path | Contents |
-|---|---|
-| `metabeta/models/` | the `Api`, summary networks and normalizing flows |
-| `metabeta/posthoc/` | IMH refinement, random-walk moves, marginal likelihood |
-| `metabeta/analytical/` | analytical GLMM estimates that condition the networks |
-| `metabeta/evaluation/`, `metabeta/plotting/` | metrics and plots |
-| `metabeta/utils/`, `metabeta/configs/` | routing, preprocessing, priors and configs |
-| `experiments/`, `scripts/` | experiment scripts and cluster job wrappers |
+1. `metabeta/simulation/generate.py` simulates datasets.
+2. `metabeta/training/train.py` trains the networks.
+3. `metabeta/evaluation/evaluate.py` evaluates them, also against NUTS.
+4. `scripts/build_ckpt.py` bundles them into checkpoints.
 
 ## FAQ
 
 <details>
 <summary><b>Do I need a GPU?</b></summary>
 
-No. A fit takes 0.2 to 1 second on a laptop CPU, and about 0.1 seconds on a GPU
-(`Api.from_pretrained(family, device='cuda')`).
+No. A fit takes 0.2 to 1 second on a laptop CPU, and about 0.1 seconds on a GPU. To use a GPU,
+pass `device='cuda'` to `Api.from_pretrained`.
 
 </details>
 
 <details>
-<summary><b>When should I check a fit against NUTS?</b></summary>
+<summary><b>When should I fall back to NUTS?</b></summary>
 
-When a warning from `sample` persists after its remedy:
-
-- IMH acceptance below 0.1 at the suggested `n_samples`;
-- minimum ESS below 150 with more draws and `random_walk=True`;
-- posterior mean more than 5 posterior SDs from the MAP estimate.
-
-After random-walk moves, `sample` suggests NUTS itself if the IMH ESS was below 10.
-`02-families` compares a Poisson fit with NUTS.
+When `sample` still warns after you apply its suggested remedy, such as more draws or
+random-walk moves (`random_walk=True`). `02-families` compares a Poisson fit with NUTS.
 
 </details>
 
 <details>
 <summary><b>What can metabeta fit?</b></summary>
 
-- **Models**: normal, Bernoulli (0/1) and Poisson GLMMs with one grouping factor.
+- **Models**: Gaussian, Bernoulli (0/1) and Poisson GLMMs with one grouping factor.
 - **Data**: 5 to 200 groups, 5 to 150 rows per group, at most 3,000 rows.
 - **Effects**: at most 16 fixed and 5 random effects, intercepts included.
 - **Random slopes**: each must also be a fixed effect.
 - **Enough groups**: at least 4 more groups than fixed effects, and than random-effect variances
-  and covariances (q(q+1)/2 for q random effects).
+  and covariances.
 - **Enough rows**: at least 2 more rows per group than random effects.
 - **Formulas**: additive lme4 syntax, such as `y ~ x1 + x2 + (1 + x1 | g)`.
 - **Categories**: string and categorical columns are dummy-coded, with the most frequent level as
   the reference (R uses the first).
-- **Not supported**: `||`, `/`, interactions (`:`, `*`), functions (`log()`, `factor()`, `C()`),
+- **Currently not supported**: `||`, `/`, interactions (`:`, `*`), functions (`log()`, `factor()`, `C()`),
   offsets and binomial trials. Transform the columns in the DataFrame instead; the error message
   says how.
-
-Beyond these limits, `sample` raises an error naming the limit.
 
 </details>
 
 <details>
 <summary><b>On which scale are the estimates?</b></summary>
 
-- `posteriorSummary`, `rfxSummary` and `plotParameters` report on the data's scale: slopes per
-  unit of each predictor.
-- That means the response's units for normal, log-odds for Bernoulli and log rates for Poisson.
+- Summaries and plots use the data's scale: slopes per unit of each predictor, in the response's
+  units (Gaussian), log-odds (Bernoulli) or log rates (Poisson).
 - `x_scale='standardized'` reports slopes per SD of the predictor instead.
-- The networks, the draws in `result.proposal` and the priors passed to `sample(priors=...)` use a
-  standardized scale: numeric predictors, and the normal response, at mean 0 and SD 1.
-- `result.scale_info` maps draws to the data's scale, as the tutorials show.
+- Priors and raw draws (`result.proposal`) use a standardized scale, with predictors (and a
+  Gaussian response) at mean 0 and SD 1.
 
 </details>
 
@@ -223,4 +184,3 @@ Beyond these limits, `sample` raises an error naming the limit.
 
 - Code: Apache-2.0.
 - Pretrained weights, downloaded by `from_pretrained`: CC BY-NC-SA 4.0, non-commercial.
-- For commercial use contact alexander.kipnis@helmholtz-munich.de.
