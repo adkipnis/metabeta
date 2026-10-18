@@ -1783,9 +1783,8 @@ class Api:
         si = result.scale_info
         has_eps = prop.has_sigma_eps
 
-        ffx_orig = si.to_original_scale(prop.ffx[index])       # (S, d)
-        corr_rfx = prop.corr_rfx[index] if prop.corr_rfx is not None else None  # (S, q, q)
-        srfx, corr_rfx = si.sdCorrToOriginal(prop.sigma_rfx[index], corr_rfx)  # (S, q)
+        # (S, d), (S, q), (S, q, q)
+        ffx_orig, srfx, corr_rfx = _globalDraws(prop, index, si, 'original')
         parts = [ffx_orig, srfx]
         if has_eps:
             parts.append(prop.sigma_eps[index].unsqueeze(-1))  # (S, 1)
@@ -2046,13 +2045,11 @@ class Api:
         hi_pct = f'{(1 - alpha) * 100:g}%'
 
         names = result.param_names or {}
-        rfx = result.proposal.rfx[batch_index].float()              # (m, S, q)
-        sigma_rfx = result.proposal.sigma_rfx[batch_index].float()  # (S, q)
-        if _resolveXScale(x_scale, result.scale_info) == 'original':
-            corr = result.proposal.corr_rfx
-            corr_b = corr[batch_index].float() if corr is not None else None
+        x_scale = _resolveXScale(x_scale, result.scale_info)
+        _, sigma_rfx, _ = _globalDraws(result.proposal, batch_index, result.scale_info, x_scale)
+        rfx = result.proposal.rfx[batch_index].float()  # (m, S, q)
+        if x_scale == 'original':
             rfx = result.scale_info.rfxToOriginal(rfx)
-            sigma_rfx, _ = result.scale_info.sdCorrToOriginal(sigma_rfx, corr_b)
         m, _, q_model = rfx.shape
         srfx_names = names.get('sigma_rfx') or [f'rfx_{i}' for i in range(q_model)]
         n_rfx = len(srfx_names)
