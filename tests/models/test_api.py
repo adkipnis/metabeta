@@ -228,6 +228,59 @@ def test_default_summary_reports_random_effects_at_days_zero(api: Api):
     assert f'  σ_Days ~ HN({tau:.4g})' in summary
 
 
+def test_default_summary_states_the_intercept_prior_at_days_zero(api: Api):
+    df = _sleepstudy()
+    result = api.sample(
+        df,
+        formula='Reaction ~ Days + (1 + Days | Subject)',
+        n_samples=64,
+        fit_preprocessor=True,
+        priors={'fixed': {'Days': {'nu': 0.3}}},
+    )
+
+    # the intercept at Days = 0 is b0 - b1 mu / s, so independent normal priors on b0 and b1
+    # give a normal prior with the variances added
+    sd_y, mu, s = df['Reaction'].std(ddof=0), df['Days'].mean(), df['Days'].std(ddof=0)
+    nu, tau = result.prior_params['nu_ffx'][0, :2], result.prior_params['tau_ffx'][0, :2]
+    loc = df['Reaction'].mean() + sd_y * (nu[0] - nu[1] * mu / s)
+    scale = sd_y * np.hypot(tau[0], tau[1] * mu / s)
+    tau_sd0 = result.prior_params['tau_rfx'][0, 0] * sd_y
+
+    summary = api.posteriorSummary(result)
+    lines = summary.splitlines()
+    sd, contraction = (_tableRows(summary, 'Fixed Effects:')['Intercept'][i] for i in (1, -1))
+    assert f'  Intercept ~ N({loc:.4g}, {scale:.4g})' in lines
+    assert f'  Days ~ N({sd_y * nu[1] / s:.4g}, {sd_y * tau[1] / s:.4g})' in lines
+    assert contraction == pytest.approx(1 - sd**2 / scale**2, abs=2e-3)
+    # the random intercept's SD and the correlation have no closed form at Days = 0
+    assert f'  σ_Intercept ~ HN({tau_sd0:.4g}) at mean Days' in lines
+    assert any(
+        line.startswith('  Corr ~ LKJ(') and line.endswith(') at mean Days') for line in lines
+    )
+
+
+def test_summary_states_where_a_prior_without_closed_form_applies(api: Api):
+    df = _sleepstudy()
+    result = api.sample(
+        df,
+        formula='Reaction ~ Days + (1 | Subject)',
+        n_samples=64,
+        fit_preprocessor=True,
+        priors={'fixed': {'family': 'student'}},
+    )
+
+    # a sum of Student-t terms is no Student-t, so the specified prior is stated at mean Days;
+    # with no random slope the random intercept's SD is the same at every Days
+    sd_y = df['Reaction'].std(ddof=0)
+    nu, tau = result.prior_params['nu_ffx'][0, 0], result.prior_params['tau_ffx'][0, 0]
+    loc = df['Reaction'].mean() + sd_y * nu
+    tau_sd0 = result.prior_params['tau_rfx'][0, 0] * sd_y
+
+    lines = api.posteriorSummary(result).splitlines()
+    assert f'  Intercept ~ t₅({loc:.4g}, {sd_y * tau:.4g}) at mean Days' in lines
+    assert f'  σ_Intercept ~ HN({tau_sd0:.4g})' in lines
+
+
 def test_random_intercept_sd_does_not_depend_on_the_predictor_scale(api: Api):
     result = api.sample(
         _sleepstudy(),
