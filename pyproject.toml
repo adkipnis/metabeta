@@ -166,6 +166,7 @@ dev = [
     "ipykernel>=6.31.0",
     "ipywidgets>=8.0",
     "jupyterlab>=4.5.7",
+    "nbmake>=1.5.5",
     "pytest>=9.0.2",
     "spyder-kernels>=3.1.3",
 ]
