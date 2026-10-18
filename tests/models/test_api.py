@@ -164,3 +164,21 @@ def test_fixed_term_order_does_not_change_the_fit(api: Api):
     labels = [ax.get_ylabel() for ax in grid.axes[:, 0]]
     plt.close(grid.figure)
     assert labels.index('Noise') < labels.index('Days')
+
+
+def test_prior_assigned_by_name_follows_the_term_in_both_orderings(api: Api):
+    df = _sleepstudy(Noise=np.random.default_rng(1).normal(size=120))
+    kwargs = dict(n_samples=64, fit_preprocessor=True, priors={'fixed': {'Days': {'tau': 0.123}}})
+
+    torch.manual_seed(0)
+    first = api.sample(df, formula='Reaction ~ Days + Noise + (1 + Days | Subject)', **kwargs)
+    torch.manual_seed(0)
+    later = api.sample(df, formula='Reaction ~ Noise + Days + (1 + Days | Subject)', **kwargs)
+
+    for result in (first, later):
+        tau = dict(zip(result.param_names['ffx'], result.prior_params['tau_ffx'][0]))
+        assert tau['Days'] == pytest.approx(0.123)
+        assert tau['Noise'] == tau['Intercept'] != pytest.approx(0.123)
+        assert '  Days ~ N(0, 0.123)' in api.posteriorSummary(result)
+    perm = [later.param_names['ffx'].index(name) for name in first.param_names['ffx']]
+    assert torch.equal(later.proposal.ffx[..., perm], first.proposal.ffx[..., :3])
