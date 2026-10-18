@@ -2486,8 +2486,8 @@ def posteriorTable(
         note = ' (random-walk moves ran)' if random_walk else ''
         footer_parts.append(f'min ESS = {ess_min:.0f}{note}')
     if psis_k is not None:
-        note = 'refined' if psis_k <= psis_k_threshold else '⚠ unreliable — consider MCMC'
-        footer_parts.append(f'PSIS k̂ = {psis_k:.3f} ({note})')
+        note = '' if psis_k <= psis_k_threshold else ' (⚠ unreliable — consider MCMC)'
+        footer_parts.append(f'PSIS k̂ = {psis_k:.3f}{note}')
     if map_z is not None:
         note = '' if map_z <= map_z_threshold else ' (⚠ disagrees with MAP — consider MCMC)'
         footer_parts.append(f'MAP z = {map_z:.1f}{note}')
