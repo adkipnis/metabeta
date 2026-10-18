@@ -108,6 +108,24 @@ A GLMM fit is then a forward pass through the trained networks. Metropolis–Has
 
 ## FAQ
 
+<summary><b>What can metabeta fit?</b></summary>
+
+- **Models**: Gaussian, Bernoulli (0/1) and Poisson GLMMs with one grouping factor.
+- **Data**: 5 to 200 groups, 5 to 150 rows per group, at most 3,000 rows.
+- **Effects**: at most 16 fixed and 5 random effects, intercepts included.
+- **Random slopes**: each must also be a fixed effect.
+- **Enough groups**: at least 4 more groups than fixed effects, and than random-effect variances
+  and covariances.
+- **Enough rows**: at least 2 more rows per group than random effects.
+- **Formulas**: additive lme4 syntax, such as `y ~ x1 + x2 + (1 + x1 | g)`.
+- **Categories**: string and categorical columns are dummy-coded, with the most frequent level as
+  the reference (R uses the first).
+- **Currently not supported**: `||`, `/`, interactions (`:`, `*`), functions (`log()`, `factor()`, `C()`),
+  offsets and binomial trials. Transform the columns in the DataFrame instead; the error message
+  says how.
+
+</details>
+
 <details>
 <summary><b>Do I need a GPU?</b></summary>
 
@@ -144,23 +162,7 @@ random-walk moves (`random_walk=True`). `02-families` compares a Poisson fit wit
 </details>
 
 <details>
-<summary><b>What can metabeta fit?</b></summary>
 
-- **Models**: Gaussian, Bernoulli (0/1) and Poisson GLMMs with one grouping factor.
-- **Data**: 5 to 200 groups, 5 to 150 rows per group, at most 3,000 rows.
-- **Effects**: at most 16 fixed and 5 random effects, intercepts included.
-- **Random slopes**: each must also be a fixed effect.
-- **Enough groups**: at least 4 more groups than fixed effects, and than random-effect variances
-  and covariances.
-- **Enough rows**: at least 2 more rows per group than random effects.
-- **Formulas**: additive lme4 syntax, such as `y ~ x1 + x2 + (1 + x1 | g)`.
-- **Categories**: string and categorical columns are dummy-coded, with the most frequent level as
-  the reference (R uses the first).
-- **Currently not supported**: `||`, `/`, interactions (`:`, `*`), functions (`log()`, `factor()`, `C()`),
-  offsets and binomial trials. Transform the columns in the DataFrame instead; the error message
-  says how.
-
-</details>
 
 
 ## Citing
