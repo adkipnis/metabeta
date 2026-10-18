@@ -653,6 +653,30 @@ def test_plotPPD_renders_at_notebook_size(api: Api, monkeypatch: pytest.MonkeyPa
     assert pixels.max() < 1000  # the default dpi; saved files keep the plotting DPI
 
 
+def test_posteriorDraws_match_the_summary(api: Api):
+    result = api.sample(
+        _sleepstudy(),
+        formula='Reaction ~ Days + (1 + Days | Subject)',
+        n_samples=64,
+        fit_preprocessor=True,
+    )
+
+    draws = api.posteriorDraws(result)
+
+    assert list(draws.columns) == [
+        'Intercept',
+        'Days',
+        'σ_Intercept',
+        'σ_Days',
+        'σ_Residual',
+        'Corr(Intercept, Days)',
+    ]
+    assert len(draws) == 64
+    summary = api.posteriorSummary(result)
+    for name, mean in draws.mean().items():
+        assert f'{mean:.3f}' in summary, name
+
+
 def test_from_pretrained_writes_its_status_to_stdout(
     api: Api, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ):
