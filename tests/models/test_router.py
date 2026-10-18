@@ -420,8 +420,9 @@ def test_router_accepts_canonical_fit_style_priors(
     )
 
     assert router.route(batch) == ['math-small']
-    assert torch.allclose(batch['nu_ffx'], torch.tensor([[1.0, 2.0, 3.0]]))
-    assert torch.allclose(batch['tau_ffx'], torch.tensor([[3.0, 2.0, 1.0]]))
+    # given in the formula's order; the batch has the model's, random slope first: 1, ses, meanses
+    assert torch.allclose(batch['nu_ffx'], torch.tensor([[1.0, 3.0, 2.0]]))
+    assert torch.allclose(batch['tau_ffx'], torch.tensor([[3.0, 1.0, 2.0]]))
     assert torch.allclose(batch['tau_rfx'], torch.tensor([[1.5, 0.5]]))
     assert torch.allclose(batch['tau_eps'], torch.tensor([1.2]))
     assert torch.equal(batch['family_ffx'], torch.tensor([0]))

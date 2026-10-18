@@ -181,6 +181,22 @@ def test_prior_assigned_by_name_follows_the_term_in_both_orderings(api: Api):
     assert torch.equal(later.proposal.ffx[..., perm], first.proposal.ffx[..., :3])
 
 
+def test_prior_array_follows_the_formula_order(api: Api):
+    df = _sleepstudy(Noise=np.random.default_rng(1).normal(size=120))
+    result = api.sample(
+        df,
+        formula='Reaction ~ Noise + Days + (1 + Days | Subject)',
+        n_samples=8,
+        fit_preprocessor=True,
+        priors={'tau_ffx': [1.0, 10.0, 0.1]},
+    )
+
+    assert result.param_names['ffx'] == ['Intercept', 'Noise', 'Days']
+    np.testing.assert_allclose(result.prior_params['tau_ffx'][0, :3], [1.0, 10.0, 0.1])
+    # the model sees the random slope first: Intercept, Days, Noise
+    np.testing.assert_allclose(result.batch['tau_ffx'][0, :3].cpu(), [1.0, 0.1, 10.0])
+
+
 def _tableRows(summary: str, title: str) -> dict[str, list[float]]:
     """The numbers of one posteriorSummary table, one row per parameter name."""
     lines = summary.splitlines()

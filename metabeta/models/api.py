@@ -1278,7 +1278,6 @@ class Api:
         model_columns = intercept + slope_indices + other_indices
         self._ffx_order = [model_columns.index(idx) for idx in user_columns]
         fixed_names = ['Intercept' if idx < 0 else columns[idx] for idx in user_columns]
-        model_names = ['Intercept' if idx < 0 else columns[idx] for idx in model_columns]
         X_parts = [np.ones(len(y)) if idx < 0 else X_pre[:, idx] for idx in model_columns]
         X = np.column_stack(X_parts) if X_parts else np.empty((X_pre.shape[0], 0))
 
@@ -1316,12 +1315,17 @@ class Api:
             raise ValueError('random-effect names must align with Z columns')
 
         sd_y = preprocessedSdY(preprocessed)
-        prior_variants = resolvePriors(
-            priors,
-            fixed_names=model_names,
-            random_names=random_names,
-            likelihood_family=likelihood,
-        )
+        # priors are given in the user's order, by name or by position; the model takes its own
+        to_model = [user_columns.index(idx) for idx in model_columns]
+        prior_variants = [
+            (name, values | {key: values[key][to_model] for key in ('nu_ffx', 'tau_ffx')})
+            for name, values in resolvePriors(
+                priors,
+                fixed_names=fixed_names,
+                random_names=random_names,
+                likelihood_family=likelihood,
+            )
+        ]
 
         groups = groups.astype(np.int64, copy=False)
         if np.any(groups < 0):
