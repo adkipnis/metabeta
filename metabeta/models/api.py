@@ -51,6 +51,7 @@ from metabeta.utils.api import (
     padModelDataset,
     parseFormula,
     preprocessedSdY,
+    resolveColumnTerm,
     resolveFixedIndices,
     resolveLikelihoodFamily,
     resolvePriors,
@@ -1153,6 +1154,36 @@ class Api:
             else resolveFixedIndices(spec.fixed_terms, columns)
         )
         self._warnInconsistentColumns(X_pre, columns, fixed_indices)
+        random_terms = spec.random_terms
+        if not random_terms:
+            if q is None:
+                random_terms = ('1',)
+            else:
+                random_terms = defaultRandomTerms(q, columns)
+        # the networks were trained with the random-effect design equal to the leading
+        # fixed-effect columns, so a random intercept pairs with the fixed one and every
+        # random slope is a fixed term
+        if '1' in random_terms and not spec.intercept:
+            raise ValueError(
+                'a random intercept needs a fixed intercept: drop the 0 from the fixed terms '
+                'or suppress the random intercept with (0 + ... | group)'
+            )
+        if spec.intercept and '1' not in random_terms:
+            raise ValueError(
+                'a fixed intercept needs a random intercept: write (1 + ... | group) or '
+                'suppress the fixed intercept with 0 +'
+            )
+        for term in random_terms:
+            if term == '1':
+                continue
+            missing = [
+                columns[idx] for idx in resolveColumnTerm(term, columns) if idx not in fixed_indices
+            ]
+            if missing:
+                raise ValueError(
+                    f'random slope {", ".join(missing)} is not a fixed term: add it to the '
+                    'fixed terms'
+                )
         fixed_names = []
         if spec.intercept:
             X_parts = [np.ones((X_pre.shape[0], 1), dtype=float)]
@@ -1163,12 +1194,6 @@ class Api:
         fixed_names += [columns[idx] for idx in fixed_indices]
         X = np.concatenate(X_parts, axis=1) if X_parts else np.empty((X_pre.shape[0], 0))
 
-        random_terms = spec.random_terms
-        if not random_terms:
-            if q is None:
-                random_terms = ('1',)
-            else:
-                random_terms = defaultRandomTerms(q, columns)
         Z = buildRandomDesign(X_pre, columns, random_terms)
         random_names = self._randomNames(random_terms, columns)
         self._param_names = {'ffx': list(fixed_names), 'sigma_rfx': list(random_names)}
