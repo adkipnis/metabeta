@@ -149,6 +149,26 @@ class ScaleInfo:
             return torch.cat([active_orig, ffx[..., d:]], dim=-1)
         return active_orig
 
+    def ffxPriorToOriginal(
+        self, loc: np.ndarray, scale: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Location and scale (d,) in original y/X units of independent fixed-effect priors with
+        ``loc`` and ``scale`` (d,) on the standardized (★) scale.
+
+        The map of to_original_scale is linear, so locations map exactly and scales add in
+        quadrature: for normal priors these are each marginal's mean and SD. The intercept at
+        X = 0 collects every slope on a predictor with a nonzero mean, so it is wider than the
+        intercept prior at the predictors' means.
+        """
+        loc_out = np.asarray(loc, dtype=float) * self.y_std / self.x_stds  # (d,)
+        scale_out = np.asarray(scale, dtype=float) * self.y_std / self.x_stds  # (d,)
+        if self.has_intercept:
+            coef = -np.asarray(self.x_means, dtype=float)  # intercept = coef · slopes + y_mean
+            coef[0] += 1.0
+            loc_out[0] = coef @ loc_out + self.y_mean
+            scale_out[0] = np.sqrt((coef**2) @ (scale_out**2))
+        return loc_out, scale_out
+
     def rfxMap(self) -> np.ndarray:
         """A (q, q), mapping the centered, standardized random-effect basis to the original."""
         q = len(self.random_names)
