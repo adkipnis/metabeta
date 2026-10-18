@@ -369,7 +369,7 @@ class Api:
         self,
         data: Any,
         *,
-        n_samples: int = 1,
+        n_samples: int = 1000,
         diagnostics: bool = False,
         refine: bool | str = True,
         k_threshold: float = PSIS_K_THRESHOLD,
