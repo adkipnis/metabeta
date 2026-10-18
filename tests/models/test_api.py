@@ -178,11 +178,13 @@ def test_prior_assigned_by_name_follows_the_term_in_both_orderings(api: Api):
     torch.manual_seed(0)
     later = api.sample(df, formula='Reaction ~ Noise + Days + (1 + Days | Subject)', **kwargs)
 
+    sd_y = df['Reaction'].std(ddof=0)
     for result in (first, later):
         tau = dict(zip(result.param_names['ffx'], result.prior_params['tau_ffx'][0]))
         assert tau['Days'] == pytest.approx(0.123)
         assert tau['Noise'] == tau['Intercept'] != pytest.approx(0.123)
-        assert '  Days ~ N(0, 0.123)' in api.posteriorSummary(result, x_scale='standardized')
+        summary = api.posteriorSummary(result, x_scale='standardized')
+        assert f'  Days ~ N(0, {0.123 * sd_y:.4g})' in summary
     perm = [later.param_names['ffx'].index(name) for name in first.param_names['ffx']]
     assert torch.equal(later.proposal.ffx[..., perm], first.proposal.ffx[..., :3])
 
@@ -279,6 +281,23 @@ def test_summary_states_where_a_prior_without_closed_form_applies(api: Api):
     lines = api.posteriorSummary(result).splitlines()
     assert f'  Intercept ~ t₅({loc:.4g}, {sd_y * tau:.4g}) at mean Days' in lines
     assert f'  σ_Intercept ~ HN({tau_sd0:.4g})' in lines
+
+
+def test_standardized_summary_states_the_priors_in_reaction_units(api: Api):
+    df = _sleepstudy()
+    result = api.sample(
+        df, formula='Reaction ~ Days + (1 + Days | Subject)', n_samples=64, fit_preprocessor=True
+    )
+
+    # the standardized summary prints the draws in Reaction units, per SD of Days for a slope,
+    # and the intercept as the deviation from mean Reaction at mean Days
+    sd_y, pp = df['Reaction'].std(ddof=0), result.prior_params
+    lines = api.posteriorSummary(result, x_scale='standardized').splitlines()
+    assert f'  Intercept ~ N(0, {sd_y * pp["tau_ffx"][0, 0]:.4g})' in lines
+    assert f'  Days ~ N(0, {sd_y * pp["tau_ffx"][0, 1]:.4g})' in lines
+    assert f'  σ_Intercept ~ HN({sd_y * pp["tau_rfx"][0, 0]:.4g})' in lines
+    tau_eps = sd_y * np.asarray(pp['tau_eps']).ravel()[0]
+    assert any(l.startswith('  σ_Residual ~ ') and l.endswith(f'({tau_eps:.4g})') for l in lines)
 
 
 def test_random_intercept_sd_does_not_depend_on_the_predictor_scale(api: Api):
