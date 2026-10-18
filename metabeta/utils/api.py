@@ -237,6 +237,23 @@ def resolveColumnTerm(term: str, columns: Sequence[str]) -> list[int]:
     raise KeyError(f'formula term not found in preprocessed columns: {term}')
 
 
+def restoreColumnCase(columns: Sequence[str], raw_columns: Sequence[str]) -> list[str]:
+    """Spell preprocessed column names as the DataFrame did.
+
+    DataPreprocessor lowercases names, and a one-hot dummy is '{column}_{level}', so each
+    name is a raw column or starts with one and '_'; the longest such column is its stem.
+    """
+    spelling = {str(c).lower(): str(c) for c in raw_columns}
+    stems = sorted(spelling, key=len, reverse=True)
+    restored = []
+    for column in columns:
+        stem = column
+        if stem not in spelling:
+            stem = next(s for s in stems if column.startswith(f'{s}_'))
+        restored.append(spelling[stem] + column[len(stem) :])
+    return restored
+
+
 def buildRandomDesign(
     X_pre: np.ndarray,
     columns: Sequence[str],

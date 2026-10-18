@@ -54,6 +54,7 @@ from metabeta.utils.api import (
     resolveFixedIndices,
     resolveLikelihoodFamily,
     resolvePriors,
+    restoreColumnCase,
     routeValue,
     routingSortKey,
     returnPreparedStage,
@@ -1071,6 +1072,7 @@ class Api:
         dry_run: bool,
     ) -> dict[str, np.ndarray] | PreprocessReport:
         spec = parseFormula(formula)
+        raw_columns = list(df.columns)
         df = df.copy()
         df.columns = df.columns.str.lower()
 
@@ -1093,16 +1095,20 @@ class Api:
             )
             if dry_run:
                 return prep.audit(df)
-            return attachPreprocessorMetadata(prep.transform(df), prep)
-
-        prep = DataPreprocessor(group_name=group_name)
-        if dry_run:
-            return prep.audit(df)
-        if not fit_preprocessor:
-            raise ValueError(
-                'tabular router input requires a fitted preprocessor or fit_preprocessor=True'
-            )
-        return attachPreprocessorMetadata(prep.fit_transform(df), prep)
+            preprocessed = prep.transform(df)
+        else:
+            prep = DataPreprocessor(group_name=group_name)
+            if dry_run:
+                return prep.audit(df)
+            if not fit_preprocessor:
+                raise ValueError(
+                    'tabular router input requires a fitted preprocessor or fit_preprocessor=True'
+                )
+            preprocessed = prep.fit_transform(df)
+        # every output name (parameters, summaries, plots) derives from these columns
+        columns = restoreColumnCase(preprocessed['columns'].tolist(), raw_columns)
+        preprocessed['columns'] = np.array(columns, dtype=str)
+        return attachPreprocessorMetadata(preprocessed, prep)
 
     def _buildModelDatasets(
         self,
