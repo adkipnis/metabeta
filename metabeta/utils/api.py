@@ -87,6 +87,10 @@ class ScaleInfo:
     to_original_scale() converts to:
       ffx[0]: expected y at X=0  (comparable to lme4/statsmodels intercept)
       ffx[j]: Δy per one unit of predictor j
+
+    The random effects get the same map: a random slope on predictor j is divided by its SD
+    s_j, and the random intercept moves to x = 0 by subtracting Σ_j μ_j b_j / s_j, so per draw
+    b ↦ A b and Σ ↦ A Σ Aᵀ.
     """
 
     y_mean: float
@@ -94,6 +98,7 @@ class ScaleInfo:
     x_means: np.ndarray  # shape (d,) — 0.0 for intercept column
     x_stds: np.ndarray  # shape (d,) — 1.0 for intercept and dummy columns
     param_names: list[str]
+    random_names: list[str]  # 'Intercept' or a name in param_names, in the random-effect order
     has_intercept: bool = True
 
     def to_original_scale(self, ffx: torch.Tensor) -> torch.Tensor:
@@ -118,6 +123,46 @@ class ScaleInfo:
         if ffx.shape[-1] > d:
             return torch.cat([active_orig, ffx[..., d:]], dim=-1)
         return active_orig
+
+    def _rfxMap(self) -> np.ndarray:
+        """A (q, q), mapping the centered, standardized random-effect basis to the original."""
+        q = len(self.random_names)
+        A = np.eye(q)
+        for k, name in enumerate(self.random_names):
+            if name == 'Intercept':
+                continue
+            j = self.param_names.index(name)
+            A[k, k] = 1.0 / self.x_stds[j]
+            if 'Intercept' in self.random_names:
+                A[self.random_names.index('Intercept'), k] = -self.x_means[j] / self.x_stds[j]
+        return A
+
+    def rfxToOriginal(self, rfx: torch.Tensor) -> torch.Tensor:
+        """Per-group effects (..., q_padded) ↦ A b; padding columns are returned unchanged."""
+        q = len(self.random_names)
+        A = torch.tensor(self._rfxMap(), dtype=rfx.dtype, device=rfx.device)
+        return torch.cat([rfx[..., :q] @ A.T, rfx[..., q:]], dim=-1)
+
+    def sdCorrToOriginal(
+        self, sigma: torch.Tensor, corr: torch.Tensor | None
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """SDs (..., q_padded) and correlations (..., q_padded, q_padded) of the random effects
+        ↦ those of A Σ Aᵀ; padding entries are returned unchanged. A model with a single random
+        effect has no correlations (None)."""
+        q = len(self.random_names)
+        A = torch.tensor(self._rfxMap(), dtype=torch.float64, device=sigma.device)
+        sd = sigma[..., :q].double()
+        R = torch.ones(1, 1, dtype=sd.dtype) if corr is None else corr[..., :q, :q].double()
+        cov = sd.unsqueeze(-1) * R * sd.unsqueeze(-2)  # (..., q, q)
+        cov = A @ cov @ A.T
+        sd_orig = cov.diagonal(dim1=-2, dim2=-1).sqrt()  # (..., q)
+        corr_orig = cov / (sd_orig.unsqueeze(-1) * sd_orig.unsqueeze(-2))
+        sigma_out = torch.cat([sd_orig.to(sigma.dtype), sigma[..., q:]], dim=-1)
+        if corr is None:
+            return sigma_out, None
+        corr_out = corr.clone()
+        corr_out[..., :q, :q] = corr_orig.to(corr.dtype)
+        return sigma_out, corr_out
 
 
 def routeValue(entry: Mapping[str, Any], key: str) -> Any:
