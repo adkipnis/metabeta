@@ -345,9 +345,8 @@ def test_router_rejects_dataset_outside_training_dimensions(tmp_path: Path):
     _write_joint_checkpoint(joint_path)
     router = Api(joint_path, warmup=False)
 
-    with pytest.warns(RuntimeWarning, match='incompatible'):
-        with pytest.raises(ValueError, match='outside every routed submodel'):
-            router._routeBatch(_batch(d=9, q=3))
+    with pytest.raises(ValueError, match=r'9 fixed effects \(supported: 1 to 8\)'):
+        router._routeBatch(_batch(d=9, q=3))
 
 
 def test_router_checks_between_and_within_group_degrees_of_freedom(tmp_path: Path):
@@ -355,13 +354,12 @@ def test_router_checks_between_and_within_group_degrees_of_freedom(tmp_path: Pat
     _write_joint_checkpoint(joint_path)
     router = Api(joint_path, warmup=False)
 
-    with pytest.warns(RuntimeWarning, match='incompatible'):
-        with pytest.raises(ValueError, match='min_bg_df'):
-            router._routeBatch(_batch(d=4, q=2, m=6, n_i=10))
+    with pytest.raises(ValueError, match='min_bg_df'):
+        router._routeBatch(_batch(d=4, q=2, m=6, n_i=10))
 
-    with pytest.warns(RuntimeWarning, match='incompatible'):
-        with pytest.raises(ValueError, match='min_within_df'):
-            router._routeBatch(_batch(d=4, q=2, m=12, n_i=3))
+    # min_n = 5 binds before q + min_within_df = 4, so the error names the rows per group
+    with pytest.raises(ValueError, match=r'3 rows per group \(supported: 5 to 250\)'):
+        router._routeBatch(_batch(d=4, q=2, m=12, n_i=3))
 
 
 def test_router_prepares_preprocessed_numpy_dict_with_formula_and_default_priors(

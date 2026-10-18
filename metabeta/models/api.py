@@ -1470,13 +1470,34 @@ class Api:
             if not failures:
                 return entry, failures_by_submodel
             failures_by_submodel[str(entry['id'])] = failures
+        misfit = self._misfit(batch, i, failures_by_submodel)
+        raise ValueError(f"dataset {i} is outside the checkpoint's limits: {misfit}")
 
-        warnings.warn(
-            f'dataset {i} is incompatible with every routed submodel',
-            RuntimeWarning,
-            stacklevel=2,
-        )
-        raise ValueError(f'dataset {i} is outside every routed submodel: {failures_by_submodel}')
+    def _misfit(
+        self,
+        batch: Mapping[str, torch.Tensor],
+        i: int,
+        failures_by_submodel: dict[str, list[str]],
+    ) -> str:
+        """Why dataset i fits no submodel: its dimensions outside the range the submodels cover
+        together, else the failures of the submodel closest to fitting."""
+        dims = self._datasetDimensions(batch, i)
+        misfits = []
+        for label, low, high, min_key, max_key in (
+            ('groups', dims['m'], dims['m'], 'min_m', 'max_m'),
+            ('rows per group', dims['min_n_i'], dims['max_n_i'], 'min_n', 'max_n'),
+            ('rows', dims['n'], dims['n'], None, 'max_n_total'),
+            ('fixed effects', dims['d'], dims['d'], 'min_d', 'max_d'),
+            ('random effects', dims['q'], dims['q'], 'min_q', 'max_q'),
+        ):
+            lows = [int(v) for e in self.submodels if (v := routeValue(e, min_key)) is not None]
+            highs = [int(v) for e in self.submodels if (v := routeValue(e, max_key)) is not None]
+            lo, hi = min(lows, default=None), max(highs, default=None)
+            if (lo is not None and low < lo) or (hi is not None and high > hi):
+                value = low if low == high else f'{low} to {high}'
+                supported = f'up to {hi}' if lo is None else f'{lo} to {hi}'
+                misfits.append(f'{value} {label} (supported: {supported})')
+        return '; '.join(misfits or min(failures_by_submodel.values(), key=len))
 
     def _compatibilityFailures(
         self, batch: Mapping[str, torch.Tensor], i: int, entry: Mapping[str, Any]
