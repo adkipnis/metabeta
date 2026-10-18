@@ -133,6 +133,7 @@ def test_preprocessing_ignores_a_collinear_column_the_formula_does_not_name(
         ('Reaction ~ Noise + (1 + Days | Subject)', 'Days'),
         ('Reaction ~ 0 + Days + (1 | Subject)', '(?i)intercept'),
         ('Reaction ~ Days + (0 + Days | Subject)', '(?i)intercept'),
+        ('Reaction ~ 0 + Days', 'added because the formula has no random term'),
     ],
 )
 def test_random_terms_the_fixed_terms_cannot_lead_with_raise(api: Api, formula: str, term: str):

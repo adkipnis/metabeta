@@ -1259,9 +1259,10 @@ class Api:
         # fixed-effect columns, so a random intercept pairs with the fixed one and every
         # random slope is a fixed term
         if '1' in random_terms and not spec.intercept:
+            added = '' if spec.random_terms else ', added because the formula has no random term,'
             raise ValueError(
-                'a random intercept needs a fixed intercept: drop the 0 from the fixed terms '
-                'or suppress the random intercept with (0 + ... | group)'
+                f'a random intercept{added} needs a fixed intercept: drop the 0 from the fixed '
+                'terms or suppress the random intercept with (0 + ... | group)'
             )
         if spec.intercept and '1' not in random_terms:
             raise ValueError(
