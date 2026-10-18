@@ -169,7 +169,8 @@ class RouterResult:
 class Api:
     """Route dataloader-formatted datasets through a joint checkpoint.
 
-    Models are instantiated lazily when their first compatible batch is run.
+    Models are instantiated lazily when their first compatible batch is run, or all at
+    construction with ``warmup=True``.
 
     Tabular inputs are normalized through explicit stages: dataframe/parquet,
     preprocessed numpy dict, model dataset dict, then collated dataloader batch.
@@ -210,9 +211,9 @@ class Api:
             Number of datasets ``sample`` refines at a time; ``None`` refines them all at
             once.  Lower it if many large datasets run out of memory.
         warmup:
-            Run one discarded sampling pass on dummy data while loading, so the first
-            ``sample`` call is as fast as later ones.  ``False`` loads faster and moves that
-            cost to the first call.
+            Build every submodel and run one discarded sampling pass on dummy data while
+            loading, so the first ``sample`` call is as fast as later ones.  ``False`` loads
+            faster and moves that cost to the first call.
         verbose:
             Print concise checkpoint download/load status messages.
         """
@@ -259,8 +260,10 @@ class Api:
 
         if warmup:
             # the first call's cost is paid once per process, not per submodel, so one pass on
-            # the smallest submodel suffices; the others are built on their first batch (#19)
+            # the smallest submodel suffices; building the others spares their first batch (#19)
             self._warmupSubmodel(self.submodels[0])
+            for entry in self.submodels:
+                self.model(str(entry['id']))
 
     def model(self, submodel_id: str) -> Approximator:
         """Return the lazily instantiated model for ``submodel_id``."""
