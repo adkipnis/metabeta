@@ -179,6 +179,47 @@ def test_prior_assigned_by_name_follows_the_term_in_both_orderings(api: Api):
         tau = dict(zip(result.param_names['ffx'], result.prior_params['tau_ffx'][0]))
         assert tau['Days'] == pytest.approx(0.123)
         assert tau['Noise'] == tau['Intercept'] != pytest.approx(0.123)
-        assert '  Days ~ N(0, 0.123)' in api.posteriorSummary(result)
+        assert '  Days ~ N(0, 0.123)' in api.posteriorSummary(result, x_scale='standardized')
     perm = [later.param_names['ffx'].index(name) for name in first.param_names['ffx']]
     assert torch.equal(later.proposal.ffx[..., perm], first.proposal.ffx[..., :3])
+
+
+def _tableRows(summary: str, title: str) -> dict[str, list[float]]:
+    """The numbers of one posteriorSummary table, one row per parameter name."""
+    lines = summary.splitlines()
+    start = lines.index(title) + 3  # header and separator
+    rows = [row.split('|')[1:-1] for row in lines[start : lines.index('', start)]]
+    return {row[0].strip(): [float(cell) for cell in row[1:]] for row in rows}
+
+
+def _randomSlopeDraws(result) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """σ_Intercept, σ_Days and their correlation per draw, on the standardized scale."""
+    sigma = result.proposal.sigma_rfx[0].double().numpy()  # (S, q)
+    rho = result.proposal.corr_rfx[0, :, 1, 0].double().numpy()  # (S,)
+    return sigma[:, 0], sigma[:, 1], rho
+
+
+def test_default_summary_reports_random_effects_at_days_zero(api: Api):
+    df = _sleepstudy()
+    result = api.sample(
+        df, formula='Reaction ~ Days + (1 + Days | Subject)', n_samples=64, fit_preprocessor=True
+    )
+
+    # b0 + b1 (x - mu) / s = (b0 - b1 mu / s) + (b1 / s) x, so per draw the covariance of
+    # (b0', b1') follows from Var(b0 - c b1), Var(b1) / s^2 and Cov(b0 - c b1, b1 / s), c = mu / s
+    mu, s = df['Days'].mean(), df['Days'].std(ddof=0)
+    c = mu / s
+    sd0, sd1, rho = _randomSlopeDraws(result)
+    sd0_orig = np.sqrt(sd0**2 - 2 * c * rho * sd0 * sd1 + c**2 * sd1**2)
+    sd1_orig = sd1 / s
+    rho_orig = (rho * sd0 * sd1 - c * sd1**2) / s / (sd0_orig * sd1_orig)
+
+    summary = api.posteriorSummary(result)
+    sds = _tableRows(summary, 'Standard Deviations:')
+    corr = _tableRows(summary, 'Correlations:')
+    assert sds['Intercept'][0] == pytest.approx(sd0_orig.mean(), abs=1e-3)
+    assert sds['Days'][0] == pytest.approx(sd1.mean() / s, abs=1e-3)
+    assert corr['Days'][0] == pytest.approx(rho_orig.mean(), abs=1e-3)
+    assert corr['Intercept'][1] == corr['Days'][0]
+    tau = result.prior_params['tau_rfx'][0, 1] * df['Reaction'].std(ddof=0) / s
+    assert f'  σ_Days ~ HN({tau:.4g})' in summary
