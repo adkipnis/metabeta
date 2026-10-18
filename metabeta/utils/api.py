@@ -20,6 +20,24 @@ from metabeta.utils.priors import bambiDefaultPriors
 JOINT_CHECKPOINT_VERSION = 1
 DEFAULT_CHECKPOINT_PREFIXES = ('best', 'latest')
 MAX_ROUTER_Q = 5
+# lme4 syntax outside the networks' design: the error names it instead of misparsing it
+UNSUPPORTED_SYNTAX = (
+    (
+        r'\([^()|]*\|\|[^()]*\)',
+        'uncorrelated random effects are not supported; write (1 + x | g), which estimates '
+        'their correlation',
+    ),
+    (
+        r'\([^()|]*\|[^()]*[/:][^()]*\)',
+        'nested or crossed grouping factors are not supported; metabeta fits one grouping factor',
+    ),
+    (r'[\w.]+\s*[:*]\s*[\w.]+', 'interactions are not supported'),
+    (
+        r'[A-Za-z_][\w.]*\([^()]*\)',
+        'function calls are not supported; transform the column in the DataFrame and name the '
+        'new column (for factor() or C(), convert it to strings, which are dummy-coded)',
+    ),
+)
 
 ROUTING_KEYS = (
     'likelihood_family',
@@ -199,6 +217,9 @@ def parseFormula(formula: str | None) -> FormulaSpec:
     target = lhs.strip().lower()
     if not target:
         raise ValueError('formula target is empty')
+    for pattern, hint in UNSUPPORTED_SYNTAX:
+        if found := re.search(pattern, rhs):
+            raise NotImplementedError(f'unsupported formula syntax {found.group(0)}: {hint}')
 
     random_matches = re.findall(r'\(([^|]+)\|([^)]+)\)', rhs)
     if len(random_matches) > 1:
