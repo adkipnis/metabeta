@@ -425,6 +425,7 @@ def test_low_ess_warning_suggests_more_draws_and_points_at_the_call(api: Api):
     (ess,) = [w for w in caught if 'effective sample size' in str(w.message)]
     assert 'n_samples' in str(ess.message)
     assert 'do not fix' not in str(ess.message)
+    assert 'warm-started' not in str(ess.message)  # no public route to a warm-started NUTS yet
     assert ess.filename == __file__
 
 
@@ -563,3 +564,81 @@ def test_from_pretrained_writes_its_status_to_stdout(
     out, err = capsys.readouterr()
     assert 'checkpoint' in out
     assert err == ''
+
+
+def _preprocessed(X: np.ndarray, y: np.ndarray) -> dict[str, np.ndarray]:
+    """A preprocessed dict of 12 groups by 10 rows with columns x1, x2, which skips the
+    preprocessor and its checks."""
+    return {
+        'X': X,
+        'y': y,
+        'groups': np.repeat(np.arange(12), 10),
+        'columns': np.array(['x1', 'x2']),
+        'd': np.array(3),
+        'n': np.array(120),
+        'ns': np.full(12, 10),
+        'm': np.array(12),
+        'y_type': np.array('continuous'),
+    }
+
+
+_RNG = np.random.default_rng(1)
+_X1, _NOISE, _Z = _RNG.normal(size=120), _RNG.normal(0, 1e-3, 120), _RNG.normal(size=120)
+_FORMULA = 'Reaction ~ Days + (1 | Subject)'
+
+
+@pytest.mark.parametrize(
+    ('call', 'message'),
+    [
+        (
+            lambda api: api.sample(_sleepstudy(), formula=_FORMULA, n_samples=64, refine='is'),
+            'PSIS',
+        ),
+        (
+            lambda api: api.sample(
+                _sleepstudy(), formula=_FORMULA, n_samples=64, map_z_threshold=0.0
+            ),
+            'MAP consistency',
+        ),
+        (
+            lambda api: api.sample(_sleepstudy(), formula=_FORMULA, n_samples=64, evidence=True),
+            'Evidence reliability',
+        ),
+        (
+            lambda api: api.sample(
+                _preprocessed(np.column_stack([_X1, _X1 + _NOISE]), _Z),
+                formula='y ~ x1 + x2 + (1 | group)',
+                n_samples=8,
+            ),
+            'highly correlated',
+        ),
+        (
+            lambda api: api.sample(
+                _preprocessed(np.column_stack([_X1, 0.5 + _NOISE]), _Z),
+                formula='y ~ x1 + x2 + (1 | group)',
+                n_samples=8,
+            ),
+            'near-constant',
+        ),
+        (
+            lambda api: api.sample(
+                _preprocessed(np.column_stack([_X1, _Z]), 5 + 3 * _Z),
+                formula='y ~ x1 + x2 + (1 | group)',
+                n_samples=8,
+            ),
+            'unstandardized',
+        ),
+        (
+            lambda api: api.posteriorSummary(
+                api.sample(api.prepareData(_sleepstudy(), formula=_FORMULA), n_samples=8)
+            ),
+            'requires scale_info',
+        ),
+    ],
+    ids=['psis', 'map', 'evidence', 'collinear', 'near-constant', 'raw-y', 'scale-info'],
+)
+def test_warnings_point_at_the_call(api: Api, call, message: str):
+    _, caught = _warningsOf(lambda: call(api))
+
+    (warning,) = [w for w in caught if message in str(w.message)]
+    assert warning.filename == __file__
