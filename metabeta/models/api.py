@@ -1115,7 +1115,10 @@ class Api:
 
         group_name = (group_name or spec.group_name or '').lower()
         if group_name and group_name in df.columns:
-            self._group_labels = sorted(str(v) for v in df[group_name].dropna().unique())
+            # the preprocessor codes groups in the column's sorted order (numeric for integer
+            # ids), so the labels follow that order, not the order of their strings
+            labels = df[group_name].dropna().sort_values().unique()
+            self._group_labels = [str(v) for v in labels]
         else:
             self._group_labels = None
         if preprocessor is not None:
