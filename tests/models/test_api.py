@@ -731,6 +731,63 @@ def test_sample_seed_reproduces_the_draws_and_keeps_the_callers_stream(api: Api)
     assert torch.equal(seeded.proposal.samples_g, seeded_globally.proposal.samples_g)
 
 
+def test_groupDraws_add_each_group_deviation_to_the_fixed_effect(api: Api):
+    result = api.sample(
+        _sleepstudy(),
+        formula='Reaction ~ Days + (1 + Days | Subject)',
+        n_samples=64,
+        fit_preprocessor=True,
+    )
+
+    coef = api.groupDraws(result)
+
+    assert list(coef.columns.unique('group')) == result.group_names
+    assert list(coef.columns.unique('term')) == ['Intercept', 'Days']
+    si, post = result.scale_info, result.proposal
+    days = si.to_original_scale(post.ffx[0])[:, 1] + si.rfxToOriginal(post.rfx[0])[2, :, 1]
+    np.testing.assert_allclose(coef[(result.group_names[2], 'Days')], days.numpy(), rtol=1e-6)
+
+
+def test_posteriorPredictive_returns_the_data_and_replicates_in_its_units(api: Api):
+    df = _sleepstudy()
+    result = api.sample(
+        df, formula='Reaction ~ Days + (1 | Subject)', n_samples=64, fit_preprocessor=True
+    )
+
+    y, y_rep = api.posteriorPredictive(result, seed=0)
+
+    np.testing.assert_allclose(np.sort(y), np.sort(df['Reaction']), rtol=1e-5)
+    assert y_rep.shape == (len(df), 64)
+    assert abs(y_rep.mean() - y.mean()) < y.std()
+    assert np.array_equal(api.posteriorPredictive(result, seed=0)[1], y_rep)
+
+
+def test_bayesFactor_pairs_one_row_with_every_prior_and_refuses_other_data(api: Api):
+    df, kwargs = _sleepstudy(), dict(n_samples=64, fit_preprocessor=True, evidence=True)
+    priors = {'wide': None, 'narrow': {'fixed': {'Days': {'tau': 0.5}}}}
+    with_days = api.sample(df, formula='Reaction ~ Days + (1 | Subject)', priors=priors, **kwargs)
+    without = api.sample(df, formula='Reaction ~ 1 + (1 | Subject)', **kwargs)
+
+    bf = api.bayesFactor(without, with_days)
+
+    assert list(bf.index) == ['wide', 'narrow']
+    expected = without.evidence['log_evidence'][0] - with_days.evidence['log_evidence']
+    np.testing.assert_allclose(bf['log BF'], expected)
+    assert set(bf['strength']) <= {
+        'not worth more than a bare mention',
+        'positive',
+        'strong',
+        'very strong',
+    }
+    other = api.sample(_sleepstudy(seed=1), formula='Reaction ~ 1 + (1 | Subject)', **kwargs)
+    with pytest.raises(ValueError, match='same data'):
+        api.bayesFactor(other, with_days)
+    with pytest.raises(ValueError, match='evidence=True'):
+        api.bayesFactor(
+            without, api.sample(df, formula='Reaction ~ 1 + (1 | Subject)', n_samples=64)
+        )
+
+
 def test_from_pretrained_writes_its_status_to_stdout(
     api: Api, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ):
