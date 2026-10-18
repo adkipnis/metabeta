@@ -128,3 +128,39 @@ def test_random_terms_the_fixed_terms_cannot_lead_with_raise(api: Api, formula: 
 
     with pytest.raises(ValueError, match=term):
         api.sample(df, formula=formula, n_samples=8, fit_preprocessor=True)
+
+
+def _fixedEffectRows(summary: str) -> dict[str, str]:
+    """The Fixed Effects table of a posteriorSummary, one row per parameter name."""
+    lines = summary.splitlines()
+    start = lines.index('Fixed Effects:') + 3  # header and separator
+    rows = lines[start : lines.index('', start)]
+    return {row.split('|')[1].strip(): row for row in rows}
+
+
+def test_fixed_term_order_does_not_change_the_fit(api: Api):
+    df = _sleepstudy(Noise=np.random.default_rng(1).normal(size=120))
+    kwargs = dict(n_samples=64, fit_preprocessor=True)
+
+    torch.manual_seed(0)
+    first = api.sample(df, formula='Reaction ~ Days + Noise + (1 + Days | Subject)', **kwargs)
+    torch.manual_seed(0)
+    later = api.sample(df, formula='Reaction ~ Noise + Days + (1 + Days | Subject)', **kwargs)
+
+    assert first.param_names['ffx'] == ['Intercept', 'Days', 'Noise']
+    assert later.param_names['ffx'] == ['Intercept', 'Noise', 'Days']
+    # both build the same batch internally, so under one seed the draws are equal after
+    # permutation, not just within Monte Carlo noise
+    perm = [later.param_names['ffx'].index(name) for name in first.param_names['ffx']]
+    assert torch.equal(later.proposal.ffx[..., perm], first.proposal.ffx[..., :3])
+    for key in ('sigma_rfx', 'rfx'):
+        assert torch.equal(getattr(later.proposal, key), getattr(first.proposal, key))
+
+    first_rows = _fixedEffectRows(api.posteriorSummary(first))
+    later_rows = _fixedEffectRows(api.posteriorSummary(later))
+    assert list(later_rows) == ['Intercept', 'Noise', 'Days']
+    assert later_rows == first_rows
+    grid = api.plotParameters(later)
+    labels = [ax.get_ylabel() for ax in grid.axes[:, 0]]
+    plt.close(grid.figure)
+    assert labels.index('Noise') < labels.index('Days')
