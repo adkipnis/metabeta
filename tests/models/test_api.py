@@ -517,3 +517,15 @@ def test_too_few_or_too_many_groups_raise_one_concise_error(api: Api, m: int):
     assert f'{m} groups (supported: 5 to 200)' in str(error.value)
     assert 'tiny' not in str(error.value)  # no failure list per submodel
     assert not [w for w in caught if issubclass(w.category, RuntimeWarning)]
+
+
+def test_binary_outcome_on_the_normal_checkpoint_suggests_bernoulli(api: Api):
+    df = _sleepstudy()
+    df['Reaction'] = (df['Reaction'] > df['Reaction'].median()).astype(int)
+    kwargs = dict(formula='Reaction ~ Days + (1 | Subject)', n_samples=8, fit_preprocessor=True)
+
+    with pytest.raises(ValueError, match="'bernoulli'"):
+        api.sample(df, **kwargs)
+    _, caught = _warningsOf(lambda: api.sample(df, likelihood_family='normal', **kwargs))
+    (hint,) = [w for w in caught if "'bernoulli'" in str(w.message)]
+    assert hint.filename == __file__
