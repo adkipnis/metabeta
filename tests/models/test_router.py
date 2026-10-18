@@ -1114,7 +1114,8 @@ def test_router_sample_returns_valid_proposal(tmp_path: Path):
     assert len(result.validation) == 1
     assert result.proposal.samples_g.shape[0] == 1
     assert result.proposal.n_samples == 5
-    assert result.diagnostics is None
+    assert 'pp' in result.diagnostics
+    assert 'loo_nll' not in result.diagnostics
 
 
 def test_router_sample_with_precomputed_stats_runs(tmp_path: Path):
@@ -1133,20 +1134,31 @@ def test_router_sample_with_precomputed_stats_runs(tmp_path: Path):
     assert result.proposal.n_samples == 3
 
 
-def test_router_sample_returns_diagnostics_when_requested(tmp_path: Path):
+def test_router_sample_adds_loo_when_requested(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2)
     router = Api(joint_path, warmup=False)
 
     batch = _exact_batch(d=4, q=2)
-    result = router.sample(batch, n_samples=10, diagnostics=True)
+    result = router.sample(batch, n_samples=10, loo=True)
 
-    assert result.diagnostics is not None
+    assert result.diagnostics['loo_nll_vals'].shape == (1,)
     assert 'ppc_nll' in result.diagnostics
     assert 'param_summary' in result.diagnostics
     assert 'ffx' in result.diagnostics['param_summary']
     assert 'sigma_rfx' in result.diagnostics['param_summary']
     assert result.diagnostics['ppc_nll'].shape == (1,)
+
+
+def test_router_sample_diagnostics_is_a_deprecated_alias_of_loo(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2)
+    router = Api(joint_path, warmup=False)
+
+    with pytest.warns(FutureWarning, match='loo=True'):
+        result = router.sample(_exact_batch(d=4, q=2), n_samples=10, diagnostics=True)
+
+    assert 'loo_nll' in result.diagnostics
 
 
 def test_router_log_prob_accepts_valid_parameters(tmp_path: Path):

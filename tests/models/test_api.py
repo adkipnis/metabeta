@@ -497,12 +497,14 @@ def test_low_ess_warning_suggests_more_draws_and_points_at_the_call(api: Api):
 
     (ess,) = [w for w in caught if 'effective sample size' in str(w.message)]
     assert 'n_samples' in str(ess.message)
+    assert '\n  1. ' in str(ess.message)  # the remedies, one per numbered line
+    assert 'random_walk=True' in str(ess.message)
     assert 'do not fix' not in str(ess.message)
     assert 'warm-started' not in str(ess.message)  # no public route to a warm-started NUTS yet
     assert ess.filename == __file__
 
 
-def test_random_walk_reports_one_line_instead_of_the_chain_warnings(api: Api):
+def test_random_walk_runs_quietly_unless_the_ess_is_very_low(api: Api):
     df = _sleepstudy()
     kwargs = dict(
         formula='Reaction ~ Days + (1 + Days | Subject)', n_samples=64, fit_preprocessor=True
@@ -514,13 +516,16 @@ def test_random_walk_reports_one_line_instead_of_the_chain_warnings(api: Api):
     torch.manual_seed(0)
     result, caught = _warningsOf(lambda: api.sample(df, random_walk=True, **kwargs))
 
-    messages = [str(w.message) for w in caught]
-    assert not any('effective sample size' in m or 'acceptance is low' in m for m in messages)
-    (line,) = [w for w in caught if 'moves ran' in str(w.message)]
-    assert line.filename == __file__
     safeguards = result.safeguards
     assert safeguards['random_walk_ran'][0]
-    assert ('NUTS' in str(line.message)) == (safeguards['ess_min'][0] < 10)
+    chain = [w for w in caught if 'ESS' in str(w.message) or 'acceptance' in str(w.message)]
+    if safeguards['ess_min'][0] < 10:
+        (line,) = chain
+        assert 'NUTS' in str(line.message)
+        assert line.filename == __file__
+    else:
+        assert not chain
+    assert _footer(api.posteriorSummary(result))['min ESS'].endswith('(random-walk moves ran)')
     for key in ('accept_rate', 'accept_flag', 'suggested_n_samples', 'ess', 'ess_min', 'ess_flag'):
         np.testing.assert_array_equal(safeguards[key], reference.safeguards[key], err_msg=key)
 
@@ -611,10 +616,11 @@ def _footer(summary: str) -> dict[str, str]:
     return dict(field.split(' = ', 1) for field in fields)
 
 
-def test_imh_footer_reports_acceptance_min_ess_and_k_hat(api: Api):
+def test_imh_footer_reports_safeguards_then_fit_metrics(api: Api):
     df = _sleepstudy()
     kwargs = dict(formula='Reaction ~ Days + (1 | Subject)', n_samples=64, fit_preprocessor=True)
     refined = api.sample(df, **kwargs)
+    with_loo = api.sample(df, loo=True, **kwargs)
     raw = api.sample(df, refine=False, **kwargs)
 
     footer = _footer(api.posteriorSummary(refined))
@@ -622,7 +628,29 @@ def test_imh_footer_reports_acceptance_min_ess_and_k_hat(api: Api):
     assert footer['acceptance'] == f"{safeguards['accept_rate'][0]:.2f}"
     assert footer['min ESS'] == f"{safeguards['ess_min'][0]:.0f}"
     assert footer['PSIS k̂'].startswith(f"{safeguards['psis_k'][0]:.3f}")
-    assert list(_footer(api.posteriorSummary(raw))) == ['draws', 'MAP z']
+    safeguards_then_fit = ['draws', 'acceptance', 'min ESS', 'PSIS k̂', 'MAP z', 'R²']
+    assert list(footer) == safeguards_then_fit
+    loo_footer = _footer(api.posteriorSummary(with_loo))
+    assert list(loo_footer) == safeguards_then_fit + ['LOO-NLL', 'LOO k̂']
+    assert list(_footer(api.posteriorSummary(raw))) == ['draws', 'MAP z', 'R²']
+
+
+def test_plotPPD_renders_at_notebook_size(api: Api, monkeypatch: pytest.MonkeyPatch):
+    shown = []
+    monkeypatch.setattr(
+        plt, 'show', lambda: shown.append(plt.gcf().get_size_inches() * plt.gcf().dpi)
+    )
+    result = api.sample(
+        _sleepstudy(),
+        formula='Reaction ~ Days + (1 | Subject)',
+        n_samples=64,
+        fit_preprocessor=True,
+    )
+
+    api.plotPPD(result)
+
+    (pixels,) = shown
+    assert pixels.max() < 1000  # the default dpi; saved files keep the plotting DPI
 
 
 def test_from_pretrained_writes_its_status_to_stdout(
@@ -671,7 +699,7 @@ _FORMULA = 'Reaction ~ Days + (1 | Subject)'
             lambda api: api.sample(
                 _sleepstudy(), formula=_FORMULA, n_samples=64, map_z_threshold=0.0
             ),
-            'MAP consistency',
+            'MAP check failed',
         ),
         (
             lambda api: api.sample(_sleepstudy(), formula=_FORMULA, n_samples=64, evidence=True),
