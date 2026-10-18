@@ -1889,6 +1889,40 @@ class Api:
             m=dims.get('m'),
         )
 
+    def posteriorDraws(
+        self,
+        result: RouterResult,
+        *,
+        batch_index: int = 0,
+        x_scale: str = 'original',
+    ) -> pd.DataFrame:
+        """Return one dataset's posterior draws of the global parameters, one column each.
+
+        The columns carry the summary's names, order and scale: the fixed effects, ``σ_<term>``
+        per random effect, ``σ_Residual`` for the Gaussian family and ``Corr(<a>, <b>)`` per
+        pair of random effects.  Their means match ``posteriorSummary`` with the same arguments.
+        """
+        if result.proposal is None:
+            raise ValueError('RouterResult has no proposal; call sample() first')
+        proposal, bi = result.proposal, batch_index
+        x_scale = _resolveXScale(x_scale, result.scale_info)
+        ffx, srfx, corr = _globalDraws(proposal, bi, result.scale_info, x_scale)
+        names = result.param_names or {}
+        ffx_names = names.get('ffx') or [f'ffx_{i}' for i in range(ffx.shape[-1])]
+        srfx_names = names.get('sigma_rfx') or [f'rfx_{i}' for i in range(srfx.shape[-1])]
+        q = len(srfx_names)
+        columns = {name: ffx[:, j] for j, name in enumerate(ffx_names)}
+        columns |= {f'σ_{name}': srfx[:, j] for j, name in enumerate(srfx_names)}
+        if proposal.has_sigma_eps:
+            columns['σ_Residual'] = proposal.sigma_eps[bi].float()
+        if corr is not None:
+            columns |= {
+                f'Corr({srfx_names[j]}, {srfx_names[k]})': corr[:, j, k]
+                for j in range(q)
+                for k in range(j + 1, q)
+            }
+        return pd.DataFrame({name: draws.cpu().numpy() for name, draws in columns.items()})
+
     def rfxSummary(
         self,
         result: RouterResult,
@@ -1998,6 +2032,21 @@ def _resolveXScale(x_scale: str, scale_info: 'ScaleInfo | None') -> str:
         )
         return 'standardized'
     return x_scale
+
+
+def _globalDraws(
+    proposal: 'Proposal', batch_index: int, scale_info: 'ScaleInfo | None', x_scale: str
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+    """One dataset's fixed-effect, random-effect SD and correlation draws on the scale a summary
+    prints, still padded as in the proposal (#31)."""
+    ffx = proposal.ffx[batch_index].float()  # (S, d)
+    srfx = proposal.sigma_rfx[batch_index].float()  # (S, q)
+    corr = proposal.corr_rfx
+    corr_b = corr[batch_index].float() if corr is not None else None  # (S, q, q)
+    if x_scale == 'original':
+        ffx = scale_info.to_original_scale(ffx)
+        srfx, corr_b = scale_info.sdCorrToOriginal(srfx, corr_b)
+    return ffx, srfx, corr_b
 
 
 def _priorStr(priors: Any) -> str:
@@ -2161,14 +2210,8 @@ def posteriorTable(
     lo_pct = f'{alpha * 100:g}%'
     hi_pct = f'{(1 - alpha) * 100:g}%'
 
-    ffx = proposal.ffx[batch_index].float()  # (S, d)
-    srfx = proposal.sigma_rfx[batch_index].float()  # (S, q)
-    corr = proposal.corr_rfx
-    corr_b = corr[batch_index].float() if corr is not None else None  # (S, q, q)
     x_scale = _resolveXScale(x_scale, scale_info)
-    if x_scale == 'original':
-        ffx = scale_info.to_original_scale(ffx)
-        srfx, corr_b = scale_info.sdCorrToOriginal(srfx, corr_b)
+    ffx, srfx, corr_b = _globalDraws(proposal, batch_index, scale_info, x_scale)
     S = ffx.shape[0]
 
     names = param_names or {}
