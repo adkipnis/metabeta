@@ -366,3 +366,38 @@ def test_exponential_sd_prior_is_drawn_as_an_exponential(api: Api):
 
     scale = 0.7 * df['Reaction'].std(ddof=0) / df['Days'].std(ddof=0)
     np.testing.assert_allclose(density, stats.expon.pdf(x, scale=scale), rtol=1e-5)
+
+
+def _cdfAt(curve: tuple[np.ndarray, np.ndarray], points: np.ndarray) -> np.ndarray:
+    """The CDF of a density drawn on a grid, at the given points."""
+    x, density = curve
+    cdf = np.concatenate([[0.0], np.cumsum((density[1:] + density[:-1]) / 2 * np.diff(x))])
+    return np.interp(points, x, cdf / cdf[-1])
+
+
+def test_prior_overlays_without_closed_form_match_the_pushforward(api: Api):
+    df = _sleepstudy()
+    result = api.sample(
+        df, formula='Reaction ~ Days + (1 + Days | Subject)', n_samples=64, fit_preprocessor=True
+    )
+
+    grid = api.plotParameters(result)
+    curves = {'sd0': _priorCurve(grid, 2), 'rho': _priorCurve(grid, 5)}
+    plt.close(grid.figure)
+
+    # the prior pushed through A by hand: half-normal SDs and, for q = 2, an LKJ(eta)
+    # correlation 2 Beta(eta, eta) - 1
+    rng = np.random.default_rng(1)
+    n = 200_000
+    tau = result.prior_params['tau_rfx'][0, :2] * df['Reaction'].std(ddof=0)
+    eta = float(result.prior_params['eta_rfx'][0])
+    sd0, sd1 = np.abs(rng.normal(size=(2, n))) * tau[:, None]
+    rho = 2 * rng.beta(eta, eta, n) - 1
+    c, s = df['Days'].mean() / df['Days'].std(ddof=0), df['Days'].std(ddof=0)
+    sd0_orig = np.sqrt(sd0**2 - 2 * c * rho * sd0 * sd1 + c**2 * sd1**2)
+    rho_orig = (rho * sd0 * sd1 - c * sd1**2) / s / (sd0_orig * sd1 / s)
+
+    levels = np.array([0.1, 0.25, 0.5, 0.75, 0.9])
+    for key, draws in [('sd0', sd0_orig), ('rho', rho_orig)]:
+        cdf = _cdfAt(curves[key], np.quantile(draws, levels))
+        np.testing.assert_allclose(cdf, levels, atol=0.015, err_msg=key)
