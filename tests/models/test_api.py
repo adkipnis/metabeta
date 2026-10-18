@@ -668,6 +668,19 @@ def test_warmup_emits_no_warnings(api: Api, warm):
     assert [str(w.message) for w in caught] == []
 
 
+@pytest.mark.parametrize('family', [1, 2], ids=['bernoulli', 'poisson'])
+def test_warmup_from_a_formula_alone_works_on_every_family(tmp_path: Path, family: int):
+    path = tmp_path / 'joint.pt'
+    _write_tiny_approximator_checkpoint(
+        path, max_d=4, max_q=2, likelihood_family=family, analytical_refinement='light'
+    )
+    cold = Api(path, warmup=False)
+
+    _, caught = _warningsOf(lambda: cold.warmup(formula='y ~ a + b + (1 + a | g)'))
+
+    assert [str(w.message) for w in caught] == []
+
+
 def test_from_pretrained_documents_every_argument():
     doc = inspect.getdoc(Api.from_pretrained)
 
