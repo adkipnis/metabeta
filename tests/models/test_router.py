@@ -461,12 +461,13 @@ def test_router_expands_multiple_named_term_priors_per_dataset(
 
     assert router.route(batch) == ['math-small', 'math-small']
     assert batch['X'].shape[0] == 2
+    # the batch's fixed-effect columns lead with the random slope: Intercept, ses, meanses
     assert torch.allclose(batch['nu_ffx'][0], torch.tensor([1.0, 0.0, 0.0]))
-    assert torch.allclose(batch['tau_ffx'][0], torch.tensor([3.0, 2.5, 0.5]))
+    assert torch.allclose(batch['tau_ffx'][0], torch.tensor([3.0, 0.5, 2.5]))
     assert torch.allclose(batch['tau_rfx'][0], torch.tensor([2.5, 0.7]))
     assert torch.allclose(batch['tau_eps'][0], torch.tensor(1.2))
     assert torch.allclose(batch['eta_rfx'][0], torch.tensor(0.0))
-    assert torch.allclose(batch['tau_ffx'][1], torch.tensor([2.5, 0.1, 2.5]))
+    assert torch.allclose(batch['tau_ffx'][1], torch.tensor([2.5, 2.5, 0.1]))
     assert torch.allclose(batch['tau_rfx'][1], torch.tensor([0.3, 2.5]))
     assert torch.equal(batch['_router_prior_index'], torch.tensor([0, 1]))
     assert torch.equal(batch['_router_source_index'], torch.tensor([0, 0]))
