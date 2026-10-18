@@ -1037,8 +1037,8 @@ class DataPreprocessor:
 
         # --- fit and apply categorical encoder ---
         if self._categorical_cols:
-            # Drop the most frequent level as the reference category, matching
-            # R's contr.treatment convention of using the largest group as baseline.
+            # Drop the most frequent level as the reference category; R's
+            # contr.treatment drops the first level instead.
             modal_refs = [df[col].value_counts().index[0] for col in self._categorical_cols]
             self._encoder: OneHotEncoder | None = OneHotEncoder(
                 drop=modal_refs,
