@@ -387,12 +387,13 @@ class Api:
         data: Any,
         *,
         n_samples: int = 1000,
-        diagnostics: bool = False,
+        loo: bool = False,
         refine: bool | str = True,
         k_threshold: float = PSIS_K_THRESHOLD,
         map_z_threshold: float = MAP_Z_THRESHOLD,
         random_walk: LocalMoves | bool = False,
         evidence: bool = False,
+        diagnostics: bool | None = None,  # deprecated alias of loo, removed in 0.6
         **prepare_kwargs: Any,
     ) -> RouterResult:
         """Sample from the posterior, routing each dataset to the smallest compatible submodel.
@@ -416,8 +417,9 @@ class Api:
         datasets whose minimum bulk ESS over the global parameters falls below
         ``IMH_ESS_WARN`` are flagged with a warning.  ``random_walk=True`` continues the IMH
         on the flagged datasets with pseudo-marginal random-walk moves on the same target
-        (posthoc/metropolis.py, ``LocalMoves``; ``RANDOM_WALK_DEFAULT``, by device); below
-        ``IMH_ESS_NUTS`` they may not repair it fully, and exact MCMC is recommended there.  A
+        (posthoc/metropolis.py, ``LocalMoves``; ``RANDOM_WALK_DEFAULT``, by device) instead of
+        warning; below ``IMH_ESS_NUTS`` they may not repair it fully, and a warning recommends
+        exact MCMC there.  A
         ``LocalMoves`` instance sets them, and its own gate, explicitly.  Per dataset, the safeguards record
         the flag ('ess_flag'), whether the moves ran ('random_walk_ran') and their acceptance
         ('random_walk_accept', NaN where they did not run).
@@ -435,6 +437,10 @@ class Api:
         ``map_z_threshold`` trigger a warning.  All checks are reported in
         ``RouterResult.safeguards``.
 
+        Every call also stores the posterior predictive and a fit metric (R², AUC or deviance)
+        in ``RouterResult.diagnostics``.  ``loo=True`` adds the PSIS-LOO NLL and its Pareto k̂,
+        which cost about as much as the rest of the diagnostics together.
+
         ``evidence=True`` also returns each dataset's log marginal likelihood log p(y) on the raw
         response scale in ``RouterResult.evidence``; the log Bayes factor between two models of
         the same data is the difference of their ``log_evidence``.  It costs one more likelihood
@@ -443,6 +449,14 @@ class Api:
         ``k_threshold``.
         """
 
+        if diagnostics is not None:
+            warnings.warn(
+                'diagnostics= is deprecated and will be removed in 0.6: every call now computes '
+                'the fit metric, and loo=True adds the LOO-NLL.',
+                FutureWarning,
+                skip_file_prefixes=INTERNAL_PREFIXES,
+            )
+            loo = loo or diagnostics
         method = {True: 'imh', False: None}.get(refine, refine)
         if method not in (None, 'imh', 'is'):
             raise ValueError(f"refine must be True, False, 'imh' or 'is' (got {refine!r})")
@@ -490,7 +504,7 @@ class Api:
         if stats is not None and n_samples >= MIN_SAFEGUARD_SAMPLES:
             map_check = self._mapConsistency(proposal, stats, batch, threshold=map_z_threshold)
             safeguards = {**(safeguards or {}), **map_check}
-        diags = self._computeDiagnostics(proposal, batch) if diagnostics else None
+        diags = self._computeDiagnostics(proposal, batch, loo=loo)
         self._rescaleProposal(proposal, batch)
         prior_params: dict[str, np.ndarray] = {
             key: batch[key].float().cpu().numpy()
@@ -513,7 +527,7 @@ class Api:
             group_names=self._group_labels,
             prior_params=prior_params or None,
             scale_info=self._scale_info,
-            batch=batch if diagnostics else None,
+            batch=batch,
             ns=ns_arr,
             safeguards=safeguards,
             evidence=log_ev,
@@ -696,20 +710,15 @@ class Api:
         )
 
     def _computeDiagnostics(
-        self, proposal: Proposal, batch: dict[str, torch.Tensor]
+        self, proposal: Proposal, batch: dict[str, torch.Tensor], *, loo: bool
     ) -> dict[str, Any]:
         lf = int(batch['likelihood_family'].flatten()[0].item())
         pp = _predictive.getPosteriorPredictive(proposal, batch, likelihood_family=lf)
         log_p = pp.log_prob(batch['y'].unsqueeze(-1))  # (B, m, n, S)
         ppc_nll = _predictive.posteriorPredictiveNLL(pp, batch, mode='mixture', log_p=log_p)
-        loo_nll_vals, pareto_k_vals = _predictive.psisLooNLL(
-            pp, batch, w=proposal.weights, reff=proposal.reff, log_p=log_p
-        )
 
         b = int(batch['X'].shape[0])
         agg = (lambda t: t.item()) if b == 1 else (lambda t: t.mean().item())
-        loo_nll = agg(loo_nll_vals)
-        pareto_k = agg(pareto_k_vals)
 
         if lf == 0:
             vals = _predictive.posteriorPredictiveR2(pp, batch, w=proposal.weights)
@@ -740,18 +749,25 @@ class Api:
         if proposal.has_sigma_eps:
             param_summary['sigma_eps'] = _summarize(proposal.sigma_eps, dim=-1)
 
-        return {
+        diags = {
             'ppc_nll': ppc_nll,
             'param_summary': param_summary,
             'fit': fit,
             'fit_vals': vals,
             'fit_label': fit_label,
-            'loo_nll': loo_nll,
-            'loo_nll_vals': loo_nll_vals,
-            'pareto_k': pareto_k,
-            'pareto_k_vals': pareto_k_vals,
             'pp': pp,
         }
+        if loo:  # PSIS over every observation: the costly part
+            loo_nll_vals, pareto_k_vals = _predictive.psisLooNLL(
+                pp, batch, w=proposal.weights, reff=proposal.reff, log_p=log_p
+            )
+            diags |= {
+                'loo_nll': agg(loo_nll_vals),
+                'loo_nll_vals': loo_nll_vals,
+                'pareto_k': agg(pareto_k_vals),
+                'pareto_k_vals': pareto_k_vals,
+            }
+        return diags
 
     def _validateParameterKeys(self, batch: Mapping[str, Any]) -> None:
         missing = [k for k in ('ffx', 'sigma_rfx', 'rfx') if k not in batch]
@@ -982,47 +998,40 @@ class Api:
             flagged = np.flatnonzero(flag & ~ran)
             a_vals = ', '.join(f'{a_bar[i]:.2f}' for i in flagged)
             s_vals = ', '.join(f'{int(suggested[i])}' for i in flagged)
+            respectively = ' (respectively)' if flagged.size > 1 else ''
             warnings.warn(
-                f'IMH acceptance is low for dataset(s) {flagged.tolist()} '
-                f'(mean acceptance {a_vals} < {IMH_ACCEPT_WARN:g}): the flow-posterior '
-                f'gap is large there and the refined sample may be under-dispersed. '
-                f'Re-run with n_samples of at least {s_vals} (respectively), or use '
-                'exact MCMC (e.g. NUTS) instead.',
+                f'Low IMH acceptance for dataset(s) {flagged.tolist()}: {a_vals} < '
+                f'{IMH_ACCEPT_WARN:g}.\n'
+                'The network is far from the posterior, so the intervals can be too narrow. '
+                'Remedies, in order:\n'
+                f'  1. more draws: n_samples of at least {s_vals}{respectively}\n'
+                '  2. exact MCMC, e.g. NUTS',
                 skip_file_prefixes=INTERNAL_PREFIXES,
             )
         if (ess_flag & ~ran).any():
             flagged = np.flatnonzero(ess_flag & ~ran)
             e_vals = ', '.join(f'{ess_min[i]:.0f}' for i in flagged)
             low = flagged[ess_min[flagged] < IMH_ESS_NUTS]
-            advice = ''
-            if low.size:
-                advice = (
-                    f' For {low.tolist()} (ESS < {IMH_ESS_NUTS:g}) random-walk moves narrow the '
-                    'gap but may not close it: check against exact MCMC there.'
-                )
+            caveat = f' (may not suffice for {low.tolist()})' if low.size else ''
             warnings.warn(
-                f'IMH effective sample size is low for dataset(s) {flagged.tolist()} '
-                f'(min bulk ESS over global parameters {e_vals} < {IMH_ESS_WARN:g}): the '
-                'chains revisit few distinct states, and the refined sample can be too narrow. The '
-                'ESS grows with n_samples, so re-run with more draws first; if it stays low, the '
-                'flow under-covers the posterior there. Re-run with random_walk=True to continue '
-                'the IMH with random-walk moves on the same target, or use exact MCMC (e.g. '
-                f'NUTS).{advice}',
+                f'Low effective sample size (ESS) for dataset(s) {flagged.tolist()}: min ESS '
+                f'{e_vals} < {IMH_ESS_WARN:g}.\n'
+                'The IMH chains repeat few draws, so the intervals can be too narrow. '
+                'Remedies, in order:\n'
+                '  1. more draws (n_samples)\n'
+                f'  2. random_walk=True{caveat}\n'
+                '  3. exact MCMC, e.g. NUTS',
                 skip_file_prefixes=INTERNAL_PREFIXES,
             )
-        if ran.any():
-            moved = np.flatnonzero(ran)
-            e_vals = ', '.join(f'{ess_min[i]:.0f}' for i in moved)
-            low = moved[ess_min[moved] < IMH_ESS_NUTS]
-            note = ''
-            if low.size:
-                note = (
-                    f' For {low.tolist()} (ESS < {IMH_ESS_NUTS:g}) they narrow the gap but may not '
-                    'close it: check against exact MCMC (e.g. NUTS) there.'
-                )
+        # the moves replace the ESS warning, except where the IMH left them too little to work with
+        if (ran & (ess_min < IMH_ESS_NUTS)).any():
+            low = np.flatnonzero(ran & (ess_min < IMH_ESS_NUTS))
+            e_vals = ', '.join(f'{ess_min[i]:.0f}' for i in low)
             warnings.warn(
-                f'Random-walk moves ran for dataset(s) {moved.tolist()} (IMH min bulk ESS '
-                f'{e_vals}).{note}',
+                f'Very low IMH ESS before the random-walk moves for dataset(s) {low.tolist()}: '
+                f'{e_vals} < {IMH_ESS_NUTS:g}.\n'
+                'The moves may not close the gap, so the intervals can still be too narrow.\n'
+                'Remedy: check against exact MCMC, e.g. NUTS.',
                 skip_file_prefixes=INTERNAL_PREFIXES,
             )
         return proposal, {
@@ -1059,11 +1068,11 @@ class Api:
             flagged = np.flatnonzero(flag)
             z_vals = ', '.join(f'{map_z[i]:.1f}' for i in flagged)
             warnings.warn(
-                f'MAP consistency check failed for dataset(s) {flagged.tolist()} '
-                f'(max |posterior mean − MAP| / posterior SD = {z_vals} > {threshold:g}): '
-                'the posterior disagrees with the analytical point estimates, which can '
-                'indicate data outside the training distribution. Treat those results '
-                'with caution and consider exact MCMC (e.g. NUTS) instead.',
+                f'MAP check failed for dataset(s) {flagged.tolist()}: max |posterior mean − MAP| '
+                f'/ posterior SD = {z_vals} > {threshold:g}.\n'
+                'The posterior disagrees with the analytical point estimates, so the data may lie '
+                'outside what the network was trained on.\n'
+                'Remedy: exact MCMC, e.g. NUTS.',
                 skip_file_prefixes=INTERNAL_PREFIXES,
             )
         return {
@@ -1718,13 +1727,12 @@ class Api:
     ) -> None:
         """Plot posterior predictive densities for datasets in result.
 
-        Requires ``sample()`` to have been called with ``diagnostics=True``.
         y is shown on the standardized scale used internally by the model.
         """
         from metabeta.plotting.predictive import plotPPD as _plotPPD
 
         if result.diagnostics is None or result.batch is None:
-            raise ValueError('call sample() with diagnostics=True first')
+            raise ValueError('result has no posterior predictive; call sample() first')
         pp = result.diagnostics.get('pp')
         if pp is None:
             raise ValueError('pp not found in diagnostics')
@@ -1810,9 +1818,9 @@ class Api:
     ) -> str:
         """Return a formatted posterior summary table for a sampled RouterResult.
 
-        Fit metrics (R²/AUC/Deviance), LOO-NLL, and Pareto k are shown when
-        ``sample()`` was called with ``diagnostics=True``.  For per-group random
-        effects use ``rfxSummary()``.
+        The last line lists the safeguards, then the fit metric (R²/AUC/Deviance), then
+        LOO-NLL and its LOO k̂ when ``sample()`` was called with ``loo=True``.  For
+        per-group random effects use ``rfxSummary()``.
         """
         if result.proposal is None:
             raise ValueError('RouterResult has no proposal; call sample() first')
@@ -1853,6 +1861,8 @@ class Api:
         )
         ess_vals = sg.get('ess_min')
         ess_min = float(ess_vals[bi]) if ess_vals is not None and bi < len(ess_vals) else None
+        ran = sg.get('random_walk_ran')
+        random_walk = bool(ran[bi]) if ran is not None and bi < len(ran) else False
         return posteriorTable(
             result.proposal,
             result.param_names,
@@ -1865,6 +1875,7 @@ class Api:
             pareto_k=pareto_k,
             accept_rate=accept,
             ess_min=ess_min,
+            random_walk=random_walk,
             psis_k=psis_k,
             psis_k_threshold=sg.get('psis_k_threshold', PSIS_K_THRESHOLD),
             map_z=map_z,
@@ -2124,6 +2135,7 @@ def posteriorTable(
     pareto_k: float | None = None,
     accept_rate: float | None = None,
     ess_min: float | None = None,
+    random_walk: bool = False,
     psis_k: float | None = None,
     psis_k_threshold: float = PSIS_K_THRESHOLD,
     map_z: float | None = None,
@@ -2141,7 +2153,7 @@ def posteriorTable(
     Deviations (sigma_rfx + residual), and Correlations (posterior mean, when
     q > 1).  For per-group random effects use ``Api.rfxSummary()``.
     Contraction requires ``prior_params`` (populated automatically by
-    ``Api.sample()``).  Fit metrics require ``diagnostics=True``.
+    ``Api.sample()``).  LOO-NLL and LOO k̂ require ``loo=True``.
     """
     fmt = 'github'
     alpha = (1 - ci) / 2
@@ -2305,23 +2317,25 @@ def posteriorTable(
             ]
 
     # ── footer ────────────────────────────────────────────────────────────────
+    # safeguards first, then the fit metrics
     footer_parts = [f'draws = {S}']
-    if fit is not None:
-        footer_parts.append(f'{fit_label} = {fit:.3f}')
-    if loo_nll is not None:
-        footer_parts.append(f'LOO-NLL = {loo_nll:.3f}')
-    if pareto_k is not None:
-        footer_parts.append(f'Pareto k = {pareto_k:.3f}')
     if accept_rate is not None:
         footer_parts.append(f'acceptance = {accept_rate:.2f}')
     if ess_min is not None:
-        footer_parts.append(f'min ESS = {ess_min:.0f}')
+        note = ' (random-walk moves ran)' if random_walk else ''
+        footer_parts.append(f'min ESS = {ess_min:.0f}{note}')
     if psis_k is not None:
         note = 'refined' if psis_k <= psis_k_threshold else '⚠ unreliable — consider MCMC'
         footer_parts.append(f'PSIS k̂ = {psis_k:.3f} ({note})')
     if map_z is not None:
         note = '' if map_z <= map_z_threshold else ' (⚠ disagrees with MAP — consider MCMC)'
         footer_parts.append(f'MAP z = {map_z:.1f}{note}')
+    if fit is not None:
+        footer_parts.append(f'{fit_label} = {fit:.3f}')
+    if loo_nll is not None:
+        footer_parts.append(f'LOO-NLL = {loo_nll:.3f}')
+    if pareto_k is not None:
+        footer_parts.append(f'LOO k̂ = {pareto_k:.3f}')
     parts += ['', '   '.join(footer_parts)]
 
     return '\n'.join(parts)
