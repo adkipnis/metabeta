@@ -124,7 +124,7 @@ class ScaleInfo:
             return torch.cat([active_orig, ffx[..., d:]], dim=-1)
         return active_orig
 
-    def _rfxMap(self) -> np.ndarray:
+    def rfxMap(self) -> np.ndarray:
         """A (q, q), mapping the centered, standardized random-effect basis to the original."""
         q = len(self.random_names)
         A = np.eye(q)
@@ -140,7 +140,7 @@ class ScaleInfo:
     def rfxToOriginal(self, rfx: torch.Tensor) -> torch.Tensor:
         """Per-group effects (..., q_padded) ↦ A b; padding columns are returned unchanged."""
         q = len(self.random_names)
-        A = torch.tensor(self._rfxMap(), dtype=rfx.dtype, device=rfx.device)
+        A = torch.tensor(self.rfxMap(), dtype=rfx.dtype, device=rfx.device)
         return torch.cat([rfx[..., :q] @ A.T, rfx[..., q:]], dim=-1)
 
     def sdCorrToOriginal(
@@ -150,7 +150,7 @@ class ScaleInfo:
         ↦ those of A Σ Aᵀ; padding entries are returned unchanged. A model with a single random
         effect has no correlations (None)."""
         q = len(self.random_names)
-        A = torch.tensor(self._rfxMap(), dtype=torch.float64, device=sigma.device)
+        A = torch.tensor(self.rfxMap(), dtype=torch.float64, device=sigma.device)
         sd = sigma[..., :q].double()
         R = torch.ones(1, 1, dtype=sd.dtype) if corr is None else corr[..., :q, :q].double()
         cov = sd.unsqueeze(-1) * R * sd.unsqueeze(-2)  # (..., q, q)
