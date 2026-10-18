@@ -1684,20 +1684,20 @@ class Api:
         has_eps = prop.has_sigma_eps
 
         ffx_orig = si.to_original_scale(prop.ffx[index])       # (S, d)
-        srfx = prop.sigma_rfx[index]                            # (S, q)
+        corr_rfx = prop.corr_rfx[index] if prop.corr_rfx is not None else None  # (S, q, q)
+        srfx, corr_rfx = si.sdCorrToOriginal(prop.sigma_rfx[index], corr_rfx)  # (S, q)
         parts = [ffx_orig, srfx]
         if has_eps:
             parts.append(prop.sigma_eps[index].unsqueeze(-1))  # (S, 1)
         samples_g = torch.cat(parts, dim=-1).unsqueeze(0)      # (1, S, D)
 
-        corr_rfx = prop.corr_rfx
         post_orig = Proposal(
             proposed={
                 'global': {'samples': samples_g, 'log_prob': prop.log_prob_g[index : index + 1]},
                 'local': {k: v[index : index + 1] for k, v in prop.data['local'].items()},
             },
             has_sigma_eps=has_eps,
-            corr_rfx=corr_rfx[index : index + 1] if corr_rfx is not None else None,
+            corr_rfx=corr_rfx.unsqueeze(0) if corr_rfx is not None else None,
         )
 
         param_names = result.param_names or {}
