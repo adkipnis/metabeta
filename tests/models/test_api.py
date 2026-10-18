@@ -773,12 +773,7 @@ def test_bayesFactor_pairs_one_row_with_every_prior_and_refuses_other_data(api: 
     assert list(bf.index) == ['wide', 'narrow']
     expected = without.evidence['log_evidence'][0] - with_days.evidence['log_evidence']
     np.testing.assert_allclose(bf['log BF'], expected)
-    assert set(bf['strength']) <= {
-        'not worth more than a bare mention',
-        'positive',
-        'strong',
-        'very strong',
-    }
+    assert set(bf['strength']) <= {'weak', 'positive', 'strong', 'very strong'}
     other = api.sample(_sleepstudy(seed=1), formula='Reaction ~ 1 + (1 | Subject)', **kwargs)
     with pytest.raises(ValueError, match='same data'):
         api.bayesFactor(other, with_days)

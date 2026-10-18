@@ -2186,8 +2186,9 @@ def _observedY(result: RouterResult, row: int) -> torch.Tensor:
     return _toDataUnits(result, result.batch['y'][row][_rowMask(result, row)].float())
 
 
-# Kass and Raftery (1995), JASA 90:773, p. 777: upper BF bounds of each grade of evidence
-BF_STRENGTH = ((3, 'not worth more than a bare mention'), (20, 'positive'), (150, 'strong'))
+# Kass and Raftery (1995), JASA 90:773, p. 777: upper BF bounds of each grade of evidence;
+# 'weak' shortens their "not worth more than a bare mention"
+BF_STRENGTH = ((3, 'weak'), (20, 'positive'), (150, 'strong'))
 
 
 def _bfStrength(log_bf: float) -> str:
