@@ -352,17 +352,12 @@ def makePriorPDFs(
     q = len(result.param_names['sigma_rfx'])  # type: ignore[attr-defined]
     bi = batch_index
 
-    tau_f = np.asarray(pp['tau_ffx'][bi, :d], dtype=float) * sd_y
-    nu_f = np.asarray(pp['nu_ffx'][bi, :d], dtype=float) * sd_y
     tau_r = np.asarray(pp['tau_rfx'][bi, :q], dtype=float) * sd_y
 
     fam_ffx_id = int(pp['family_ffx'][bi]) if 'family_ffx' in pp else 0
     fam_rfx_id = int(pp['family_sigma_rfx'][bi]) if 'family_sigma_rfx' in pp else 0
     fam_ffx = FFX_FAMILIES[fam_ffx_id] if fam_ffx_id < len(FFX_FAMILIES) else 'normal'
     fam_rfx = SIGMA_FAMILIES[fam_rfx_id] if fam_rfx_id < len(SIGMA_FAMILIES) else 'halfnormal'
-
-    x_stds = np.asarray(si.x_stds, dtype=float)
-    x_means = np.asarray(si.x_means, dtype=float)
 
     def _sym_pdf(mu: float, sigma: float, fam: str) -> tuple[np.ndarray, np.ndarray]:
         span = max(sigma * 6, 1e-9)
@@ -382,20 +377,10 @@ def makePriorPDFs(
 
     pdfs: list[tuple[np.ndarray, np.ndarray]] = []
 
-    # FFX: back-transform to original scale analytically.
-    # After to_original_scale (linear map):
-    #   slope_orig[j] = ffx[j] / x_stds[j]   for j ≥ 1
-    #   intercept_orig = ffx[0] + y_mean − Σ_{j≥1}(ffx[j] / x_stds[j] * x_means[j])
-    # → slope_orig[j] ~ N(nu_f[j]/x_stds[j], tau_f[j]/x_stds[j])
-    # → intercept_orig is Gaussian with mean/var computed below
-    mu_int = float(nu_f[0] + si.y_mean - sum(nu_f[j] / x_stds[j] * x_means[j] for j in range(1, d)))
-    var_int = float(
-        tau_f[0] ** 2 + sum((tau_f[j] * x_means[j] / x_stds[j]) ** 2 for j in range(1, d))
-    )
-    pdfs.append(_sym_pdf(mu_int, float(np.sqrt(var_int)), fam_ffx))
-
-    for j in range(1, d):
-        pdfs.append(_sym_pdf(float(nu_f[j] / x_stds[j]), float(tau_f[j] / x_stds[j]), fam_ffx))
+    # FFX: to_original_scale is linear, so the priors map in closed form (exact for normal priors)
+    loc_f, scale_f = si.ffxPriorToOriginal(pp['nu_ffx'][bi, :d], pp['tau_ffx'][bi, :d])
+    for j in range(d):
+        pdfs.append(_sym_pdf(float(loc_f[j]), float(scale_f[j]), fam_ffx))
 
     # sigma_rfx and correlations: Σ ↦ A Σ Aᵀ (ScaleInfo.sdCorrToOriginal). An effect whose row
     # of A has one entry keeps its prior family, its SD scaled by |A_kk| (1/s_k for a slope).
