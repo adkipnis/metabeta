@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 import math
 import operator
+import os
 import sys
 import warnings
 
@@ -16,6 +17,7 @@ import pandas as pd
 import torch
 from tabulate import tabulate
 
+import metabeta
 from metabeta.datasets.preprocessor import DataPreprocessor, PreprocessReport
 from metabeta.evaluation import predictive as _predictive
 from metabeta.models.approximator import Approximator
@@ -105,6 +107,9 @@ RANDOM_WALK_DEFAULT = {
     'cpu': LocalMoves(n_inner=2, gate_ess=IMH_ESS_WARN),
     'cuda': LocalMoves(n_chains=500, n_inner=4, gate_ess=IMH_ESS_WARN),
 }
+# warnings about a sample() call point at its caller, the first frame outside metabeta and torch
+# (torch's no_grad wrapper sits between Api.sample and the caller)
+INTERNAL_PREFIXES = tuple(str(Path(m.__file__).parent) + os.sep for m in (metabeta, torch))
 
 
 def mapZScores(
@@ -391,8 +396,8 @@ class Api:
         reported in ``RouterResult.safeguards``; datasets with mean acceptance below
         ``IMH_ACCEPT_WARN`` trigger a warning recommending the suggested size or exact
         MCMC.  The IMH can only revisit pool members, so where the flow lacks tail mass its
-        chains repeat few states and the refined sample can be too narrow, which more draws do
-        not fix; datasets whose minimum bulk ESS over the global parameters falls below
+        chains repeat few states and the refined sample can be too narrow until n_samples is large;
+        datasets whose minimum bulk ESS over the global parameters falls below
         ``IMH_ESS_WARN`` are flagged with a warning.  ``random_walk=True`` continues the IMH
         on the flagged datasets with pseudo-marginal random-walk moves on the same target
         (posthoc/metropolis.py, ``LocalMoves``; ``RANDOM_WALK_DEFAULT``, by device); below
@@ -966,7 +971,7 @@ class Api:
                 f'gap is large there and the refined sample may be under-dispersed. '
                 f'Re-run with n_samples of at least {s_vals} (respectively), or use '
                 'exact MCMC (e.g. NUTS) instead.',
-                stacklevel=4,
+                skip_file_prefixes=INTERNAL_PREFIXES,
             )
         ess_flag = ess_min < IMH_ESS_WARN
         if ess_flag.any():
@@ -990,10 +995,10 @@ class Api:
             warnings.warn(
                 f'IMH effective sample size is low for dataset(s) {flagged.tolist()} '
                 f'(min bulk ESS over global parameters {e_vals} < {IMH_ESS_WARN:g}): the '
-                'chains revisit few distinct states, and the refined sample can be too narrow '
-                f'where the flow under-covers the posterior, which more draws do not fix. '
-                f'{advice.strip()}',
-                stacklevel=4,
+                'chains revisit few distinct states, and the refined sample can be too narrow. The '
+                'ESS grows with n_samples, so re-run with more draws first; if it stays low, the '
+                f'flow under-covers the posterior there. {advice.strip()}',
+                skip_file_prefixes=INTERNAL_PREFIXES,
             )
         return proposal, {
             'refine_method': ('imhMarginal' if lf == 0 else 'imhPM') + ('+moves' if moves else ''),
