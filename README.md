@@ -62,13 +62,14 @@ Standard Deviations:
 | Days      |  6.368 | 1.472 |  3.936 |   6.194 |   9.584 |
 | Residual  | 25.752 | 1.535 | 22.652 |  25.714 |  28.829 |
 ...
-draws = 1000   acceptance = 0.78   min ESS = 456   PSIS k̂ = 0.240 (refined)   MAP z = 0.5   R² = 0.827
+draws = 1000   acceptance = 0.78   min ESS = 456   PSIS k̂ = 0.240   MAP z = 0.5   R² = 0.827
 ```
 
 - **Units**: ms, and ms per day for `Days` (lme4: 251.4 and 10.47).
 - **Last line**: the diagnostics are explained in [How it works](#how-it-works).
 - **More**: `mb.rfxSummary(result)` prints each subject's random effects, and
-  `mb.plotParameters(result)` visualizes posterior draws.
+  `mb.plotParameters(result)` visualizes posterior draws. The [tutorials](#tutorials) cover
+  `posteriorDraws`, `groupDraws`, `posteriorPredictive` and `bayesFactor`.
 
 ## Tutorials
 
