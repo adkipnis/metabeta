@@ -395,7 +395,7 @@ class Api:
         random_walk: LocalMoves | bool = False,
         evidence: bool = False,
         seed: int | None = None,
-        diagnostics: bool | None = None,  # deprecated alias of loo, removed in 0.6
+        diagnostics: bool | None = None,  # deprecated alias of loo, removed in 0.7
         **prepare_kwargs: Any,
     ) -> RouterResult:
         """Sample from the posterior, routing each dataset to the smallest compatible submodel.
@@ -458,7 +458,7 @@ class Api:
 
         if diagnostics is not None:
             warnings.warn(
-                'diagnostics= is deprecated and will be removed in 0.6: every call now computes '
+                'diagnostics= is deprecated and will be removed in 0.7: every call now computes '
                 'the fit metric, and loo=True adds the LOO-NLL.',
                 FutureWarning,
                 skip_file_prefixes=INTERNAL_PREFIXES,
@@ -1715,7 +1715,7 @@ class Api:
         plot_dir: Path | None = None,
         *,
         seed: int | None = None,
-        indices: Sequence[int] | None = None,  # deprecated alias of prior_ids, removed in 0.6
+        indices: Sequence[int] | None = None,  # deprecated alias of prior_ids, removed in 0.7
     ) -> None:
         """Plot posterior predictive densities for datasets in result.
 
@@ -1739,7 +1739,7 @@ class Api:
         prior_id: int | str = 0,
         with_prior: bool = True,
         *,
-        index: int | None = None,  # deprecated alias of prior_id, removed in 0.6
+        index: int | None = None,  # deprecated alias of prior_id, removed in 0.7
         **kwargs: Any,
     ) -> Any:
         """Pair-grid of posterior parameter samples in original-scale units.
@@ -1809,7 +1809,7 @@ class Api:
         ci: float = 0.95,
         prior_id: int | str = 0,
         x_scale: str = 'original',
-        batch_index: int | None = None,  # deprecated alias of prior_id, removed in 0.6
+        batch_index: int | None = None,  # deprecated alias of prior_id, removed in 0.7
     ) -> str:
         """Return a formatted posterior summary table for a sampled RouterResult.
 
@@ -1989,7 +1989,7 @@ class Api:
         ci: float = 0.95,
         prior_id: int | str = 0,
         x_scale: str = 'original',
-        batch_index: int | None = None,  # deprecated alias of prior_id, removed in 0.6
+        batch_index: int | None = None,  # deprecated alias of prior_id, removed in 0.7
     ) -> str:
         """Return a formatted per-group random effects summary for a sampled RouterResult.
 
@@ -2095,11 +2095,11 @@ def _resolveXScale(x_scale: str, scale_info: 'ScaleInfo | None') -> str:
 
 def _renamedArg(old: str, old_value: Any, new: str, new_value: Any) -> Any:
     """The value of an argument renamed to ``new``, warning while callers still pass ``old``
-    (removed in 0.6, #32)."""
+    (removed in 0.7, #32)."""
     if old_value is None:
         return new_value
     warnings.warn(
-        f'{old}= is deprecated and will be removed in 0.6: use {new}=, which also takes a '
+        f'{old}= is deprecated and will be removed in 0.7: use {new}=, which also takes a '
         'prior name.',
         FutureWarning,
         skip_file_prefixes=INTERNAL_PREFIXES,
