@@ -488,3 +488,17 @@ def test_interaction_error_gives_the_centered_product_column(api: Api, interacti
         df, formula='Reaction ~ a + b + a_b + (1 | Subject)', n_samples=8, fit_preprocessor=True
     )
     assert result.param_names['ffx'] == ['Intercept', 'a', 'b', 'a_b']
+
+
+@pytest.mark.parametrize('partner', ['a_b', 'c'])
+def test_named_column_the_correlation_filter_drops_raises(api: Api, partner: str):
+    df = _sleepstudy().rename(columns={'Days': 'a'})
+    df[partner] = 2 * df['a'] + np.random.default_rng(1).normal(0, 0.01, len(df))
+
+    with pytest.raises(ValueError, match=r"(?s)'a'.*collinear"):
+        api.sample(
+            df,
+            formula=f'Reaction ~ a + {partner} + (1 | Subject)',
+            n_samples=8,
+            fit_preprocessor=True,
+        )
