@@ -342,7 +342,7 @@ def makePriorPDFs(
     batch_index selects which prior variant to use when prior_params has multiple rows
     (e.g. from a batched-priors sample() call).
     """
-    from scipy.stats import norm, halfnorm, t as student_t
+    from scipy.stats import expon, norm, halfnorm, t as student_t
     from metabeta.utils.constants import FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF
 
     pp, si = result.prior_params, result.scale_info  # type: ignore[attr-defined]
@@ -375,6 +375,8 @@ def makePriorPDFs(
         xg = np.linspace(0.0, span, n_grid)
         if fam == 'halfnormal':
             return xg, halfnorm.pdf(xg, scale=tau)
+        if fam == 'exponential':
+            return xg, expon.pdf(xg, scale=tau)
         return xg, np.where(xg >= 0, 2 * student_t.pdf(xg, df=STUDENT_DF, loc=0, scale=tau), 0.0)
 
     pdfs: list[tuple[np.ndarray, np.ndarray]] = []
