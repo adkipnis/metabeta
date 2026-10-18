@@ -95,6 +95,15 @@ def test_no_formula_uses_every_other_column_as_a_fixed_effect(api: Api):
     assert result.param_names == {'ffx': ['Intercept', 'Days', 'Noise'], 'sigma_rfx': ['Intercept']}
 
 
+def test_formula_without_a_group_lets_the_preprocessor_detect_it(api: Api):
+    df = _sleepstudy(m=18)  # more subjects than DataPreprocessor's max_categories
+
+    result = api.sample(df, formula='Reaction ~ Days', n_samples=8, fit_preprocessor=True)
+
+    assert result.param_names == {'ffx': ['Intercept', 'Days'], 'sigma_rfx': ['Intercept']}
+    assert result.proposal.rfx.shape[1] == 18
+
+
 def test_preprocessing_ignores_a_collinear_column_the_formula_does_not_name(
     api: Api, caplog: pytest.LogCaptureFixture
 ):

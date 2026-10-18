@@ -1179,9 +1179,10 @@ class Api:
                 return prep.audit(df)
             preprocessed = prep.transform(df)
         else:
-            if formula is not None:
+            if formula is not None and group_name:
                 # fit on the formula's columns only, so an unrelated column cannot drop a named
-                # one through the correlation filter; a term may name a dummy, '{column}_{level}'
+                # one through the correlation filter; a term may name a dummy, '{column}_{level}'.
+                # Without a group name the preprocessor needs every column to detect the group
                 named = {c for c in df.columns for t in terms if t == c or t.startswith(f'{c}_')}
                 df = df[[c for c in df.columns if c in {'y', group_name} | named]]
             prep = DataPreprocessor(group_name=group_name)
