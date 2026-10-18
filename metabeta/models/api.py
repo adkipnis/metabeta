@@ -2018,12 +2018,12 @@ def _buildPriorLines(
       This gives the effective prior on β★_k × σ_y (Δy per SD of predictor).
       Intercept location remains 0 (model is centred at mean y).
 
-    - Original (x_scale='original', the default): multiply τ by σ_y/σ_{x_k}.
-      This gives the effective prior on β_k (Δy per unit of predictor).
-      Intercept location shifts to μ_y (since E[β_0] = μ_y when all priors
-      are centred and predictors are mean-zero after standardization).
-      A random slope's SD prior is scaled the same way; the random intercept's
-      line keeps the specified prior, whose pushforward has no closed form.
+    - Original (x_scale='original', the default): each line describes the displayed parameter
+      (ScaleInfo.ffxPriorToOriginal): a slope's prior is scaled by σ_y/σ_{x_k}, and the
+      intercept at X = 0 collects the slopes' priors.  A random slope's SD prior is scaled the
+      same way.  Where the pushforward has no closed form (a Student-t intercept; the random
+      intercept's SD and the correlations once a random slope sits on a centered predictor),
+      the line states the specified prior and the predictors at whose means it applies.
     """
     from metabeta.utils.constants import FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF
 
@@ -2038,27 +2038,22 @@ def _buildPriorLines(
     y_mean = scale_info.y_mean if rescale else 0.0
 
     if 'tau_ffx' in prior_params and 'nu_ffx' in prior_params:
-        tau = prior_params['tau_ffx'][batch_index, :n_ffx]
-        mu = prior_params['nu_ffx'][batch_index, :n_ffx]
+        tau = prior_params['tau_ffx'][batch_index, :n_ffx].astype(float)
+        nu = prior_params['nu_ffx'][batch_index, :n_ffx].astype(float)
         fam_id = int(prior_params['family_ffx'][batch_index]) if 'family_ffx' in prior_params else 0
         fam = FFX_FAMILIES[fam_id] if fam_id < len(FFX_FAMILIES) else 'normal'
-        for j, name in enumerate(ffx_names):
-            tau_j = float(tau[j]) * y_std
-            mu_j = float(mu[j]) * y_std
-            if rescale and j < len(scale_info.x_stds):
-                x_std_j = float(scale_info.x_stds[j])
-                if x_std_j > 0:
-                    tau_j /= x_std_j
-                # Intercept prior location shifts to μ_y in original space when
-                # ν★=0 and predictors are mean-zero after standardization.
-                if scale_info.has_intercept and j == 0:
-                    mu_j += y_mean
-
-            loc = f'{mu_j:.4g}' if abs(mu_j) > 1e-9 else '0'
-            if fam == 'normal':
-                lines.append(f'  {name} ~ N({loc}, {tau_j:.4g})')
-            else:
-                lines.append(f'  {name} ~ t₅({loc}, {tau_j:.4g})')
+        locs, scales, notes = nu, tau, [''] * n_ffx
+        if rescale:
+            locs, scales = scale_info.ffxPriorToOriginal(nu, tau)
+            centered = [n for n, mu in zip(ffx_names[1:], scale_info.x_means[1:]) if mu != 0]
+            if scale_info.has_intercept and fam != 'normal' and centered:
+                # a sum of Student-t terms is no Student-t: state the specified intercept prior
+                locs[0], scales[0] = nu[0] * y_std + y_mean, tau[0] * y_std
+                notes[0] = _atMean(centered)
+        symbol = 'N' if fam == 'normal' else 't₅'
+        for name, loc_j, scale_j, note in zip(ffx_names, locs, scales, notes):
+            loc = f'{loc_j:.4g}' if abs(loc_j) > 1e-9 else '0'
+            lines.append(f'  {name} ~ {symbol}({loc}, {scale_j:.4g}){note}')
 
     if 'tau_rfx' in prior_params and n_rfx > 0:
         tau_r = prior_params['tau_rfx'][batch_index, :n_rfx]
@@ -2068,22 +2063,32 @@ def _buildPriorLines(
             else 0
         )
         fam = SIGMA_FAMILIES[fam_id] if fam_id < len(SIGMA_FAMILIES) else 'halfnormal'
+        # only the random intercept's row of ScaleInfo.rfxMap mixes effects: its SD and the
+        # correlations keep the specified prior, at the means of the random slopes' predictors
+        at_mean = ''
+        if rescale and 'Intercept' in scale_info.random_names:
+            i = scale_info.random_names.index('Intercept')
+            row = scale_info.rfxMap()[i]
+            at_mean = _atMean(
+                [n for k, n in enumerate(scale_info.random_names) if k != i and row[k] != 0]
+            )
         for j, name in enumerate(srfx_names):
             # σ_rfx is always displayed in y units; rescale τ_rfx in original mode, where a
             # slope SD is divided by its predictor's SD (the intercept's x_std is 1)
             tau_j = float(tau_r[j]) * y_std
             if rescale:
                 tau_j /= float(scale_info.x_stds[scale_info.param_names.index(name)])
+            note = at_mean if name == 'Intercept' else ''
             if fam == 'halfnormal':
-                lines.append(f'  σ_{name} ~ HN({tau_j:.4g})')
+                lines.append(f'  σ_{name} ~ HN({tau_j:.4g}){note}')
             elif fam == 'halfstudent':
-                lines.append(f'  σ_{name} ~ HT₅({tau_j:.4g})')
+                lines.append(f'  σ_{name} ~ HT₅({tau_j:.4g}){note}')
             else:
-                lines.append(f'  σ_{name} ~ Exp({tau_j:.4g})')
+                lines.append(f'  σ_{name} ~ Exp({tau_j:.4g}){note}')
         if 'eta_rfx' in prior_params and n_rfx > 1:
             eta = float(prior_params['eta_rfx'][batch_index])
             if eta > 0:
-                lines.append(f'  Corr ~ LKJ({eta:.2g})')
+                lines.append(f'  Corr ~ LKJ({eta:.2g}){at_mean}')
 
     if 'tau_eps' in prior_params:
         tau_e = float(np.asarray(prior_params['tau_eps']).ravel()[batch_index]) * y_std
@@ -2101,6 +2106,11 @@ def _buildPriorLines(
             lines.append(f'  σ_Residual ~ Exp({tau_e:.4g})')
 
     return lines
+
+
+def _atMean(predictors: list[str]) -> str:
+    """Where a prior line without closed form applies: at the means of `predictors`."""
+    return f' at mean {", ".join(predictors)}' if predictors else ''
 
 
 def posteriorTable(
@@ -2172,12 +2182,12 @@ def posteriorTable(
     _ffx_prior_var_multiplier = 1.0  # 1.0 for Normal; df/(df-2) for Student-t
     if prior_params is not None and 'tau_ffx' in prior_params and 'nu_ffx' in prior_params:
         n_ffx_active = len(ffx_names)
-        tau_arr = prior_params['tau_ffx'][batch_index, :n_ffx_active].copy().astype(float)
-        if scale_info is not None:
-            for j in range(n_ffx_active):
-                x_std_j = float(scale_info.x_stds[j]) if j < len(scale_info.x_stds) else 1.0
-                denom = x_std_j if x_scale == 'original' else 1.0
-                tau_arr[j] *= scale_info.y_std / max(denom, 1e-12)
+        tau_arr = prior_params['tau_ffx'][batch_index, :n_ffx_active].astype(float)
+        if scale_info is not None and x_scale == 'original':
+            nu_arr = prior_params['nu_ffx'][batch_index, :n_ffx_active]
+            tau_arr = scale_info.ffxPriorToOriginal(nu_arr, tau_arr)[1]
+        elif scale_info is not None:
+            tau_arr = tau_arr * scale_info.y_std
         if 'family_ffx' in prior_params:
             fam_id = int(prior_params['family_ffx'][batch_index])
             fam = FFX_FAMILIES[fam_id] if fam_id < len(FFX_FAMILIES) else 'normal'
