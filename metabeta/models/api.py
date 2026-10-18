@@ -31,7 +31,7 @@ from metabeta.posthoc.metropolis import (
     suggestPoolSize,
 )
 from metabeta.utils.config import ApproximatorConfig
-from metabeta.utils.constants import hasSigmaEps
+from metabeta.utils.constants import LIKELIHOOD_FAMILIES, hasSigmaEps
 from metabeta.utils.dataloader import (
     Dataloader,
     collateGrouped,
@@ -1191,6 +1191,12 @@ class Api:
         if y_type == 'multiclass':
             raise ValueError('multiclass targets are not supported by the router')
         likelihood = resolveLikelihoodFamily(likelihood_family, y_type)
+        if y_type == 'binary' and likelihood == 0:
+            warnings.warn(
+                "the outcome is binary (0/1) but fitted with the 'normal' family; for a binary "
+                "outcome load Api.from_pretrained('bernoulli')",
+                skip_file_prefixes=INTERNAL_PREFIXES,
+            )
 
         X_pre = np.asarray(preprocessed['X'], dtype=float)
         y = np.asarray(preprocessed['y'])
@@ -1479,10 +1485,21 @@ class Api:
         i: int,
         failures_by_submodel: dict[str, list[str]],
     ) -> str:
-        """Why dataset i fits no submodel: its dimensions outside the range the submodels cover
-        together, else the failures of the submodel closest to fitting."""
+        """Why dataset i fits no submodel: a family the checkpoint does not fit and the dimensions
+        outside the range its submodels cover together, else the failures of the submodel closest
+        to fitting."""
         dims = self._datasetDimensions(batch, i)
         misfits = []
+        family = dims['likelihood_family']
+        fitted = {
+            int(f) for e in self.submodels if (f := routeValue(e, 'likelihood_family')) is not None
+        }
+        if family is not None and fitted and family not in fitted:
+            name = LIKELIHOOD_FAMILIES[family]
+            supported = ', '.join(repr(LIKELIHOOD_FAMILIES[f]) for f in sorted(fitted))
+            misfits.append(
+                f"family '{name}' (supported: {supported}); load Api.from_pretrained('{name}')"
+            )
         for label, low, high, min_key, max_key in (
             ('groups', dims['m'], dims['m'], 'min_m', 'max_m'),
             ('rows per group', dims['min_n_i'], dims['max_n_i'], 'min_n', 'max_n'),
