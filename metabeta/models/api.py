@@ -1257,6 +1257,7 @@ class Api:
             x_means=np.array(si_means),
             x_stds=np.array(si_stds),
             param_names=list(fixed_names),
+            random_names=list(random_names),
             has_intercept=spec.intercept,
         )
 
@@ -1726,7 +1727,7 @@ class Api:
         *,
         ci: float = 0.95,
         batch_index: int = 0,
-        x_scale: str = 'standardized',
+        x_scale: str = 'original',
     ) -> str:
         """Return a formatted posterior summary table for a sampled RouterResult.
 
@@ -1895,24 +1896,23 @@ def _buildPriorLines(
     prior_params: dict[str, np.ndarray],
     batch_index: int,
     scale_info: 'ScaleInfo | None' = None,
-    x_scale: str = 'standardized',
+    x_scale: str = 'original',
 ) -> list[str]:
     """Build per-parameter prior description lines for the summary header.
 
     Priors are stored on the fully-standardized (★) scale inside the model.
     This function rescales them to match whatever scale is being displayed:
 
-    - Default (standardized X, original y): multiply τ by σ_y.
+    - Standardized (x_scale='standardized', standardized X, original y): multiply τ by σ_y.
       This gives the effective prior on β★_k × σ_y (Δy per SD of predictor).
       Intercept location remains 0 (model is centred at mean y).
 
-    - Original (x_scale='original'): multiply τ by σ_y/σ_{x_k}.
+    - Original (x_scale='original', the default): multiply τ by σ_y/σ_{x_k}.
       This gives the effective prior on β_k (Δy per unit of predictor).
       Intercept location shifts to μ_y (since E[β_0] = μ_y when all priors
       are centred and predictors are mean-zero after standardization).
-
-    σ_rfx are always displayed in original y units (rescaled by σ_y in the
-    proposal), so τ_rfx is always multiplied by σ_y regardless of x_scale.
+      A random slope's SD prior is scaled the same way; the random intercept's
+      line keeps the specified prior, whose pushforward has no closed form.
     """
     from metabeta.utils.constants import FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF
 
@@ -1958,8 +1958,11 @@ def _buildPriorLines(
         )
         fam = SIGMA_FAMILIES[fam_id] if fam_id < len(SIGMA_FAMILIES) else 'halfnormal'
         for j, name in enumerate(srfx_names):
-            # σ_rfx is always displayed in y units; rescale τ_rfx in original mode
+            # σ_rfx is always displayed in y units; rescale τ_rfx in original mode, where a
+            # slope SD is divided by its predictor's SD (the intercept's x_std is 1)
             tau_j = float(tau_r[j]) * y_std
+            if rescale:
+                tau_j /= float(scale_info.x_stds[scale_info.param_names.index(name)])
             if fam == 'halfnormal':
                 lines.append(f'  σ_{name} ~ HN({tau_j:.4g})')
             elif fam == 'halfstudent':
@@ -2007,7 +2010,7 @@ def posteriorTable(
     ci: float = 0.95,
     batch_index: int = 0,
     scale_info: 'ScaleInfo | None' = None,
-    x_scale: str = 'standardized',
+    x_scale: str = 'original',
     n: int | None = None,
     m: int | None = None,
 ) -> str:
@@ -2039,6 +2042,10 @@ def posteriorTable(
         else:
             ffx = scale_info.to_original_scale(ffx)
     srfx = proposal.sigma_rfx[batch_index].float()  # (S, q)
+    corr = proposal.corr_rfx
+    corr_b = corr[batch_index].float() if corr is not None else None  # (S, q, q)
+    if x_scale == 'original':
+        srfx, corr_b = scale_info.sdCorrToOriginal(srfx, corr_b)
     S = ffx.shape[0]
 
     names = param_names or {}
@@ -2170,9 +2177,7 @@ def posteriorTable(
     # ── Correlations ──────────────────────────────────────────────────────────
     n_rfx = len(srfx_names)
     if n_rfx > 1:
-        corr = proposal.corr_rfx
-        if corr is not None:
-            corr_b = corr[batch_index].float()  # (S, q, q) or (q, q)
+        if corr_b is not None:
             corr_mean = corr_b.mean(0) if corr_b.dim() == 3 else corr_b
             corr_rows = [
                 [srfx_names[j]] + [corr_mean[j, k].item() for k in range(n_rfx)]
