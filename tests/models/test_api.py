@@ -223,3 +223,73 @@ def test_default_summary_reports_random_effects_at_days_zero(api: Api):
     assert corr['Intercept'][1] == corr['Days'][0]
     tau = result.prior_params['tau_rfx'][0, 1] * df['Reaction'].std(ddof=0) / s
     assert f'  σ_Days ~ HN({tau:.4g})' in summary
+
+
+def test_random_intercept_sd_does_not_depend_on_the_predictor_scale(api: Api):
+    result = api.sample(
+        _sleepstudy(),
+        formula='Reaction ~ Days + (1 | Subject)',
+        n_samples=64,
+        fit_preprocessor=True,
+    )
+
+    original = _tableRows(api.posteriorSummary(result), 'Standard Deviations:')
+    standardized = _tableRows(
+        api.posteriorSummary(result, x_scale='standardized'), 'Standard Deviations:'
+    )
+    assert list(original) == ['Intercept', 'Residual']
+    assert original == standardized
+
+
+def _rfxRows(rfx_summary: str, name: str) -> tuple[dict[str, list[float]], float]:
+    """One component's table of an rfxSummary, one row per group, and its SD ratio."""
+    lines = rfx_summary.splitlines()
+    start = lines.index(f'{name}:') + 3  # header and separator
+    end = next(i for i in range(start, len(lines)) if lines[i].startswith('SD ratio = '))
+    rows = [row.split('|')[1:-1] for row in lines[start:end]]
+    ratio = float(lines[end].removeprefix('SD ratio = '))
+    return {row[0].strip(): [float(cell) for cell in row[1:]] for row in rows}, ratio
+
+
+def test_standardized_summaries_print_the_standardized_draws(api: Api):
+    result = api.sample(
+        _sleepstudy(),
+        formula='Reaction ~ Days + (1 + Days | Subject)',
+        n_samples=64,
+        fit_preprocessor=True,
+    )
+    sd0, sd1, rho = _randomSlopeDraws(result)
+    rfx = result.proposal.rfx[0].double().numpy()  # (m, S, q)
+
+    summary = api.posteriorSummary(result, x_scale='standardized')
+    sds = _tableRows(summary, 'Standard Deviations:')
+    assert sds['Intercept'][0] == pytest.approx(sd0.mean(), abs=1e-3)
+    assert sds['Days'][0] == pytest.approx(sd1.mean(), abs=1e-3)
+    assert _tableRows(summary, 'Correlations:')['Days'][0] == pytest.approx(rho.mean(), abs=1e-3)
+
+    rfx_summary = api.rfxSummary(result, x_scale='standardized')
+    for k, (name, sd) in enumerate([('Intercept', sd0), ('Days', sd1)]):
+        rows, ratio = _rfxRows(rfx_summary, name)
+        means = rfx[:, :, k].mean(axis=1)  # (m,)
+        assert [row[1] for row in rows.values()] == pytest.approx(means, abs=1e-3)
+        assert ratio == pytest.approx(means.std(ddof=1) / sd.mean(), abs=0.01)
+
+
+def test_default_rfx_summary_reports_group_effects_at_days_zero(api: Api):
+    df = _sleepstudy()
+    result = api.sample(
+        df, formula='Reaction ~ Days + (1 + Days | Subject)', n_samples=64, fit_preprocessor=True
+    )
+    mu, s = df['Days'].mean(), df['Days'].std(ddof=0)
+    rfx = result.proposal.rfx[0].double().numpy()  # (m, S, q)
+    b0 = rfx[..., 0] - mu / s * rfx[..., 1]  # (m, S), the group's deviation at Days = 0
+    b1 = rfx[..., 1] / s  # (m, S), per day
+    sd_rows = _tableRows(api.posteriorSummary(result), 'Standard Deviations:')
+
+    rfx_summary = api.rfxSummary(result)
+    for name, b in [('Intercept', b0), ('Days', b1)]:
+        rows, ratio = _rfxRows(rfx_summary, name)
+        means = b.mean(axis=1)  # (m,)
+        assert [row[1] for row in rows.values()] == pytest.approx(means, abs=1e-3)
+        assert [row[2] for row in rows.values()] == pytest.approx(b.std(axis=1, ddof=1), abs=1e-3)
+        assert ratio == pytest.approx(means.std(ddof=1) / sd_rows[name][0], abs=0.01)
