@@ -209,9 +209,6 @@ def defaultRandomTerms(q: int, columns: Sequence[str]) -> tuple[str, ...]:
 
 
 def resolveFixedIndices(terms: Sequence[str], columns: Sequence[str]) -> list[int]:
-    if not terms:
-        return list(range(len(columns)))
-
     out: list[int] = []
     seen: set[int] = set()
     for term in terms:

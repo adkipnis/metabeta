@@ -1139,7 +1139,13 @@ class Api:
             raise ValueError('preprocessed X must have shape (n, d) aligned with y')
 
         spec = parseFormula(formula)
-        fixed_indices = resolveFixedIndices(spec.fixed_terms, columns)
+        # no formula: every column is a fixed effect; a formula without fixed terms
+        # (y ~ 1 + (1 | g)) fits the intercept only, as in lme4
+        fixed_indices = (
+            list(range(len(columns)))
+            if formula is None
+            else resolveFixedIndices(spec.fixed_terms, columns)
+        )
         self._warnInconsistentColumns(X_pre, columns, fixed_indices)
         fixed_names = []
         if spec.intercept:
