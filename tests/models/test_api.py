@@ -653,6 +653,33 @@ def test_plotPPD_renders_at_notebook_size(api: Api, monkeypatch: pytest.MonkeyPa
     assert pixels.max() < 1000  # the default dpi; saved files keep the plotting DPI
 
 
+def test_plotPPD_seed_reproduces_the_figure_and_keeps_the_callers_stream(
+    api: Api, monkeypatch: pytest.MonkeyPatch
+):
+    figures = []
+
+    def show():
+        plt.gcf().canvas.draw()
+        figures.append(np.asarray(plt.gcf().canvas.buffer_rgba()).copy())
+
+    monkeypatch.setattr(plt, 'show', show)
+    result = api.sample(
+        _sleepstudy(),
+        formula='Reaction ~ Days + (1 | Subject)',
+        n_samples=64,
+        fit_preprocessor=True,
+    )
+    torch.manual_seed(1)
+    expected = torch.rand(3)
+
+    torch.manual_seed(1)
+    api.plotPPD(result, seed=0)
+    api.plotPPD(result, seed=0)
+
+    assert torch.equal(torch.rand(3), expected)
+    assert np.array_equal(figures[0], figures[1])
+
+
 def test_posteriorDraws_match_the_summary(api: Api):
     result = api.sample(
         _sleepstudy(),
