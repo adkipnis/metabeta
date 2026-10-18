@@ -677,6 +677,60 @@ def test_posteriorDraws_match_the_summary(api: Api):
         assert f'{mean:.3f}' in summary, name
 
 
+def test_prior_id_takes_a_prior_name(api: Api):
+    priors = {'wide': None, 'narrow': {'fixed': {'Days': {'tau': 0.5}}}}
+    result = api.sample(
+        _sleepstudy(),
+        formula='Reaction ~ Days + (1 | Subject)',
+        priors=priors,
+        n_samples=64,
+        fit_preprocessor=True,
+    )
+
+    assert api.posteriorSummary(result, prior_id='narrow') == api.posteriorSummary(
+        result, prior_id=1
+    )
+    assert api.rfxSummary(result, prior_id='narrow') == api.rfxSummary(result, prior_id=1)
+    by_name = api.posteriorDraws(result, prior_id='narrow')
+    assert by_name.equals(api.posteriorDraws(result, prior_id=1))
+    with pytest.raises(KeyError, match="'wide', 'narrow'"):
+        api.posteriorSummary(result, prior_id='medium')
+
+
+def test_renamed_row_arguments_warn_and_still_work(api: Api, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(plt, 'show', lambda: None)
+    result = api.sample(
+        _sleepstudy(),
+        formula='Reaction ~ Days + (1 | Subject)',
+        n_samples=64,
+        fit_preprocessor=True,
+    )
+
+    with pytest.warns(FutureWarning, match='use prior_id='):
+        assert api.posteriorSummary(result, batch_index=0) == api.posteriorSummary(result)
+    with pytest.warns(FutureWarning, match='use prior_id='):
+        assert api.rfxSummary(result, batch_index=0) == api.rfxSummary(result)
+    with pytest.warns(FutureWarning, match='use prior_id='):
+        api.plotParameters(result, index=0)
+    with pytest.warns(FutureWarning, match='use prior_ids='):
+        api.plotPPD(result, indices=[0])
+    plt.close('all')
+
+
+def test_sample_seed_reproduces_the_draws_and_keeps_the_callers_stream(api: Api):
+    df, formula = _sleepstudy(), 'Reaction ~ Days + (1 | Subject)'
+    torch.manual_seed(0)
+    seeded_globally = api.sample(df, formula=formula, n_samples=64, fit_preprocessor=True)
+    torch.manual_seed(1)
+    expected = torch.rand(3)
+
+    torch.manual_seed(1)
+    seeded = api.sample(df, formula=formula, n_samples=64, fit_preprocessor=True, seed=0)
+
+    assert torch.equal(torch.rand(3), expected)
+    assert torch.equal(seeded.proposal.samples_g, seeded_globally.proposal.samples_g)
+
+
 def test_from_pretrained_writes_its_status_to_stdout(
     api: Api, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ):
