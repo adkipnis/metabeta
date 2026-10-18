@@ -545,6 +545,15 @@ class Api:
                 k: v[..., lead(v.shape[-1])] for k, v in summary.items()
             }
 
+    @staticmethod
+    def _dummyResponse(family: int | None, n: int, rng: np.random.Generator) -> np.ndarray:
+        """``n`` responses the family's checkpoint accepts: 0/1, counts, else Gaussian."""
+        if family == 1:
+            return rng.integers(0, 2, size=n).astype(float)
+        if family == 2:
+            return rng.integers(0, 10, size=n).astype(float)
+        return rng.standard_normal(n)
+
     def _warmupSubmodel(self, entry: dict) -> None:
         """Warm the default sampling path on minimal dummy data routed to ``entry``."""
         r = entry.get('routing', {})
@@ -558,13 +567,7 @@ class Api:
         n = min_m * min_n
 
         rng = np.random.default_rng(0)
-        dummy: dict[str, Any] = {}
-        if fam == 1:
-            dummy['_y'] = rng.integers(0, 2, size=n).astype(float)
-        elif fam == 2:
-            dummy['_y'] = rng.integers(0, 10, size=n).astype(float)
-        else:
-            dummy['_y'] = rng.standard_normal(n)
+        dummy: dict[str, Any] = {'_y': self._dummyResponse(fam, n, rng)}
         for j in range(d - 1):
             dummy[f'_x{j}'] = rng.standard_normal(n)
         dummy['_g'] = np.repeat(np.arange(min_m), min_n)
@@ -615,9 +618,7 @@ class Api:
             n = min_m * min_n
             dummy: dict[str, Any] = {}
             if spec.target:
-                dummy[spec.target] = (
-                    rng.integers(0, 2, size=n).astype(float) if fam == 1 else rng.standard_normal(n)
-                )
+                dummy[spec.target] = self._dummyResponse(fam, n, rng)
             for term in spec.fixed_terms:
                 dummy[term] = rng.standard_normal(n)
             if spec.group_name:
