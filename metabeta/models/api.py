@@ -174,7 +174,9 @@ class Api:
     Tabular inputs are normalized through explicit stages: dataframe/parquet,
     preprocessed numpy dict, model dataset dict, then collated dataloader batch.
     Formula support is intentionally narrow and currently covers additive fixed
-    terms plus one lme4-style random-effect term.
+    terms plus one lme4-style random-effect term.  A categorical column enters as one
+    indicator per level except its most frequent level, the reference; R's
+    ``contr.treatment`` takes the first level instead.
     """
 
     @classmethod
@@ -202,6 +204,15 @@ class Api:
             Override the default HF Hub cache (``~/.cache/huggingface/hub``).
         force_download:
             Re-download even if a cached copy exists.
+        device:
+            Torch device the models run on, e.g. ``"cuda"`` for a GPU.
+        batch_size:
+            Number of datasets ``sample`` refines at a time; ``None`` refines them all at
+            once.  Lower it if many large datasets run out of memory.
+        warmup:
+            Run one discarded sampling pass on dummy data while loading, so the first
+            ``sample`` call is as fast as later ones.  ``False`` loads faster and moves that
+            cost to the first call.
         verbose:
             Print concise checkpoint download/load status messages.
         """
@@ -1795,7 +1806,7 @@ class Api:
 
         Fit metrics (R²/AUC/Deviance), LOO-NLL, and Pareto k are shown when
         ``sample()`` was called with ``diagnostics=True``.  For per-group random
-        effects use ``rfxTable()``.
+        effects use ``rfxSummary()``.
         """
         if result.proposal is None:
             raise ValueError('RouterResult has no proposal; call sample() first')
@@ -2113,7 +2124,7 @@ def posteriorTable(
 
     Sections: Fixed Effects (mean, SD, CI, P(>0), contraction), Standard
     Deviations (sigma_rfx + residual), and Correlations (posterior mean, when
-    q > 1).  For per-group random effects use ``Api.rfxTable()``.
+    q > 1).  For per-group random effects use ``Api.rfxSummary()``.
     Contraction requires ``prior_params`` (populated automatically by
     ``Api.sample()``).  Fit metrics require ``diagnostics=True``.
     """
