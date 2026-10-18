@@ -2014,7 +2014,7 @@ def _buildPriorLines(
     Priors are stored on the fully-standardized (★) scale inside the model.
     This function rescales them to match whatever scale is being displayed:
 
-    - Standardized (x_scale='standardized', standardized X, original y): multiply τ by σ_y.
+    - Standardized (x_scale='standardized', standardized X, original y): multiply ν, τ by σ_y.
       This gives the effective prior on β★_k × σ_y (Δy per SD of predictor).
       Intercept location remains 0 (model is centred at mean y).
 
@@ -2030,11 +2030,10 @@ def _buildPriorLines(
     lines: list[str] = []
     n_ffx, n_rfx = len(ffx_names), len(srfx_names)
 
-    # In default mode priors stay in the fully standardized (★) space where the
-    # model operates.  In original mode they are rescaled to match the original
-    # y/X units shown for the estimates.
+    # the summary prints the draws in y units on both scales (Api._rescaleProposal), so the priors
+    # follow; the original scale also maps them to X units and moves the intercept to X = 0
     rescale = x_scale == 'original' and scale_info is not None
-    y_std = scale_info.y_std if rescale else 1.0
+    y_std = scale_info.y_std if scale_info is not None else 1.0
     y_mean = scale_info.y_mean if rescale else 0.0
 
     if 'tau_ffx' in prior_params and 'nu_ffx' in prior_params:
@@ -2042,7 +2041,7 @@ def _buildPriorLines(
         nu = prior_params['nu_ffx'][batch_index, :n_ffx].astype(float)
         fam_id = int(prior_params['family_ffx'][batch_index]) if 'family_ffx' in prior_params else 0
         fam = FFX_FAMILIES[fam_id] if fam_id < len(FFX_FAMILIES) else 'normal'
-        locs, scales, notes = nu, tau, [''] * n_ffx
+        locs, scales, notes = nu * y_std, tau * y_std, [''] * n_ffx
         if rescale:
             locs, scales = scale_info.ffxPriorToOriginal(nu, tau)
             centered = [n for n, mu in zip(ffx_names[1:], scale_info.x_means[1:]) if mu != 0]
