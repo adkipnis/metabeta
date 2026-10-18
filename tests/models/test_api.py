@@ -65,3 +65,26 @@ def test_column_names_keep_the_dataframe_spelling(api: Api):
     plt.close(grid.figure)
     assert 'Days' in labels and any('Treatment' in label for label in labels)
     assert not any('days' in label or 'treatment' in label for label in labels)
+
+
+def test_formula_without_fixed_terms_fits_the_intercept_only(api: Api):
+    df = _sleepstudy(Noise=np.random.default_rng(1).normal(size=120))
+
+    result = api.sample(
+        df, formula='Reaction ~ 1 + (1 | Subject)', n_samples=8, fit_preprocessor=True
+    )
+
+    assert result.param_names == {'ffx': ['Intercept'], 'sigma_rfx': ['Intercept']}
+
+
+def test_no_formula_uses_every_other_column_as_a_fixed_effect(api: Api):
+    df = _sleepstudy(Noise=np.random.default_rng(1).normal(size=120))
+
+    result = api.sample(
+        df.rename(columns={'Reaction': 'y'}),
+        group_name='Subject',
+        n_samples=8,
+        fit_preprocessor=True,
+    )
+
+    assert result.param_names == {'ffx': ['Intercept', 'Days', 'Noise'], 'sigma_rfx': ['Intercept']}
