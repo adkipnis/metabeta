@@ -166,6 +166,11 @@ random-walk moves (`random_walk=True`). `02-families` compares a Poisson fit wit
 
 
 
+## Contributing
+
+Issues and pull requests are welcome; see
+[`CONTRIBUTING.md`](https://github.com/adkipnis/metabeta/blob/main/CONTRIBUTING.md).
+
 ## Citing
 
 ```bibtex
