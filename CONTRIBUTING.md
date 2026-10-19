@@ -1,27 +1,19 @@
 # Contributing to MetaBeta
 
-Thank you for your interest. Help is welcome.
-
 ## Ways to help
 
-- **A dataset MetaBeta fits badly.** Open an issue with the formula, the family, the numbers of
-  rows and groups, and the summary's last line, which holds the diagnostics. Link the data if it
-  is public.
 - **A bug.** Open an issue with the smallest example that shows it, or a pull request with a
   failing test and the fix.
-- **A model MetaBeta cannot fit yet.** A family, a formula term or a grouping structure: open an
-  issue describing the model and a dataset that needs it. The [FAQ](README.md#faq) lists what is
-  supported.
+- **A feature request.** Open an issue describing the feature and the use case behind it. The
+  [FAQ](README.md#faq) lists what MetaBeta can fit today.
 
-For anything bigger than a small fix, open an issue before writing code, so we can agree on the
+For anything bigger than a small fix, please open an issue before writing code, so we can agree on the
 approach first.
 
 ## Questions and support
 
 - Check the [FAQ](README.md#faq) and the [tutorials](README.md#tutorials) first.
-- Ask anything else in a [GitHub issue](https://github.com/adkipnis/metabeta/issues).
-- MetaBeta is maintained by one person alongside research. Issues are answered as time allows,
-  bugs first.
+- MetaBeta is maintained by one person alongside research. Issues are answered as time permits.
 
 ## Set up
 
@@ -66,11 +58,9 @@ each dataset to a pretrained `Approximator`.
 
 ## Pull requests
 
-- Branch off `main`, one change per pull request, linked to its issue. Pull requests are
-  squash-merged.
-- Add a test with each change; mark a test that needs local checkpoints or data `slow`.
-- Format with `uv run blue metabeta tests` and run `uv run pytest`. CI checks both on Python 3.12
-  and 3.13.
+- Branch off `main`. One change per pull request, linked to its issue.
+- Please add a test with each significant change; mark a test that needs local checkpoints or data `slow`.
+- Format with `uv run blue metabeta tests` and run `uv run pytest`.
 
 Style:
 
@@ -83,20 +73,8 @@ Style:
 - `ValueError` for a bad value or shape, `KeyError` for a missing key, `NotImplementedError` for
   an unsupported mode.
 - A tensor's shape is annotated inline (`# (B, m, n, d)`). A reused tensor is never changed in
-  place. Broadcasting and indexing, not loops.
-- American spelling, in names as in prose.
-
-Three rules protect what users install:
-
-- **Released checkpoints keep loading.** `Api.from_pretrained` downloads the checkpoints under
-  the Hugging Face tag `v1`. A change to an architecture or a config they read is discussed in an
-  issue first; one that breaks them needs a new tag.
-- **The training distribution does not move silently.** The priors, the likelihoods and the
-  simulator define what the checkpoints learned. A change to them, to a seed or to a metric
-  starts as an issue.
-- **The wheel ships only what fitting needs.** `simulation/`, `training/` and `outputs/` stay
-  out of it, and research-only dependencies such as PyMC and rpy2 stay in the `research` extra.
-  `tests/packaging` checks both.
+  place. Use broadcasting and indexing instead of loops.
+- Use American spelling.
 
 ## License
 
