@@ -6,7 +6,7 @@
 SIF="$HOME/containers/python312.sif"
 VENV="$HOME/metabeta/.venv-apptainer"
 # outputs/data is symlinked to workspace storage; bind it so the link resolves in-container
-DATA_ROOT="/lustre/groups/hcai/workspace/alexander.kipnis/datasets"
+DATA_ROOT="/lustre/groups/hcai/workspace/alexander.kipnis/metabeta-cache/datasets"
 
 PYTENSOR_DIR=$(mktemp -d /tmp/pytensor_XXXXXX)
 trap 'rm -rf "$PYTENSOR_DIR"' EXIT
