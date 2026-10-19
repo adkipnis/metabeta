@@ -5,7 +5,7 @@
 [![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-checkpoints-yellow)](https://huggingface.co/adkipnis/metabeta)
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/adkipnis/metabeta/blob/main/demos/01-quickstart.ipynb)
 
-# metabeta
+# MetaBeta
 
 Bayesian inference for GLMMs (generalized linear mixed-effects models) in under a second:
 
@@ -109,7 +109,7 @@ A GLMM fit is then a forward pass through the trained networks. Metropolis–Has
 ## FAQ
 
 <details>
-<summary><b>What can metabeta fit?</b></summary>
+<summary><b>What can MetaBeta fit?</b></summary>
 
 - **Models**: Gaussian, Bernoulli (0/1) and Poisson GLMMs with one grouping factor.
 - **Data**: 5 to 200 groups, 5 to 150 rows per group, at most 3,000 rows.
