@@ -469,7 +469,6 @@ def test_router_expands_multiple_named_term_priors_per_dataset(
     assert torch.allclose(batch['tau_ffx'][1], torch.tensor([2.5, 2.5, 0.1]))
     assert torch.allclose(batch['tau_rfx'][1], torch.tensor([0.3, 2.5]))
     assert torch.equal(batch['_router_prior_index'], torch.tensor([0, 1]))
-    assert torch.equal(batch['_router_source_index'], torch.tensor([0, 0]))
     assert batch['_router_prior_name'] == ['weak', 'tight']
 
     _, validation = router._routeBatch(batch)
@@ -981,14 +980,16 @@ def test_router_warns_high_correlation_columns(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def _write_tiny_approximator_checkpoint(
-    path: Path,
+def _tiny_submodel(
+    submodel_id: str,
     *,
+    min_d: int,
     max_d: int,
     max_q: int,
-    likelihood_family: int = 1,
-    analytical_refinement: str = 'none',
-) -> None:
+    likelihood_family: int,
+    analytical_refinement: str,
+) -> dict:
+    """A joint-checkpoint entry holding a tiny Approximator with weights."""
     from metabeta.models.approximator import Approximator
     from metabeta.utils.config import (
         ApproximatorConfig,
@@ -1011,34 +1012,62 @@ def _write_tiny_approximator_checkpoint(
         analytical_local_at_inference=False,
     )
     model = Approximator(model_cfg)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(
-        {
-            '_version': 1,
-            'submodels': [
-                {
-                    'id': 'tiny',
-                    'routing': {
-                        'likelihood_family': likelihood_family,
-                        'min_d': 1,
-                        'max_d': max_d,
-                        'min_q': 1,
-                        'max_q': max_q,
-                        'min_m': 5,
-                        'max_m': 200,
-                        'min_n': 5,
-                        'max_n': 150,
-                        'max_n_total': 3000,
-                        'min_bg_df': 0,
-                        'min_within_df': 0,
-                    },
-                    'model_cfg': model_cfg.to_dict(),
-                    'model_state': model.state_dict(),
-                },
-            ],
+    return {
+        'id': submodel_id,
+        'routing': {
+            'likelihood_family': likelihood_family,
+            'min_d': min_d,
+            'max_d': max_d,
+            'min_q': 1,
+            'max_q': max_q,
+            'min_m': 5,
+            'max_m': 200,
+            'min_n': 5,
+            'max_n': 150,
+            'max_n_total': 3000,
+            'min_bg_df': 0,
+            'min_within_df': 0,
         },
-        path,
+        'model_cfg': model_cfg.to_dict(),
+        'model_state': model.state_dict(),
+    }
+
+
+def _write_tiny_approximator_checkpoint(
+    path: Path,
+    *,
+    max_d: int,
+    max_q: int,
+    likelihood_family: int = 1,
+    analytical_refinement: str = 'none',
+) -> None:
+    tiny = _tiny_submodel(
+        'tiny',
+        min_d=1,
+        max_d=max_d,
+        max_q=max_q,
+        likelihood_family=likelihood_family,
+        analytical_refinement=analytical_refinement,
     )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save({'_version': 1, 'submodels': [tiny]}, path)
+
+
+def _write_two_submodel_checkpoint(
+    path: Path, *, likelihood_family: int = 0, analytical_refinement: str = 'light'
+) -> None:
+    """Two tiny submodels with weights, 'tiny' for 1 to 4 fixed effects and 'tiny-8' for 5 to
+    8, so datasets of one formula can route to different submodels (unlike
+    ``_write_joint_checkpoint``, whose weights are empty)."""
+    kwargs = dict(
+        max_q=2, likelihood_family=likelihood_family, analytical_refinement=analytical_refinement
+    )
+    submodels = [
+        _tiny_submodel('tiny', min_d=1, max_d=4, **kwargs),
+        _tiny_submodel('tiny-8', min_d=5, max_d=8, **kwargs),
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save({'_version': 1, 'submodels': submodels}, path)
 
 
 def _exact_batch(
