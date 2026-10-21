@@ -5,6 +5,7 @@ Every test goes through `Api` on the tiny-Approximator joint checkpoint, never a
 
 import inspect
 import logging
+import os
 from pathlib import Path
 import re
 import warnings
@@ -1022,3 +1023,114 @@ def test_categorical_reference_is_the_most_frequent_level(api: Api):
     )
 
     assert result.param_names['ffx'] == ['Intercept', 'Days', 'Treatment_ctrl']
+
+
+def _priorGrid(k: int) -> list[dict]:
+    """k priors on the Days slope, so one DataFrame yields k rows."""
+    return [{'fixed': {'Days': {'tau': 0.5 + 0.5 * i}}} for i in range(k)]
+
+
+def test_chunked_call_matches_the_unchunked_call(api: Api):
+    df = _sleepstudy()
+    # the raw flow draws are i.i.d., so the means agree within their Monte Carlo error
+    kwargs = dict(
+        formula=_FORMULA,
+        priors=_priorGrid(5),
+        n_samples=1000,
+        refine=False,
+        evidence=True,
+        loo=True,
+    )
+    chunked = Api(api.joint_checkpoint, warmup=False, batch_size=2)
+
+    torch.manual_seed(0)
+    whole = api.sample(df, **kwargs)
+    torch.manual_seed(0)
+    parts = chunked.sample(df, **kwargs)
+
+    assert parts.proposal.samples_g.shape == whole.proposal.samples_g.shape == (5, 1000, 8)
+    assert parts.proposal.samples_l.shape == whole.proposal.samples_l.shape
+    assert parts.param_names == whole.param_names
+    assert parts.routes == whole.routes
+    assert parts.safeguards.keys() == whole.safeguards.keys()
+    assert parts.evidence.keys() == whole.evidence.keys()
+    assert parts.diagnostics.keys() == whole.diagnostics.keys()
+    assert parts.safeguards['map_z'].shape == (5,)
+    assert parts.evidence['log_evidence'].shape == (5,)
+    for key in ('fit_vals', 'loo_nll_vals', 'pareto_k_vals'):
+        assert parts.diagnostics[key].shape == (5,), key
+    assert parts.diagnostics['param_summary']['ffx']['mean'].shape == (5, 4)
+    assert parts.diagnostics['fit_label'] == 'Mean R²'
+    assert parts.diagnostics['fit'] == pytest.approx(parts.diagnostics['fit_vals'].mean().item())
+    np.testing.assert_allclose(
+        parts.prior_params['tau_ffx'][:, 1], [0.5, 1.0, 1.5, 2.0, 2.5], rtol=1e-6
+    )
+    mean_parts = parts.proposal.ffx.mean(dim=-2)  # (5, d)
+    mean_whole = whole.proposal.ffx.mean(dim=-2)
+    sd = whole.proposal.ffx.std(dim=-2)
+    assert ((mean_parts - mean_whole).abs() < 0.25 * sd + 1e-6).all()  # ≈ 5 standard errors
+    pp = parts.diagnostics['pp'].mean
+    assert pp.shape == whole.diagnostics['pp'].mean.shape
+
+
+def test_warnings_fire_once_per_type_after_all_chunks(api: Api):
+    chunked = Api(api.joint_checkpoint, warmup=False, batch_size=2)
+    result, caught = _warningsOf(
+        lambda: chunked.sample(
+            _sleepstudy(),
+            formula=_FORMULA,
+            priors=_priorGrid(5),
+            n_samples=64,
+            evidence=True,
+            map_z_threshold=0.0,
+        )
+    )
+
+    messages = [str(w.message) for w in caught]
+    for lead in (
+        'Low IMH acceptance',
+        'Low effective sample size',
+        'Evidence reliability',
+        'MAP check',
+    ):
+        (message,) = [m for m in messages if m.startswith(lead)]
+        assert '[0, 1, 2, 3, 4]' in message, lead  # rows of every chunk, named once
+    assert all(w.filename == __file__ for w in caught)
+    for key in ('accept_rate', 'ess_min', 'ess_flag', 'random_walk_ran', 'psis_k', 'map_z'):
+        assert result.safeguards[key].shape == (5,), key
+    assert result.safeguards['ess'].shape == (5, 8)
+    assert result.safeguards['refine_method'] == 'imhMarginal'
+
+
+# tqdm reads TQDM_DISABLE when it is imported, so the bar can only be checked without it
+_BAR_SHOWS = pytest.mark.skipif(os.environ.get('TQDM_DISABLE'), reason='TQDM_DISABLE is set')
+
+
+@_BAR_SHOWS
+def test_progress_bar_shows_only_for_more_than_one_chunk(api: Api, capsys: pytest.CaptureFixture):
+    df, kwargs = _sleepstudy(), dict(formula=_FORMULA, priors=_priorGrid(5), n_samples=8)
+
+    api.sample(df, **kwargs)
+    assert capsys.readouterr().err == ''
+
+    Api(api.joint_checkpoint, warmup=False, batch_size=2).sample(df, **kwargs)
+    err = capsys.readouterr().err
+    assert '/5 [' in err and 'dataset/s' in err
+
+
+@_BAR_SHOWS
+def test_default_chunk_is_64_rows(api: Api, capsys: pytest.CaptureFixture):
+    df, kwargs = _sleepstudy(), dict(formula=_FORMULA, n_samples=8)
+
+    api.sample(df, priors=_priorGrid(64), **kwargs)
+    assert capsys.readouterr().err == ''
+
+    api.sample(df, priors=_priorGrid(65), **kwargs)
+    assert '/65 [' in capsys.readouterr().err
+
+
+def test_from_pretrained_says_batch_size_counts_rows():
+    doc = inspect.getdoc(Api.from_pretrained)
+    section = doc.split('batch_size:')[1].split('warmup:')[0]
+
+    assert 'rows' in section and '64' in section and 'CUDA' in section
