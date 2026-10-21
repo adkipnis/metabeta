@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Hashable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar, overload
 import contextlib
 import math
 import operator
@@ -114,6 +114,10 @@ INTERNAL_PREFIXES = tuple(str(Path(m.__file__).parent) + os.sep for m in (metabe
 # rows (dataset × prior) per chunk of ``sample`` when ``batch_size`` is None; the CUDA value is
 # provisional until it is measured on a cluster GPU (#42)
 CHUNK_ROWS = {'cpu': 64, 'cuda': 64}
+# warnings list at most this many datasets or rows, then the count
+LISTED_ROWS = 10
+
+K = TypeVar('K', bound=Hashable)
 
 
 def mapZScores(
@@ -169,6 +173,36 @@ class RouterResult:
     ns: np.ndarray | None = None
     safeguards: dict[str, Any] | None = None
     evidence: dict[str, Any] | None = None
+
+
+@dataclass
+class _Metadata:
+    """What a dataset's result carries beyond its rows: its parameter names, its scale
+    information, its group labels, and the permutation from the model's fixed-effect layout
+    (random slopes first) back to the formula's order."""
+
+    param_names: dict[str, list[str]]
+    scale_info: ScaleInfo
+    group_names: list[str] | None
+    ffx_order: list[int]
+
+
+@dataclass
+class _Prepared:
+    """One input dataset of ``sample`` after preparation and routing: its batch at its own
+    padding, whose rows are its priors, the padded model datasets the batch was collated from
+    (None for collated input), and its routes, validation and metadata."""
+
+    label: Hashable
+    batch: dict[str, torch.Tensor]
+    datasets: list[dict[str, np.ndarray]] | None
+    routes: list[str]
+    validation: list[dict[str, Any]]
+    metadata: _Metadata | None
+
+    @property
+    def rows(self) -> int:
+        return int(self.batch['X'].shape[0])
 
 
 class Api:
@@ -318,20 +352,50 @@ class Api:
         - ``collateGrouped`` turns model datasets into the tensor batch consumed
           by the router and approximator.
         """
+        return self._prepare(
+            data,
+            formula=formula,
+            priors=priors,
+            preprocessor=preprocessor,
+            fit_preprocessor=fit_preprocessor,
+            group_name=group_name,
+            likelihood_family=likelihood_family,
+            q=q,
+            stage=stage,
+            dry_run=dry_run,
+        )[0]
+
+    def _prepare(
+        self,
+        data: Any,
+        *,
+        formula: str | None = None,
+        priors: Any = None,
+        preprocessor: DataPreprocessor | str | Path | None = None,
+        fit_preprocessor: bool = True,
+        group_name: str | None = None,
+        likelihood_family: int | str | None = None,
+        q: int | None = None,
+        stage: str = 'batch',
+        dry_run: bool = False,
+    ) -> tuple[Any, list[dict[str, np.ndarray]] | None, _Metadata | None]:
+        """``prepareData``'s stage value, plus the padded model datasets a formula batch was
+        collated from and the dataset's metadata (both None at earlier stages and for collated
+        input)."""
 
         if stage not in {'preprocessed', 'dataset', 'batch'}:
             raise ValueError(f'unknown prepareData stage: {stage}')
 
         if isinstance(data, Dataloader):
             batch = data.fullBatch()
-            return returnPreparedStage(batch, stage)
+            return returnPreparedStage(batch, stage), None, None
 
         if isinstance(data, (str, Path)):
             path = Path(data)
             if path.suffix == '.npz':
                 loader = Dataloader(path, batch_size=self.batch_size)
                 batch = loader.fullBatch()
-                return returnPreparedStage(batch, stage)
+                return returnPreparedStage(batch, stage), None, None
             if path.suffix == '.parquet':
                 data = pd.read_parquet(path)
             else:
@@ -347,23 +411,23 @@ class Api:
                 dry_run=dry_run,
             )
             if dry_run or stage == 'preprocessed':
-                return preprocessed
+                return preprocessed, None, None
             data = preprocessed
 
         if isinstance(data, Mapping) and isCollatedBatch(data):
-            return returnPreparedStage(dict(data), stage)
+            return returnPreparedStage(dict(data), stage), None, None
 
         if isinstance(data, Mapping) and isModelDataset(data):
             dataset = {str(k): v for k, v in data.items()}
             if stage == 'dataset':
-                return dataset
+                return dataset, None, None
             batch = collateGrouped([dataset])
-            return returnPreparedStage(batch, stage)
+            return returnPreparedStage(batch, stage), None, None
 
         if isinstance(data, Mapping) and isPreprocessedDict(data):
             if stage == 'preprocessed':
-                return {str(k): v for k, v in data.items()}
-            datasets = self._buildModelDatasets(
+                return {str(k): v for k, v in data.items()}, None, None
+            datasets, metadata = self._buildModelDatasets(
                 data,
                 formula=formula,
                 priors=priors,
@@ -371,9 +435,9 @@ class Api:
                 q=q,
             )
             if stage == 'dataset':
-                return datasets[0] if len(datasets) == 1 else datasets
-            batch = self._collateForSelectedSubmodel(datasets)
-            return returnPreparedStage(batch, stage)
+                return datasets[0] if len(datasets) == 1 else datasets, None, None
+            batch, padded = self._collateForSelectedSubmodel(datasets)
+            return returnPreparedStage(batch, stage), padded, metadata
 
         if not isinstance(data, Mapping):
             raise TypeError('router input must be tabular, path-backed, preprocessed, or collated')
@@ -387,6 +451,20 @@ class Api:
             raise TypeError('route requires data prepared to batch stage')
         routes, _ = self._routeBatch(batch)
         return routes
+
+    @overload
+    def sample(
+        self, data: list[pd.DataFrame] | tuple[pd.DataFrame, ...], **kwargs: Any
+    ) -> list[RouterResult | None]:
+        ...
+
+    @overload
+    def sample(self, data: Mapping[K, pd.DataFrame], **kwargs: Any) -> dict[K, RouterResult | None]:
+        ...
+
+    @overload
+    def sample(self, data: Any, **kwargs: Any) -> RouterResult:
+        ...
 
     @torch.no_grad()
     def sample(
@@ -403,8 +481,20 @@ class Api:
         seed: int | None = None,
         diagnostics: bool | None = None,  # deprecated alias of loo, removed in 0.7
         **prepare_kwargs: Any,
-    ) -> RouterResult:
+    ) -> RouterResult | list[RouterResult | None] | dict[Any, RouterResult | None]:
         """Sample from the posterior, routing each dataset to the smallest compatible submodel.
+
+        ``data`` is one dataset (a DataFrame, a parquet or ``.npz`` path, a preprocessed dict or a
+        collated batch) or many: a list, a tuple or a dict of DataFrames under one formula, one
+        set of priors and one preprocessing.  Many datasets return a list, or a dict with the
+        same keys, holding one result per dataset as ``sample(df)`` would return it, with its own
+        parameter names, scale information and group labels; datasets that need different
+        submodels run in one call.  A dataset that cannot be prepared (outside the checkpoint's
+        limits, a collinear named column, a term or prior name that does not resolve) is skipped:
+        ``None`` takes its place and one warning lists the skipped datasets with their reasons,
+        and if every dataset fails the first error is raised with the dataset named.  Unsupported
+        formula syntax and a wrong argument type raise at once.  Warnings name datasets by their
+        key or index, and by the pair of dataset and prior under several priors.
 
         By default (``refine=True``, i.e. ``refine='imh'``) the flow posterior is refined
         by Independence Metropolis-Hastings: the flow serves as the proposal of a Markov
@@ -459,7 +549,9 @@ class Api:
 
         ``seed`` seeds torch for this call only: two calls with one seed return the same draws,
         as after ``torch.manual_seed(seed)``, and the caller's CPU and CUDA random streams stay
-        as they were.
+        as they were.  It reproduces the call as a whole, so a dataset's draws differ between a
+        batched and a separate call, and between containers that order or size datasets
+        differently.
         """
 
         if diagnostics is not None:
@@ -483,42 +575,138 @@ class Api:
             preset = RANDOM_WALK_DEFAULT['cuda' if self.device.type == 'cuda' else 'cpu']
             moves = preset if random_walk is True else random_walk
 
-        self._param_names: dict[str, list[str]] | None = None
-        self._scale_info: 'ScaleInfo | None' = None
-        self._group_labels: list[str] | None = None
-        self._ffx_order: list[int] | None = None
-        batch = self.prepareData(data, **prepare_kwargs)
+        container = _asContainer(data)
+        labels, frames = ([0], [data]) if container is None else container
+        items = self._prepareDatasets(labels, frames, container is not None, prepare_kwargs)
+        prepared = [item for item in items if item is not None]
+
+        # every stage runs per chunk of at most batch_size rows; a chunk holds whole datasets of
+        # one submodel, sorted by size, and is cut inside a dataset only when it alone exceeds
+        # the chunk, so a result joins one slice in the common case
+        chunk_rows = self.batch_size or CHUNK_ROWS['cuda' if self.device.type == 'cuda' else 'cpu']
+        order = sorted(range(len(prepared)), key=lambda i: self._sizeKey(prepared[i]))
+        chunks = _cutChunks(prepared, order, chunk_rows)
+        pieces: list[list[dict[str, Any]]] = [[] for _ in prepared]
+        n_rows = sum(item.rows for item in prepared)
+        # a one-chunk call shows no bar; otherwise `disable` stays unset so TQDM_DISABLE applies
+        silent = {'disable': True} if len(chunks) == 1 else {}
+        with _seeded(seed), tqdm(total=n_rows, unit='dataset', leave=False, **silent) as bar:
+            for chunk in chunks:
+                batch, routes = self._chunkBatch(prepared, chunk)
+                out = self._sampleChunk(
+                    batch,
+                    routes,
+                    n_samples=n_samples,
+                    method=method if do_refine else None,
+                    k_threshold=k_threshold,
+                    map_z_threshold=map_z_threshold,
+                    moves=moves,
+                    evidence=evidence,
+                    loo=loo,
+                )
+                offset = 0
+                for i, start, end in chunk:
+                    pieces[i].append(_sliceRows(out, offset, offset + end - start))
+                    offset += end - start
+                bar.update(offset)
+        results = [
+            self._assembleResult(item, pieces[i], prepare_kwargs) for i, item in enumerate(prepared)
+        ]
+
+        self._warnSafeguards(
+            _flagRows(results, 'safeguards'),
+            _flagRows(results, 'evidence'),
+            _rowLabels(prepared, with_dataset=container is not None),
+        )
+        if container is None:
+            return results[0]
+        found = iter(results)
+        out = [None if item is None else next(found) for item in items]
+        return dict(zip(labels, out)) if isinstance(data, Mapping) else out
+
+    def _prepareDatasets(
+        self,
+        labels: list[Hashable],
+        frames: list[Any],
+        container: bool,
+        prepare_kwargs: dict[str, Any],
+    ) -> list[_Prepared | None]:
+        """Prepare and route each dataset on its own.  A ``ValueError`` or ``KeyError`` raised
+        for one dataset of a container skips it (None in its place, one warning per call);
+        other errors raise at once, and so does the first error when every dataset fails.
+        Preparation warnings are emitted once per message with the datasets that raised them."""
+        items: list[_Prepared | None] = []
+        skipped: list[tuple[Hashable, Exception]] = []
+        noted: dict[tuple[type, str], list[Hashable]] = {}
+        for label, frame in zip(labels, frames):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter('always')
+                try:
+                    items.append(self._prepareDataset(frame, label, prepare_kwargs))
+                except (ValueError, KeyError) as exc:
+                    items.append(None)
+                    skipped.append((label, exc))
+            for w in caught:
+                noted.setdefault((w.category, str(w.message)), []).append(label)
+        if not any(item is not None for item in items):
+            label, exc = skipped[0]
+            if container:
+                exc.add_note(f'raised while preparing dataset {label!r}')
+            raise exc
+        for (category, message), who in noted.items():
+            text = f'dataset(s) {_listed(who)}: {message}' if container else message
+            warnings.warn(text, category, skip_file_prefixes=INTERNAL_PREFIXES)
+        if skipped:
+            reasons = [
+                f'  {label!r}: {str(exc).splitlines()[0]}' for label, exc in skipped[:LISTED_ROWS]
+            ]
+            if len(skipped) > LISTED_ROWS:
+                reasons.append(f'  … {len(skipped)} in all')
+            warnings.warn(
+                f'Skipped {len(skipped)} of {len(items)} dataset(s) that could not be prepared '
+                '(None in their place):\n' + '\n'.join(reasons),
+                skip_file_prefixes=INTERNAL_PREFIXES,
+            )
+        return items
+
+    def _prepareDataset(
+        self, data: Any, label: Hashable, prepare_kwargs: dict[str, Any]
+    ) -> _Prepared:
+        """One dataset prepared to a batch at its own padding, validated and routed."""
+        batch, datasets, metadata = self._prepare(data, **prepare_kwargs)
         if not isinstance(batch, dict) or not isCollatedBatch(batch):
             raise TypeError('sample requires data prepared to batch stage')
         self._validateBatchFormat(batch)
         routes, validation = self._routeBatch(batch)
-        batch = toDevice(batch, self.device)
-        # every stage runs per chunk of at most batch_size rows, each trimmed to its own padding
-        B = int(batch['X'].shape[0])
-        chunk_rows = self.batch_size or CHUNK_ROWS['cuda' if self.device.type == 'cuda' else 'cpu']
-        bounds = [(start, min(start + chunk_rows, B)) for start in range(0, B, chunk_rows)]
-        chunks = []
-        # a one-chunk call shows no bar; otherwise `disable` stays unset so TQDM_DISABLE applies
-        silent = {'disable': True} if len(bounds) == 1 else {}
-        with _seeded(seed), tqdm(total=B, unit='dataset', leave=False, **silent) as bar:
-            for start, end in bounds:
-                chunk = trimBatchPadding(sliceBatch(batch, start, end))
-                chunks.append(
-                    self._sampleChunk(
-                        chunk,
-                        routes[start:end],
-                        n_samples=n_samples,
-                        method=method if do_refine else None,
-                        k_threshold=k_threshold,
-                        map_z_threshold=map_z_threshold,
-                        moves=moves,
-                        evidence=evidence,
-                        loo=loo,
-                    )
-                )
-                bar.update(end - start)
-        proposal, safeguards, log_ev, diags = self._joinChunks(chunks, batch)
-        self._warnSafeguards(safeguards, log_ev)
+        for entry in validation:
+            entry['dataset'] = label
+        return _Prepared(
+            label, toDevice(batch, self.device), datasets, routes, validation, metadata
+        )
+
+    def _sizeKey(self, item: _Prepared) -> tuple[tuple[float, str], int, int]:
+        """Submodel, then number of groups, then largest group."""
+        submodel = routingSortKey(self._submodel_by_id[item.routes[0]])
+        return submodel, int(item.batch['m'].max()), int(item.batch['ns'].max())
+
+    def _chunkBatch(
+        self, items: list[_Prepared], chunk: list[tuple[int, int, int]]
+    ) -> tuple[dict[str, torch.Tensor], list[str]]:
+        """A chunk's batch at its own padding and its routes: a slice of one dataset's batch, or
+        the datasets of several collated together."""
+        if len(chunk) == 1:
+            i, start, end = chunk[0]
+            return trimBatchPadding(sliceBatch(items[i].batch, start, end)), items[i].routes
+        datasets = [dataset for i, _, _ in chunk for dataset in items[i].datasets]
+        routes = [route for i, _, _ in chunk for route in items[i].routes]
+        return toDevice(collateGrouped(datasets), self.device), routes
+
+    def _assembleResult(
+        self, item: _Prepared, pieces: list[dict[str, Any]], prepare_kwargs: dict[str, Any]
+    ) -> RouterResult:
+        """One dataset's result from its slices of the chunk outputs."""
+        batch = item.batch
+        proposal, safeguards, log_ev, diags = self._joinChunks(pieces, batch)
         self._rescaleProposal(proposal, batch)
         prior_params: dict[str, np.ndarray] = {
             key: batch[key].float().cpu().numpy()
@@ -528,21 +716,23 @@ class Api:
         for key in ('family_ffx', 'family_sigma_rfx', 'family_sigma_eps'):
             if key in batch:
                 prior_params[key] = batch[key].long().cpu().numpy()
-        self._restoreFixedOrder(proposal, prior_params, diags, safeguards)
-        ns_arr = batch['ns'].cpu().numpy() if 'ns' in batch else None
+        meta = item.metadata
+        self._restoreFixedOrder(
+            proposal, prior_params, diags, safeguards, None if meta is None else meta.ffx_order
+        )
         return RouterResult(
             proposal=proposal,
-            routes=routes,
-            validation=validation,
+            routes=item.routes,
+            validation=item.validation,
             diagnostics=diags,
-            param_names=self._param_names,
+            param_names=None if meta is None else meta.param_names,
             formula=prepare_kwargs.get('formula'),
             priors_str=_priorStr(prepare_kwargs.get('priors')),
-            group_names=self._group_labels,
+            group_names=None if meta is None else meta.group_names,
             prior_params=prior_params or None,
-            scale_info=self._scale_info,
+            scale_info=None if meta is None else meta.scale_info,
             batch=batch,
-            ns=ns_arr,
+            ns=batch['ns'].cpu().numpy() if 'ns' in batch else None,
             safeguards=safeguards,
             evidence=log_ev,
         )
@@ -608,36 +798,42 @@ class Api:
         return proposal, joined['safeguards'], joined['evidence'], diags
 
     @staticmethod
-    def _warnSafeguards(safeguards: dict[str, Any] | None, evidence: dict[str, Any] | None) -> None:
-        """At most one warning per type for the rows the safeguards flagged."""
+    def _warnSafeguards(
+        safeguards: dict[str, Any] | None, evidence: dict[str, Any] | None, labels: list[Any]
+    ) -> None:
+        """At most one warning per type for the rows the safeguards flagged, named by their
+        ``labels``; values are printed for the first ``LISTED_ROWS`` of them."""
 
         def warn(message: str) -> None:
             warnings.warn(message, skip_file_prefixes=INTERNAL_PREFIXES)
+
+        def named(flagged: np.ndarray) -> tuple[np.ndarray, str]:
+            return flagged[:LISTED_ROWS], _listed([labels[i] for i in flagged])
 
         sg = safeguards or {}
         if 'accept_flag' in sg:
             a_bar, ess_min, ran = sg['accept_rate'], sg['ess_min'], sg['random_walk_ran']
             # where the random-walk moves ran, they continued the chains these two warnings describe
-            flagged = np.flatnonzero(sg['accept_flag'] & ~ran)
+            flagged, names = named(np.flatnonzero(sg['accept_flag'] & ~ran))
             if flagged.size:
                 a_vals = ', '.join(f'{a_bar[i]:.2f}' for i in flagged)
                 s_vals = ', '.join(f'{int(sg["suggested_n_samples"][i])}' for i in flagged)
                 respectively = ' (respectively)' if flagged.size > 1 else ''
                 warn(
-                    f'Low IMH acceptance for dataset(s) {flagged.tolist()}: {a_vals} < '
+                    f'Low IMH acceptance for dataset(s) {names}: {a_vals} < '
                     f'{sg["accept_threshold"]:g}.\n'
                     'The network is far from the posterior, so the intervals can be too narrow. '
                     'Remedies, in order:\n'
                     f'  1. more draws: n_samples of at least {s_vals}{respectively}\n'
                     '  2. exact MCMC, e.g. NUTS'
                 )
-            flagged = np.flatnonzero(sg['ess_flag'] & ~ran)
+            flagged, names = named(np.flatnonzero(sg['ess_flag'] & ~ran))
             if flagged.size:
                 e_vals = ', '.join(f'{ess_min[i]:.0f}' for i in flagged)
-                low = flagged[ess_min[flagged] < IMH_ESS_NUTS]
-                caveat = f' (may not suffice for {low.tolist()})' if low.size else ''
+                _, low = named(flagged[ess_min[flagged] < IMH_ESS_NUTS])
+                caveat = f' (may not suffice for {low})' if low != '[]' else ''
                 warn(
-                    f'Low effective sample size (ESS) for dataset(s) {flagged.tolist()}: min ESS '
+                    f'Low effective sample size (ESS) for dataset(s) {names}: min ESS '
                     f'{e_vals} < {sg["ess_threshold"]:g}.\n'
                     'The IMH chains repeat few draws, so the intervals can be too narrow. '
                     'Remedies, in order:\n'
@@ -646,28 +842,28 @@ class Api:
                     '  3. exact MCMC, e.g. NUTS'
                 )
             # the moves replace the ESS warning, except where the IMH left them too little to work with
-            low = np.flatnonzero(ran & (ess_min < IMH_ESS_NUTS))
+            low, names = named(np.flatnonzero(ran & (ess_min < IMH_ESS_NUTS)))
             if low.size:
                 e_vals = ', '.join(f'{ess_min[i]:.0f}' for i in low)
                 warn(
-                    f'Very low IMH ESS before the random-walk moves for dataset(s) {low.tolist()}: '
+                    f'Very low IMH ESS before the random-walk moves for dataset(s) {names}: '
                     f'{e_vals} < {IMH_ESS_NUTS:g}.\n'
                     'The moves may not close the gap, so the intervals can still be too narrow.\n'
                     'Remedy: check against exact MCMC, e.g. NUTS.'
                 )
         if 'psis_fallback' in sg:
-            flagged = np.flatnonzero(sg['psis_fallback'])
+            flagged, names = named(np.flatnonzero(sg['psis_fallback']))
             if flagged.size:
                 k_vals = ', '.join(f'{sg["psis_k"][i]:.2f}' for i in flagged)
                 warn(
-                    f'PSIS reliability check failed for dataset(s) {flagged.tolist()} '
+                    f'PSIS reliability check failed for dataset(s) {names} '
                     f'(k̂ = {k_vals} > {sg["psis_k_threshold"]:g}): the posterior approximation '
                     'may be inaccurate and the importance correction is not applicable, so the '
                     'raw posterior was returned there. Treat those results with caution and '
                     'consider exact MCMC (e.g. NUTS) instead.'
                 )
         if evidence is not None:
-            flagged = np.flatnonzero(evidence['psis_flag'])
+            flagged, names = named(np.flatnonzero(evidence['psis_flag']))
             if flagged.size:
                 pool_k = evidence['pool_psis_k']
                 k_max = (
@@ -675,7 +871,7 @@ class Api:
                 )
                 k_vals = ', '.join(f'{k_max[i]:.2f}' for i in flagged)
                 warn(
-                    f'Evidence reliability check failed for dataset(s) {flagged.tolist()} '
+                    f'Evidence reliability check failed for dataset(s) {names} '
                     f'(PSIS k̂ of the evidence pass or the flow pool = {k_vals} > '
                     f'{evidence["psis_k_threshold"]:g}): '
                     'the log-evidence and any Bayes factor built on it may be inaccurate. Treat '
@@ -683,28 +879,28 @@ class Api:
                     'NUTS) draws instead.'
                 )
         if 'map_z_flag' in sg:
-            flagged = np.flatnonzero(sg['map_z_flag'])
+            flagged, names = named(np.flatnonzero(sg['map_z_flag']))
             if flagged.size:
                 z_vals = ', '.join(f'{sg["map_z"][i]:.1f}' for i in flagged)
                 warn(
-                    f'MAP check failed for dataset(s) {flagged.tolist()}: max |posterior mean − '
+                    f'MAP check failed for dataset(s) {names}: max |posterior mean − '
                     f'MAP| / posterior SD = {z_vals} > {sg["map_z_threshold"]:g}.\n'
                     'The posterior disagrees with the analytical point estimates, so the data may '
                     'lie outside what the network was trained on.\n'
                     'Remedy: exact MCMC, e.g. NUTS.'
                 )
 
+    @staticmethod
     def _restoreFixedOrder(
-        self,
         proposal: Proposal,
         prior_params: dict[str, np.ndarray],
         diags: dict[str, Any],
         safeguards: dict[str, Any] | None,
+        order: list[int] | None,
     ) -> None:
         """Permute the fixed-effect columns from the model's layout (random slopes first) back
         to the user's formula order. Padding columns stay in place, and ``result.batch`` keeps
         the model's layout."""
-        order = self._ffx_order
         if order is None or order == sorted(order):
             return
 
@@ -974,9 +1170,11 @@ class Api:
         """
         unique_ids = list(dict.fromkeys(routes))
         if len(unique_ids) != 1:
-            raise NotImplementedError(
-                'mixed-submodel sample is not yet supported; route one compatible '
-                'dataset family at a time'
+            # datasets given as DataFrames never share a chunk across submodels; the rows of one
+            # collated batch are padded alike and can only run on one
+            raise ValueError(
+                f'the rows of a collated batch route to different submodels {unique_ids}; pass '
+                'the datasets as a list or dict of DataFrames instead'
             )
         submodel_id = unique_ids[0]
         model = self.model(submodel_id)
@@ -1249,7 +1447,8 @@ class Api:
         priors: Any,
         likelihood_family: int | str | None,
         q: int | None,
-    ) -> list[dict[str, np.ndarray]]:
+    ) -> tuple[list[dict[str, np.ndarray]], _Metadata]:
+        """One model dataset per prior, and the dataset's metadata."""
         required = ('X', 'y', 'groups', 'columns', 'd', 'n', 'ns', 'm', 'y_type')
         missing = [key for key in required if key not in preprocessed]
         if missing:
@@ -1305,7 +1504,7 @@ class Api:
                 'suppress the fixed intercept with 0 +'
             )
         # the model sees the random slopes first, in the random term's order; every output
-        # is mapped back to the user's order (`fixed_names`) through `_ffx_order`
+        # is mapped back to the user's order (`fixed_names`) through `ffx_order`
         slope_indices = resolveFixedIndices([t for t in random_terms if t != '1'], columns)
         missing = [columns[idx] for idx in slope_indices if idx not in fixed_indices]
         if missing:
@@ -1316,16 +1515,14 @@ class Api:
         intercept = [-1] if spec.intercept else []  # -1 stands for the column of ones
         user_columns = intercept + fixed_indices
         model_columns = intercept + slope_indices + other_indices
-        self._ffx_order = [model_columns.index(idx) for idx in user_columns]
+        ffx_order = [model_columns.index(idx) for idx in user_columns]
         fixed_names = ['Intercept' if idx < 0 else columns[idx] for idx in user_columns]
         X_parts = [np.ones(len(y)) if idx < 0 else X_pre[:, idx] for idx in model_columns]
         X = np.column_stack(X_parts) if X_parts else np.empty((X_pre.shape[0], 0))
 
         Z = buildRandomDesign(X_pre, columns, random_terms)
         random_names = self._randomNames(random_terms, columns)
-        self._param_names = {'ffx': list(fixed_names), 'sigma_rfx': list(random_names)}
         levels = preprocessed.get('group_levels')  # the preprocessor's label of each group code
-        self._group_labels = None if levels is None else [str(v) for v in levels]
 
         # Build scale info for optional back-transformation to original X units
         x_means_meta = np.asarray(
@@ -1337,14 +1534,19 @@ class Api:
 
         si_means = [0.0 if idx < 0 else float(x_means_meta[idx]) for idx in user_columns]
         si_stds = [1.0 if idx < 0 else float(x_stds_meta[idx]) for idx in user_columns]
-        self._scale_info = ScaleInfo(
-            y_mean=y_mean_meta,
-            y_std=y_std_meta,
-            x_means=np.array(si_means),
-            x_stds=np.array(si_stds),
-            param_names=list(fixed_names),
-            random_names=list(random_names),
-            has_intercept=spec.intercept,
+        metadata = _Metadata(
+            param_names={'ffx': list(fixed_names), 'sigma_rfx': list(random_names)},
+            scale_info=ScaleInfo(
+                y_mean=y_mean_meta,
+                y_std=y_std_meta,
+                x_means=np.array(si_means),
+                x_stds=np.array(si_stds),
+                param_names=list(fixed_names),
+                random_names=list(random_names),
+                has_intercept=spec.intercept,
+            ),
+            group_names=None if levels is None else [str(v) for v in levels],
+            ffx_order=ffx_order,
         )
 
         actual_d = int(X.shape[-1])
@@ -1402,23 +1604,18 @@ class Api:
         for prior_index, (prior_name, prior_values) in enumerate(prior_variants):
             dataset = {**base, **prior_values}
             dataset['_router_prior_index'] = np.array(prior_index, dtype=np.int64)
-            dataset['_router_source_index'] = np.array(0, dtype=np.int64)
             if prior_name is not None:
                 dataset['_router_prior_name'] = np.array(prior_name)
             datasets.append(dataset)
-        return datasets
+        return datasets, metadata
 
     def _collateForSelectedSubmodel(
         self, datasets: list[dict[str, np.ndarray]]
-    ) -> dict[str, torch.Tensor]:
+    ) -> tuple[dict[str, torch.Tensor], list[dict[str, np.ndarray]]]:
+        """The batch of one dataset's priors, padded to the submodel they route to (the same
+        for every prior, as routing reads the dimensions only), and the padded datasets."""
         tentative = collateGrouped(datasets)
         routes, _ = self._routeBatch(tentative)
-        if len(set(routes)) != 1:
-            raise NotImplementedError(
-                'mixed-submodel prior batches are not reassembled yet; use one compatible '
-                'dataset family at a time'
-            )
-
         selected = self._submodel_by_id[routes[0]]
         max_d = routeValue(selected, 'max_d')
         max_q = routeValue(selected, 'max_q')
@@ -1430,7 +1627,7 @@ class Api:
         ]
         batch = collateGrouped(padded)
         self._attachRouterMetadata(batch, padded)
-        return batch
+        return batch, padded
 
     @staticmethod
     def _warnInconsistentColumns(
@@ -1488,10 +1685,6 @@ class Api:
             [int(np.asarray(dataset['_router_prior_index']).item()) for dataset in datasets],
             dtype=torch.int64,
         )
-        batch['_router_source_index'] = torch.as_tensor(
-            [int(np.asarray(dataset['_router_source_index']).item()) for dataset in datasets],
-            dtype=torch.int64,
-        )
         batch['_router_prior_name'] = [
             str(np.asarray(dataset['_router_prior_name']).item())
             if '_router_prior_name' in dataset
@@ -1519,8 +1712,6 @@ class Api:
             }
             if '_router_prior_index' in batch:
                 report['prior_index'] = int(batch['_router_prior_index'][i].item())
-            if '_router_source_index' in batch:
-                report['source_index'] = int(batch['_router_source_index'][i].item())
             if '_router_prior_name' in batch:
                 report['prior_name'] = batch['_router_prior_name'][i]
             validation.append(report)
@@ -2153,6 +2344,64 @@ def _renamedArg(old: str, old_value: Any, new: str, new_value: Any) -> Any:
     return old_value
 
 
+def _asContainer(data: Any) -> tuple[list[Hashable], list[pd.DataFrame]] | None:
+    """The labels and frames of a list, tuple or dict of DataFrames; None for one dataset."""
+    if isinstance(data, (list, tuple)):
+        labels, frames = list(range(len(data))), list(data)
+    elif isinstance(data, Mapping) and (
+        not data or any(isinstance(v, pd.DataFrame) for v in data.values())
+    ):
+        labels, frames = list(data), list(data.values())
+    else:
+        return None
+    if not frames:
+        raise ValueError('sample needs at least one dataset')
+    other = [label for label, frame in zip(labels, frames) if not isinstance(frame, pd.DataFrame)]
+    if other:
+        raise TypeError(
+            f'every dataset of a list, tuple or dict must be a DataFrame; dataset(s) '
+            f'{_listed(other)} are not'
+        )
+    return labels, frames
+
+
+def _cutChunks(
+    items: list[_Prepared], order: list[int], chunk_rows: int
+) -> list[list[tuple[int, int, int]]]:
+    """Chunks of at most ``chunk_rows`` rows over the items in ``order``, as (item, start, end)
+    slices.  A chunk never mixes submodels, and a cut falls on an item boundary unless one
+    item alone has more rows than a chunk."""
+    chunks: list[list[tuple[int, int, int]]] = []
+    rows = chunk_rows  # the open chunk's rows: full, so the first item opens a new one
+    for i in order:
+        item = items[i]
+        if item.rows > chunk_rows:
+            chunks += [
+                [(i, start, min(start + chunk_rows, item.rows))]
+                for start in range(0, item.rows, chunk_rows)
+            ]
+            rows = chunk_rows
+        elif rows + item.rows > chunk_rows or items[chunks[-1][0][0]].routes[0] != item.routes[0]:
+            chunks.append([(i, 0, item.rows)])
+            rows = item.rows
+        else:
+            chunks[-1].append((i, 0, item.rows))
+            rows += item.rows
+    return chunks
+
+
+def _sliceRows(out: Any, start: int, end: int) -> Any:
+    """Rows [start, end) of a chunk's output: the proposal and its per-row arrays (numpy or
+    torch, nested dicts included); scalars and None pass through."""
+    if isinstance(out, Proposal):
+        return out.slice_b(start, end)
+    if isinstance(out, dict):
+        return {key: _sliceRows(value, start, end) for key, value in out.items()}
+    if (torch.is_tensor(out) or isinstance(out, np.ndarray)) and out.ndim:
+        return out[start:end]
+    return out
+
+
 def _joinRows(parts: list[dict[str, Any]]) -> dict[str, Any]:
     """Concatenate the chunks' per-row arrays (numpy or torch, nested dicts included) along
     the row axis; scalars and None are the same in every chunk and come from the first."""
@@ -2168,6 +2417,39 @@ def _joinRows(parts: list[dict[str, Any]]) -> dict[str, Any]:
         else:
             out[key] = first
     return out
+
+
+def _rowLabels(items: list[_Prepared], *, with_dataset: bool) -> list[Any]:
+    """How the warnings name each row, in the items' order: by its dataset label, or by the
+    pair of dataset label and prior (its name, else its index) when a dataset has several
+    priors.  A single dataset drops the dataset half, so its rows read as its priors."""
+    several = any(item.rows > 1 for item in items)
+    labels = []
+    for item in items:
+        for entry in item.validation:
+            prior = entry.get('prior_name')
+            prior = entry['index'] if prior is None else prior
+            if not with_dataset:
+                labels.append(prior)
+            else:
+                labels.append((item.label, prior) if several else item.label)
+    return labels
+
+
+def _flagRows(results: list[RouterResult], attr: str) -> dict[str, Any] | None:
+    """The results' safeguards or evidence joined row by row for the warnings; ``ess`` is
+    (rows, globals) and differs in width across submodels, and no warning reads it."""
+    parts = [getattr(result, attr) for result in results]
+    if parts[0] is None:
+        return None
+    return _joinRows([{k: v for k, v in part.items() if k != 'ess'} for part in parts])
+
+
+def _listed(labels: list[Any]) -> str:
+    """A list of labels, cut after ``LISTED_ROWS`` with the count."""
+    if len(labels) <= LISTED_ROWS:
+        return str(labels)
+    return f'{str(labels[:LISTED_ROWS])[:-1]}, … {len(labels)} in all]'
 
 
 def _priorRow(result: RouterResult, prior_id: int | str) -> int:
