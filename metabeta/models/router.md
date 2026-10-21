@@ -38,7 +38,8 @@ Current status:
   - Run posterior sampling via `Approximator.estimate`.
   - Return `RouterResult(proposal, routes, validation, diagnostics)`.
   - `diagnostics=True` attaches `ppc_nll` and `param_summary` (mean/median/95% CI).
-  - TODO: mixed-submodel reassembly.
+  - A list, tuple or dict of DataFrames gives one result per dataset; datasets that route to
+    different submodels run as one chunk per submodel.
 
 - `[done] Router.forward(data, **prepare_kwargs)` / `Router.log_prob(data, **prepare_kwargs)`
   - `log_prob()` is the public inference API; `forward()` is the legacy alias.
@@ -264,13 +265,11 @@ Routing policy:
 
 - `[done]` Evaluate all submodels compatible with the dataset/prior row.
 - Select the smallest compatible model by `(max_d, max_q, max_m, max_n_total)`.
-- `[todo]` Split mixed batches by selected submodel.
-- `[todo]` Run each sub-batch independently.
-- `[todo]` Reassemble outputs in original dataset order.
-
-Current limitation:
-
-- Mixed-submodel batches still raise `NotImplementedError`.
+- `[done]` `sample()` prepares and routes each DataFrame of a list, tuple or dict on its own,
+  sorts the datasets by submodel and size, runs chunks of at most `batch_size` rows that never
+  mix submodels, and returns the results in input order.
+- Collated batches stay single-dataset inputs: their rows are padded alike, so rows that route
+  to different submodels raise a `ValueError`.
 
 ## Inference Results
 
@@ -284,7 +283,7 @@ Current limitation:
 Validation reports now include prior metadata when available:
 
 - `prior_index`
-- `source_index`
+- `dataset` (the dict key or list index; 0 for a single dataset)
 - `prior_name`
 
 Posterior samples should keep the existing `Proposal` shape conventions. If
@@ -327,7 +326,7 @@ dataset order.
 - `[done]` `sample()` returns valid `Proposal` shapes.
 - `[done]` `sample(diagnostics=True)` returns `ppc_nll` and `param_summary`.
 - `[done]` `log_prob()` accepts correctly shaped parameter inputs and rejects malformed ones.
-- `[todo]` `sample()` restores original dataset order (mixed-submodel path).
+- `[done]` `sample()` returns the results of a list or dict in input order, mixed submodels included.
 - `[todo]` Broader test run once required local fixture data exists.
 
 ## Assumptions
