@@ -3,6 +3,7 @@
 Every test goes through `Api` on the tiny-Approximator joint checkpoint, never a private helper.
 """
 
+import dataclasses
 import inspect
 import logging
 import os
@@ -21,7 +22,7 @@ from scipy import stats
 import torch
 
 from metabeta.models.api import Api
-from test_router import _write_tiny_approximator_checkpoint
+from test_router import _write_tiny_approximator_checkpoint, _write_two_submodel_checkpoint
 
 
 @pytest.fixture(scope='module')
@@ -1134,3 +1135,284 @@ def test_from_pretrained_says_batch_size_counts_rows():
     section = doc.split('batch_size:')[1].split('warmup:')[0]
 
     assert 'rows' in section and '64' in section and 'CUDA' in section
+
+
+def _twoStudies() -> list[pd.DataFrame]:
+    """Two sleepstudy datasets of different sizes."""
+    return [_sleepstudy(m=12, seed=1), _sleepstudy(m=8, n_i=6, seed=2)]
+
+
+def _assertSameScaleInfo(a, b) -> None:
+    fields, other = dataclasses.asdict(a), dataclasses.asdict(b)
+    assert fields.keys() == other.keys()
+    for key in fields:
+        np.testing.assert_array_equal(fields[key], other[key], err_msg=key)
+
+
+def test_a_list_or_dict_of_dataframes_returns_one_result_per_dataset(api: Api):
+    dfs = _twoStudies()
+    kwargs = dict(formula=_FORMULA, n_samples=1000, refine=False, fit_preprocessor=True)
+    separate = [api.sample(df, **kwargs) for df in dfs]
+
+    as_list = api.sample(dfs, **kwargs)
+    as_tuple = api.sample(tuple(dfs), **kwargs)
+    as_dict = api.sample({'a': dfs[0], (2, 'b'): dfs[1]}, **kwargs)
+
+    assert isinstance(as_list, list) and isinstance(as_tuple, list) and isinstance(as_dict, dict)
+    assert list(as_dict) == ['a', (2, 'b')]
+    assert len(as_list) == len(as_tuple) == 2
+    for results in (as_list, as_tuple, list(as_dict.values())):
+        for result, alone in zip(results, separate):
+            assert result.param_names == alone.param_names
+            _assertSameScaleInfo(result.scale_info, alone.scale_info)
+            assert result.group_names == alone.group_names
+            assert result.prior_params.keys() == alone.prior_params.keys()
+            for key in alone.prior_params:
+                np.testing.assert_array_equal(result.prior_params[key], alone.prior_params[key])
+            assert result.routes == alone.routes
+            assert result.formula == alone.formula
+            assert result.proposal.samples_g.shape == alone.proposal.samples_g.shape
+            assert result.proposal.rfx.shape == alone.proposal.rfx.shape  # its own group count
+            assert result.batch['y'].shape == alone.batch['y'].shape  # its own padding
+            assert torch.equal(result.batch['y'], alone.batch['y'])
+            assert result.ns.shape == alone.ns.shape
+            assert result.diagnostics['fit_label'] == 'R²'
+            assert result.diagnostics['pp'].mean.shape == alone.diagnostics['pp'].mean.shape
+            mean, mean_alone = result.proposal.ffx.mean(dim=-2), alone.proposal.ffx.mean(dim=-2)
+            sd = alone.proposal.ffx.std(dim=-2)
+            assert ((mean - mean_alone).abs() < 0.25 * sd + 1e-6).all()  # ≈ 5 standard errors
+
+
+def test_each_dataset_names_its_own_reference_level(api: Api):
+    rng = np.random.default_rng(1)
+    mostly_drug = np.where(rng.random(120) < 0.3, 'ctrl', 'drug')
+    mostly_ctrl = np.where(rng.random(120) < 0.3, 'drug', 'ctrl')
+    dfs = {
+        'drug': _sleepstudy(Treatment=mostly_drug),
+        'ctrl': _sleepstudy(Treatment=mostly_ctrl),
+    }
+
+    results = api.sample(dfs, formula='Reaction ~ Days + Treatment + (1 | Subject)', n_samples=8)
+
+    assert results['drug'].param_names['ffx'] == ['Intercept', 'Days', 'Treatment_ctrl']
+    assert results['ctrl'].param_names['ffx'] == ['Intercept', 'Days', 'Treatment_drug']
+    assert '| Treatment_ctrl ' in api.posteriorSummary(results['drug'])
+    assert '| Treatment_drug ' in api.posteriorSummary(results['ctrl'])
+    assert 'Treatment_drug' not in api.posteriorSummary(results['drug'])
+
+
+def test_a_dataset_outside_the_limits_is_skipped_and_the_others_fitted(api: Api):
+    dfs = [_sleepstudy(seed=1), _sleepstudy(m=3), _sleepstudy(seed=2)]
+
+    results, caught = _warningsOf(lambda: api.sample(dfs, formula=_FORMULA, n_samples=8))
+
+    assert results[1] is None
+    assert results[0].proposal is not None and results[2].proposal is not None
+    (skipped,) = [w for w in caught if 'Skipped' in str(w.message)]
+    assert 'Skipped 1 of 3 dataset(s)' in str(skipped.message)
+    assert '\n  1: ' in str(skipped.message)
+    assert '3 groups (supported: 5 to 200)' in str(skipped.message)
+    assert skipped.filename == __file__
+
+
+def test_every_dataset_failing_raises_the_first_error_naming_its_dataset(api: Api):
+    dfs = {'x': _sleepstudy(m=3), 'y': _sleepstudy(m=210)}
+
+    with pytest.raises(ValueError, match='3 groups') as error:
+        api.sample(dfs, formula=_FORMULA, n_samples=8)
+
+    assert error.value.__notes__ == ["raised while preparing dataset 'x'"]
+    with pytest.raises(ValueError, match='3 groups') as error:
+        api.sample(_sleepstudy(m=3), formula=_FORMULA, n_samples=8)
+    assert not hasattr(error.value, '__notes__')
+
+
+def test_unsupported_syntax_raises_at_once_for_a_container(api: Api):
+    with pytest.raises(NotImplementedError, match=r'\(1 \|\| Subject\)'):
+        api.sample(_twoStudies(), formula='Reaction ~ Days + (1 || Subject)', n_samples=8)
+
+
+@pytest.mark.parametrize(
+    ('data', 'error', 'match'),
+    [
+        ([], ValueError, 'at least one'),
+        ({}, ValueError, 'at least one'),
+        ([_sleepstudy(), 'sleepstudy.parquet'], TypeError, r'dataset\(s\) \[1\] are not'),
+        ({'a': _sleepstudy(), 'b': None}, TypeError, r"dataset\(s\) \['b'\] are not"),
+    ],
+    ids=['empty-list', 'empty-dict', 'list', 'dict'],
+)
+def test_empty_containers_and_non_dataframe_elements_raise(api: Api, data, error, match):
+    with pytest.raises(error, match=match):
+        api.sample(data, formula=_FORMULA, n_samples=8)
+
+
+def test_preparation_warnings_fire_once_per_message_naming_the_datasets(api: Api):
+    dfs = _twoStudies()
+    for df in dfs:
+        df['Reaction'] = (df['Reaction'] > df['Reaction'].median()).astype(int)
+
+    _, caught = _warningsOf(
+        lambda: api.sample(dfs, formula=_FORMULA, n_samples=8, likelihood_family='normal')
+    )
+
+    (hint,) = [w for w in caught if "'bernoulli'" in str(w.message)]
+    assert str(hint.message).startswith('dataset(s) [0, 1]: ')
+    assert hint.filename == __file__
+
+
+def _mapWarning(caught: list[warnings.WarningMessage]) -> str:
+    (message,) = [str(w.message) for w in caught if str(w.message).startswith('MAP check')]
+    return message
+
+
+def test_safeguard_warnings_name_datasets_by_key_or_index(api: Api):
+    dfs = _twoStudies()
+    kwargs = dict(formula=_FORMULA, n_samples=64, map_z_threshold=0.0)
+
+    _, by_index = _warningsOf(lambda: api.sample(dfs, **kwargs))
+    _, by_key = _warningsOf(lambda: api.sample({'a': dfs[0], (2, 'b'): dfs[1]}, **kwargs))
+
+    assert 'MAP check failed for dataset(s) [0, 1]:' in _mapWarning(by_index)
+    assert "MAP check failed for dataset(s) ['a', (2, 'b')]:" in _mapWarning(by_key)
+
+
+def test_safeguard_warnings_pair_dataset_and_prior_under_several_priors(api: Api):
+    dfs = {'a': _sleepstudy(seed=1), 'b': _sleepstudy(seed=2)}
+    priors = {'wide': None, 'narrow': {'fixed': {'Days': {'tau': 0.5}}}}
+    kwargs = dict(formula=_FORMULA, n_samples=64, map_z_threshold=0.0)
+
+    _, named = _warningsOf(lambda: api.sample(dfs, priors=priors, **kwargs))
+    _, indexed = _warningsOf(lambda: api.sample(dfs, priors=_priorGrid(2), **kwargs))
+    _, single = _warningsOf(lambda: api.sample(dfs['a'], priors=priors, **kwargs))
+
+    assert "[('a', 'wide'), ('a', 'narrow'), ('b', 'wide'), ('b', 'narrow')]" in _mapWarning(named)
+    assert "[('a', 0), ('a', 1), ('b', 0), ('b', 1)]" in _mapWarning(indexed)
+    assert "MAP check failed for dataset(s) ['wide', 'narrow']:" in _mapWarning(single)
+
+
+def test_safeguard_warnings_list_ten_rows_then_the_count(api: Api):
+    dfs = [_sleepstudy(seed=i) for i in range(12)]
+
+    _, caught = _warningsOf(
+        lambda: api.sample(dfs, formula=_FORMULA, n_samples=64, map_z_threshold=0.0)
+    )
+
+    message = _mapWarning(caught)
+    assert 'dataset(s) [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, … 12 in all]:' in message
+    z_values = message.split('posterior SD = ')[1].split(' >')[0]
+    assert len(z_values.split(', ')) == 10
+
+
+def test_seed_reproduces_a_container_call(api: Api):
+    dfs = {'a': _sleepstudy(seed=1), 'b': _sleepstudy(m=8, n_i=6, seed=2)}
+    kwargs = dict(formula=_FORMULA, n_samples=64, seed=0)
+    # load the routed model first: its initialization draws from the seeded stream
+    api.model(api.route(dfs['a'], formula=_FORMULA)[0])
+    torch.manual_seed(1)
+    expected = torch.rand(3)
+
+    torch.manual_seed(1)
+    first = api.sample(dfs, **kwargs)
+    again = api.sample(dfs, **kwargs)
+    alone = api.sample(dfs['b'], **kwargs)
+
+    assert torch.equal(torch.rand(3), expected)
+    for key in dfs:
+        assert torch.equal(first[key].proposal.samples_g, again[key].proposal.samples_g)
+    assert not torch.equal(first['b'].proposal.samples_g, alone.proposal.samples_g)
+
+
+def test_validation_entries_carry_their_dataset_label(api: Api):
+    dfs = {'a': _sleepstudy(seed=1), (2, 'b'): _sleepstudy(seed=2)}
+
+    results = api.sample(dfs, formula=_FORMULA, priors=_priorGrid(2), n_samples=8)
+    alone = api.sample(dfs['a'], formula=_FORMULA, n_samples=8)
+
+    for key, result in results.items():
+        assert [entry['dataset'] for entry in result.validation] == [key, key]
+        assert [entry['index'] for entry in result.validation] == [0, 1]
+        assert [entry['prior_index'] for entry in result.validation] == [0, 1]
+        assert 'source_index' not in result.validation[0]
+    assert alone.validation[0]['dataset'] == 0
+
+
+def test_reports_work_on_each_result_of_a_container(api: Api):
+    dfs = {'a': _sleepstudy(seed=1), 'b': _sleepstudy(m=8, n_i=6, seed=2)}
+    priors = {'wide': None, 'narrow': {'fixed': {'Days': {'tau': 0.5}}}}
+    kwargs = dict(n_samples=64, evidence=True)
+    with_days = api.sample(dfs, formula=_FORMULA, priors=priors, **kwargs)
+    without = api.sample(dfs, formula='Reaction ~ 1 + (1 | Subject)', **kwargs)
+
+    for key, df in dfs.items():
+        bf = api.bayesFactor(without[key], with_days[key])
+        assert list(bf.index) == ['wide', 'narrow']
+        draws = api.posteriorDraws(with_days[key], prior_id='narrow')
+        assert list(draws.columns) == ['Intercept', 'Days', 'σ_Intercept', 'σ_Residual']
+        assert len(draws) == 64
+        summary = api.posteriorSummary(with_days[key], prior_id='narrow')
+        assert f'n = {len(df)}' in summary and f'm = {df["Subject"].nunique()}' in summary
+        rows, _ = _rfxRows(api.rfxSummary(with_days[key]), 'Intercept')
+        assert list(rows) == sorted(df['Subject'].unique())
+    with pytest.raises(ValueError, match='same data'):
+        api.bayesFactor(without['a'], with_days['b'])
+
+
+def test_a_dataset_with_more_priors_than_the_chunk_keeps_all_its_rows(api: Api):
+    dfs = [_sleepstudy(seed=1), _sleepstudy(m=8, n_i=6, seed=2), _sleepstudy(m=6, seed=3)]
+    kwargs = dict(formula=_FORMULA, n_samples=64, evidence=True, loo=True)
+    chunked = Api(api.joint_checkpoint, warmup=False, batch_size=3)
+
+    grid = chunked.sample(dfs, priors=_priorGrid(5), **kwargs)
+    one = chunked.sample(dfs, **kwargs)
+
+    for result in grid:
+        assert result.proposal.samples_g.shape[0] == 5
+        np.testing.assert_allclose(result.prior_params['tau_ffx'][:, 1], [0.5, 1, 1.5, 2, 2.5])
+        assert result.safeguards['ess'].shape[0] == 5
+        assert result.evidence['log_evidence'].shape == (5,)
+        assert result.diagnostics['fit_label'] == 'Mean R²'
+        assert result.diagnostics['loo_nll_vals'].shape == (5,)
+        assert result.diagnostics['pp'].mean.shape[0] == 5
+    for result, df in zip(one, dfs):
+        assert result.proposal.samples_g.shape[0] == 1
+        assert result.diagnostics['fit_label'] == 'R²'
+        assert result.proposal.rfx.shape[1] == df['Subject'].nunique()
+
+
+def test_datasets_routed_to_different_submodels_run_in_one_call(tmp_path: Path):
+    path = tmp_path / 'joint.pt'
+    torch.manual_seed(0)
+    _write_two_submodel_checkpoint(path)
+    api = Api(path, warmup=False)
+    rng = np.random.default_rng(1)
+    two = rng.choice(['a', 'b'], 120)
+    six = rng.choice(list('abcdef'), 120)
+    dfs = {'six': _sleepstudy(Treatment=six), 'two': _sleepstudy(Treatment=two)}
+    formula = 'Reaction ~ Days + Treatment + (1 | Subject)'
+
+    results, caught = _warningsOf(lambda: api.sample(dfs, formula=formula, n_samples=64))
+
+    assert list(results) == ['six', 'two']
+    assert results['two'].routes == ['tiny'] and results['six'].routes == ['tiny-8']
+    assert results['two'].routes == api.route(dfs['two'], formula=formula)
+    assert results['six'].routes == api.route(dfs['six'], formula=formula)
+    assert len(results['two'].param_names['ffx']) == 3
+    assert len(results['six'].param_names['ffx']) == 7
+    assert results['two'].batch['X'].shape[-1] == 4 and results['six'].batch['X'].shape[-1] == 8
+    assert results['two'].proposal.ffx.shape[-1] == 4 and results['six'].proposal.ffx.shape[-1] == 8
+    assert results['two'].safeguards['ess'].shape == (1, 4 + 2 + 1 + 1)
+    assert results['six'].safeguards['ess'].shape == (1, 8 + 2 + 1 + 1)
+    for key, result in results.items():
+        assert result.param_names['ffx'][:2] == ['Intercept', 'Days']
+        assert all(name.startswith('Treatment_') for name in result.param_names['ffx'][2:])
+        assert len(api.posteriorDraws(result).columns) == len(result.param_names['ffx']) + 2
+    assert all(w.filename == __file__ for w in caught)
+
+
+def test_sample_documents_containers_the_skip_rule_and_seed():
+    doc = inspect.getdoc(Api.sample)
+
+    assert 'list' in doc and 'dict' in doc
+    assert '``None``' in doc and 'skipped' in doc
+    assert 'seed' in doc and 'batched and a separate call' in doc
