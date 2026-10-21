@@ -78,6 +78,7 @@ draws = 1000   acceptance = 0.78   min ESS = 456   PSIS k̂ = 0.240   MAP z = 0.
 | [01-quickstart](https://github.com/adkipnis/metabeta/blob/main/demos/01-quickstart.ipynb) | First fit: summaries, plots and diagnostics | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/adkipnis/metabeta/blob/main/demos/01-quickstart.ipynb) |
 | [02-families](https://github.com/adkipnis/metabeta/blob/main/demos/02-families.ipynb) | Bernoulli and Poisson outcomes | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/adkipnis/metabeta/blob/main/demos/02-families.ipynb) |
 | [03-priors](https://github.com/adkipnis/metabeta/blob/main/demos/03-priors.ipynb) | Custom priors and Bayes factors | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/adkipnis/metabeta/blob/main/demos/03-priors.ipynb) |
+| [04-many-datasets](https://github.com/adkipnis/metabeta/blob/main/demos/04-many-datasets.ipynb) | Power analysis over many simulated datasets | [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/adkipnis/metabeta/blob/main/demos/04-many-datasets.ipynb) |
 
 ## How it was built
 
