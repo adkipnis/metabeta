@@ -1276,6 +1276,21 @@ def test_preparation_warnings_fire_once_per_message_naming_the_datasets(api: Api
     assert hint.filename == __file__
 
 
+def test_a_library_warning_raised_while_preparing_keeps_its_origin(api: Api, monkeypatch):
+    original = Api._preprocessTabular
+
+    def noisy(self, *args, **kwargs):
+        warnings.warn_explicit('pandas says', DeprecationWarning, pd.__file__, 1)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Api, '_preprocessTabular', noisy)
+    _, caught = _warningsOf(lambda: api.sample(_twoStudies(), formula=_FORMULA, n_samples=8))
+
+    noise = [w for w in caught if str(w.message) == 'pandas says']
+    assert len(noise) == 2  # neither grouped nor prefixed: not metabeta's to rewrite
+    assert all(w.filename == pd.__file__ and w.category is DeprecationWarning for w in noise)
+
+
 def _theWarning(caught: list[warnings.WarningMessage], lead: str) -> str:
     """The one caught warning whose message starts with `lead`."""
     (message,) = [str(w.message) for w in caught if str(w.message).startswith(lead)]
