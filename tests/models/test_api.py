@@ -1210,9 +1210,18 @@ def test_a_dataset_outside_the_limits_is_skipped_and_the_others_fitted(api: Api)
     assert results[0].proposal is not None and results[2].proposal is not None
     (skipped,) = [w for w in caught if 'Skipped' in str(w.message)]
     assert 'Skipped 1 of 3 dataset(s)' in str(skipped.message)
-    assert '\n  1: ' in str(skipped.message)
+    assert "\n  1: the dataset is outside the checkpoint's limits: 3 groups" in str(skipped.message)
     assert '3 groups (supported: 5 to 200)' in str(skipped.message)
     assert skipped.filename == __file__
+
+
+def test_the_limits_error_of_one_dataset_names_no_row(api: Api):
+    priors = {'a': None, 'b': {'fixed': {'Days': {'tau': 0.5}}}}
+
+    with pytest.raises(
+        ValueError, match=r"^the dataset is outside the checkpoint's limits: 3 groups"
+    ):
+        api.sample(_sleepstudy(m=3), formula=_FORMULA, priors=priors, n_samples=8)
 
 
 def test_every_dataset_failing_raises_the_first_error_naming_its_dataset(api: Api):

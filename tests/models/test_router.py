@@ -349,6 +349,19 @@ def test_router_rejects_dataset_outside_training_dimensions(tmp_path: Path):
         router._routeBatch(_batch(d=9, q=3))
 
 
+def test_router_names_the_failing_row_of_a_batch_of_several_datasets(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_joint_checkpoint(joint_path)
+    router = Api(joint_path, warmup=False)
+    batch = {key: torch.cat([value, value]) for key, value in _batch(d=4, q=2).items()}
+    batch['ns'] = torch.tensor([[10] * 12, [3] * 12])  # (2, m): dataset 1 has 3 rows per group
+    batch['n'] = batch['ns'].sum(dim=1)
+    batch['mask_n'] = torch.arange(10) < batch['ns'][..., None]  # (2, m, n_i)
+
+    with pytest.raises(ValueError, match=r'^dataset 1 is outside .* 3 rows per group'):
+        router._routeBatch(batch)
+
+
 def test_router_checks_between_and_within_group_degrees_of_freedom(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_joint_checkpoint(joint_path)
