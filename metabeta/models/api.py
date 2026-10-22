@@ -1614,7 +1614,7 @@ class Api:
     ) -> tuple[dict[str, torch.Tensor], list[dict[str, np.ndarray]]]:
         """The batch of one dataset's priors, padded to the submodel they route to (the same
         for every prior, as routing reads the dimensions only), and the padded datasets."""
-        tentative = collateGrouped(datasets)
+        tentative = collateGrouped(datasets[:1])
         routes, _ = self._routeBatch(tentative)
         selected = self._submodel_by_id[routes[0]]
         max_d = routeValue(selected, 'max_d')
@@ -1727,7 +1727,9 @@ class Api:
                 return entry, failures_by_submodel
             failures_by_submodel[str(entry['id'])] = failures
         misfit = self._misfit(batch, i, failures_by_submodel)
-        raise ValueError(f"dataset {i} is outside the checkpoint's limits: {misfit}")
+        # a batch of one dataset names no row; sample labels its datasets itself
+        which = 'the dataset' if batch['X'].shape[0] == 1 else f'dataset {i}'
+        raise ValueError(f"{which} is outside the checkpoint's limits: {misfit}")
 
     def _misfit(
         self,
