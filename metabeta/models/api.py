@@ -112,8 +112,8 @@ RANDOM_WALK_DEFAULT = {
 INTERNAL_PREFIXES = tuple(str(Path(m.__file__).parent) + os.sep for m in (metabeta, torch))
 
 # rows (dataset × prior) per chunk of ``sample`` when ``batch_size`` is None; the CUDA value is
-# provisional until it is measured on a cluster GPU (#42)
-CHUNK_ROWS = {'cpu': 64, 'cuda': 64}
+# measured in #42
+CHUNK_ROWS = {'cpu': 64, 'cuda': 256}
 # warnings list at most this many datasets or rows, then the count
 LISTED_ROWS = 10
 
@@ -252,7 +252,7 @@ class Api:
         batch_size:
             Rows (one dataset under one prior) ``sample`` runs at a time through every
             stage, from the network pass to the diagnostics; ``None`` takes 64 rows on CPU
-            and 64 on CUDA.  Lower it if large datasets run out of memory.
+            and 256 on CUDA.  Lower it if large datasets run out of memory.
         warmup:
             Build every submodel and run one discarded sampling pass on dummy data while
             loading, so the first ``sample`` call is as fast as later ones.  ``False`` loads
