@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Any
 import numpy as np
 import torch
 
@@ -465,6 +466,45 @@ def sliceBatch(batch: dict[str, torch.Tensor], start: int, end: int) -> dict[str
     """
     n = batch['X'].shape[0]
     return {k: _selectValue(v, slice(start, end), n) for k, v in batch.items()}
+
+
+def concatBatches(batches: list[dict[str, Any]]) -> dict[str, Any]:
+    """Concatenate collated batches along the dataset axis, padding the group and observation
+    axes to the largest (the inverse of ``sliceBatch`` plus ``trimBatchPadding``).  Lists
+    concatenate, nested dicts recurse, and anything else comes from the first batch."""
+    if len(batches) == 1:
+        return batches[0]
+    m = max(b['mask_n'].shape[1] for b in batches)
+    n = max(b['mask_n'].shape[2] for b in batches)
+    return _padCat(batches, m, n)
+
+
+def _padCat(batches: list[dict[str, Any]], m: int, n: int) -> dict[str, Any]:
+    out = {}
+    for key, first in batches[0].items():
+        values = [b[key] for b in batches]
+        if isinstance(first, dict):
+            out[key] = _padCat(values, m, n)
+        elif isinstance(first, list):
+            out[key] = [x for v in values for x in v]
+        elif torch.is_tensor(first):
+            fit_rfx = key.endswith('_rfx') and key != 'corr_rfx' and first.ndim >= 3
+            if key in _GROUP_KEYS or fit_rfx:
+                values = [_padTo(v, 1, m) for v in values]
+            if key in _OBS_KEYS:
+                values = [_padTo(v, 2, n) for v in values]
+            out[key] = torch.cat(values)
+        else:
+            out[key] = first
+    return out
+
+
+def _padTo(v: torch.Tensor, dim: int, size: int) -> torch.Tensor:
+    if v.shape[dim] == size:
+        return v
+    shape = list(v.shape)
+    shape[dim] = size - v.shape[dim]
+    return torch.cat([v, v.new_zeros(shape)], dim=dim)
 
 
 class SortishBatchSampler(torch.utils.data.Sampler[list[int]]):
