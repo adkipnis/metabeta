@@ -10,6 +10,7 @@ import contextlib
 import math
 import operator
 import os
+import sys
 import warnings
 
 import numpy as np
@@ -285,6 +286,8 @@ class Api:
     ) -> None:
         self.joint_checkpoint = Path(joint_checkpoint)
         self.device = torch.device(device)
+        if batch_size is not None and batch_size < 1:
+            raise ValueError(f'batch_size must be at least 1 or None (got {batch_size!r})')
         self.batch_size = batch_size
 
         payload = torch.load(self.joint_checkpoint, map_location='cpu', weights_only=True)
@@ -619,6 +622,7 @@ class Api:
         prepared: dict[Hashable, _Prepared] = {}
         skipped: list[tuple[Hashable, Exception]] = []
         noted: dict[tuple[type, str], list[Hashable]] = {}
+        caller = _callerFile()
         for label, frame in zip(labels, frames):
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter('always')
@@ -627,7 +631,10 @@ class Api:
                 except (ValueError, KeyError) as exc:
                     skipped.append((label, exc))
             for w in caught:
-                noted.setdefault((w.category, str(w.message)), []).append(label)
+                if w.filename == caller:  # metabeta's own, aimed at the caller: once per message
+                    noted.setdefault((w.category, str(w.message)), []).append(label)
+                else:  # a library's: back under the caller's filters, from where it was raised
+                    warnings.warn_explicit(w.message, w.category, w.filename, w.lineno)
         if not prepared:
             label, exc = skipped[0]
             if container:
@@ -672,7 +679,9 @@ class Api:
     def _chunkBatch(
         items: dict[Hashable, _Prepared], chunk: list[tuple[Hashable, int, int]]
     ) -> dict[str, torch.Tensor]:
-        """A chunk's batch at its own padding: the slices of its datasets' batches, joined."""
+        """A chunk's batch at its own padding: the slices of its datasets' batches, joined.
+        A formula batch is at its own padding already; a slice of collated input (a Dataloader
+        batch) keeps its parent's and shrinks."""
         return trimBatchPadding(
             concatBatches(
                 [sliceBatch(items[label].batch, start, end) for label, start, end in chunk]
@@ -803,10 +812,11 @@ class Api:
                     f'  1. more draws: n_samples of at least {s_vals}{respectively}\n'
                     '  2. exact MCMC, e.g. NUTS'
                 )
-            flagged, names = named(np.flatnonzero(sg['ess_flag'] & ~ran))
+            ess_low = np.flatnonzero(sg['ess_flag'] & ~ran)
+            flagged, names = named(ess_low)
             if flagged.size:
                 e_vals = ', '.join(f'{ess_min[i]:.0f}' for i in flagged)
-                low = flagged[ess_min[flagged] < IMH_ESS_NUTS]
+                low = ess_low[ess_min[ess_low] < IMH_ESS_NUTS]
                 caveat = f' (may not suffice for {named(low)[1]})' if low.size else ''
                 warn(
                     f'Low effective sample size (ESS) for dataset(s) {names}: min ESS '
@@ -2427,6 +2437,15 @@ def _flagRows(results: list[RouterResult], attr: str) -> dict[str, Any] | None:
     if parts[0] is None:
         return None
     return _joinRows([{k: v for k, v in part.items() if np.ndim(v) <= 1} for part in parts])
+
+
+def _callerFile() -> str:
+    """The file ``warnings.warn(..., skip_file_prefixes=INTERNAL_PREFIXES)`` attributes a
+    warning to: the first frame outside metabeta and torch."""
+    frame = sys._getframe(1)
+    while frame.f_back is not None and frame.f_code.co_filename.startswith(INTERNAL_PREFIXES):
+        frame = frame.f_back
+    return frame.f_code.co_filename
 
 
 def _listed(labels: list[Any]) -> str:
