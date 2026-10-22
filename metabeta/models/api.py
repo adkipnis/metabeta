@@ -36,6 +36,7 @@ from metabeta.utils.constants import LIKELIHOOD_FAMILIES, hasSigmaEps
 from metabeta.utils.dataloader import (
     Dataloader,
     collateGrouped,
+    concatBatches,
     sliceBatch,
     toDevice,
     trimBatchPadding,
@@ -181,24 +182,23 @@ class _Metadata:
     information, its group labels, and the permutation from the model's fixed-effect layout
     (random slopes first) back to the formula's order."""
 
-    param_names: dict[str, list[str]]
-    scale_info: ScaleInfo
-    group_names: list[str] | None
-    ffx_order: list[int]
+    param_names: dict[str, list[str]] | None = None
+    scale_info: ScaleInfo | None = None
+    group_names: list[str] | None = None
+    ffx_order: list[int] | None = None
 
 
 @dataclass
 class _Prepared:
     """One input dataset of ``sample`` after preparation and routing: its batch at its own
-    padding, whose rows are its priors, the padded model datasets the batch was collated from
-    (None for collated input), and its routes, validation and metadata."""
+    padding, whose rows are its priors, and its routes, validation and metadata (empty for
+    collated input)."""
 
     label: Hashable
     batch: dict[str, torch.Tensor]
-    datasets: list[dict[str, np.ndarray]] | None
     routes: list[str]
     validation: list[dict[str, Any]]
-    metadata: _Metadata | None
+    metadata: _Metadata
 
     @property
     def rows(self) -> int:
@@ -351,51 +351,24 @@ class Api:
         - Formula/prior handling turns numpy dictionaries into model datasets.
         - ``collateGrouped`` turns model datasets into the tensor batch consumed
           by the router and approximator.
-        """
-        return self._prepare(
-            data,
-            formula=formula,
-            priors=priors,
-            preprocessor=preprocessor,
-            fit_preprocessor=fit_preprocessor,
-            group_name=group_name,
-            likelihood_family=likelihood_family,
-            q=q,
-            stage=stage,
-            dry_run=dry_run,
-        )[0]
 
-    def _prepare(
-        self,
-        data: Any,
-        *,
-        formula: str | None = None,
-        priors: Any = None,
-        preprocessor: DataPreprocessor | str | Path | None = None,
-        fit_preprocessor: bool = True,
-        group_name: str | None = None,
-        likelihood_family: int | str | None = None,
-        q: int | None = None,
-        stage: str = 'batch',
-        dry_run: bool = False,
-    ) -> tuple[Any, list[dict[str, np.ndarray]] | None, _Metadata | None]:
-        """``prepareData``'s stage value, plus the padded model datasets a formula batch was
-        collated from and the dataset's metadata (both None at earlier stages and for collated
-        input)."""
+        A batch built from a formula carries the dataset's names, scale information and group
+        labels under ``_router_metadata``, next to the prior index and name of each row.
+        """
 
         if stage not in {'preprocessed', 'dataset', 'batch'}:
             raise ValueError(f'unknown prepareData stage: {stage}')
 
         if isinstance(data, Dataloader):
             batch = data.fullBatch()
-            return returnPreparedStage(batch, stage), None, None
+            return returnPreparedStage(batch, stage)
 
         if isinstance(data, (str, Path)):
             path = Path(data)
             if path.suffix == '.npz':
                 loader = Dataloader(path, batch_size=self.batch_size)
                 batch = loader.fullBatch()
-                return returnPreparedStage(batch, stage), None, None
+                return returnPreparedStage(batch, stage)
             if path.suffix == '.parquet':
                 data = pd.read_parquet(path)
             else:
@@ -411,22 +384,22 @@ class Api:
                 dry_run=dry_run,
             )
             if dry_run or stage == 'preprocessed':
-                return preprocessed, None, None
+                return preprocessed
             data = preprocessed
 
         if isinstance(data, Mapping) and isCollatedBatch(data):
-            return returnPreparedStage(dict(data), stage), None, None
+            return returnPreparedStage(dict(data), stage)
 
         if isinstance(data, Mapping) and isModelDataset(data):
             dataset = {str(k): v for k, v in data.items()}
             if stage == 'dataset':
-                return dataset, None, None
+                return dataset
             batch = collateGrouped([dataset])
-            return returnPreparedStage(batch, stage), None, None
+            return returnPreparedStage(batch, stage)
 
         if isinstance(data, Mapping) and isPreprocessedDict(data):
             if stage == 'preprocessed':
-                return {str(k): v for k, v in data.items()}, None, None
+                return {str(k): v for k, v in data.items()}
             datasets, metadata = self._buildModelDatasets(
                 data,
                 formula=formula,
@@ -435,9 +408,10 @@ class Api:
                 q=q,
             )
             if stage == 'dataset':
-                return datasets[0] if len(datasets) == 1 else datasets, None, None
-            batch, padded = self._collateForSelectedSubmodel(datasets)
-            return returnPreparedStage(batch, stage), padded, metadata
+                return datasets[0] if len(datasets) == 1 else datasets
+            batch = self._collateForSelectedSubmodel(datasets)
+            batch['_router_metadata'] = metadata
+            return returnPreparedStage(batch, stage)
 
         if not isinstance(data, Mapping):
             raise TypeError('router input must be tabular, path-backed, preprocessed, or collated')
@@ -565,39 +539,43 @@ class Api:
         method = {True: 'imh', False: None}.get(refine, refine)
         if method not in (None, 'imh', 'is'):
             raise ValueError(f"refine must be True, False, 'imh' or 'is' (got {refine!r})")
-        do_refine = method is not None and n_samples >= MIN_SAFEGUARD_SAMPLES
         if random_walk is not False and method != 'imh':
             raise ValueError("random_walk requires refine='imh'")
         if evidence and n_samples < MIN_SAFEGUARD_SAMPLES:
             raise ValueError(f'evidence=True needs n_samples >= {MIN_SAFEGUARD_SAMPLES}')
+        preset = 'cuda' if self.device.type == 'cuda' else 'cpu'
         moves = None
         if method == 'imh' and random_walk:
-            preset = RANDOM_WALK_DEFAULT['cuda' if self.device.type == 'cuda' else 'cpu']
-            moves = preset if random_walk is True else random_walk
+            moves = RANDOM_WALK_DEFAULT[preset] if random_walk is True else random_walk
+        if n_samples < MIN_SAFEGUARD_SAMPLES:
+            method = None
 
-        container = _asContainer(data)
-        labels, frames = ([0], [data]) if container is None else container
-        items = self._prepareDatasets(labels, frames, container is not None, prepare_kwargs)
-        prepared = [item for item in items if item is not None]
+        labels = _asContainer(data)
+        container = labels is not None
+        frames = [data[label] for label in labels] if container else [data]
+        prepared = self._prepareDatasets(
+            labels if container else [0], frames, container, prepare_kwargs
+        )
 
         # every stage runs per chunk of at most batch_size rows; a chunk holds whole datasets of
         # one submodel, sorted by size, and is cut inside a dataset only when it alone exceeds
         # the chunk, so a result joins one slice in the common case
-        chunk_rows = self.batch_size or CHUNK_ROWS['cuda' if self.device.type == 'cuda' else 'cpu']
-        order = sorted(range(len(prepared)), key=lambda i: self._sizeKey(prepared[i]))
-        chunks = _cutChunks(prepared, order, chunk_rows)
-        pieces: list[list[dict[str, Any]]] = [[] for _ in prepared]
-        n_rows = sum(item.rows for item in prepared)
+        order = sorted(prepared, key=lambda label: self._sizeKey(prepared[label]))
+        chunks = _cutChunks(prepared, order, self.batch_size or CHUNK_ROWS[preset])
+        pieces: dict[Hashable, list[dict[str, Any]]] = {label: [] for label in prepared}
+        results: dict[Hashable, RouterResult] = {}
+        n_rows = sum(item.rows for item in prepared.values())
         # a one-chunk call shows no bar; otherwise `disable` stays unset so TQDM_DISABLE applies
         silent = {'disable': True} if len(chunks) == 1 else {}
         with _seeded(seed), tqdm(total=n_rows, unit='dataset', leave=False, **silent) as bar:
             for chunk in chunks:
-                batch, routes = self._chunkBatch(prepared, chunk)
+                batch = self._chunkBatch(prepared, chunk)
+                routes = [route for label, _, _ in chunk for route in prepared[label].routes]
                 out = self._sampleChunk(
                     batch,
                     routes,
                     n_samples=n_samples,
-                    method=method if do_refine else None,
+                    method=method,
                     k_threshold=k_threshold,
                     map_z_threshold=map_z_threshold,
                     moves=moves,
@@ -605,24 +583,26 @@ class Api:
                     loo=loo,
                 )
                 offset = 0
-                for i, start, end in chunk:
-                    pieces[i].append(_sliceRows(out, offset, offset + end - start))
+                for label, start, end in chunk:
+                    pieces[label].append(_sliceRows(out, offset, offset + end - start))
                     offset += end - start
+                    if end == prepared[label].rows:  # its last slice: free the chunk's tensors
+                        results[label] = self._assembleResult(
+                            prepared[label], pieces.pop(label), prepare_kwargs
+                        )
                 bar.update(offset)
-        results = [
-            self._assembleResult(item, pieces[i], prepare_kwargs) for i, item in enumerate(prepared)
-        ]
 
+        ordered = [results[label] for label in prepared]  # input order
         self._warnSafeguards(
-            _flagRows(results, 'safeguards'),
-            _flagRows(results, 'evidence'),
-            _rowLabels(prepared, with_dataset=container is not None),
+            _flagRows(ordered, 'safeguards'),
+            _flagRows(ordered, 'evidence'),
+            _rowLabels(list(prepared.values()), with_dataset=container),
         )
-        if container is None:
+        if not container:
             return results[0]
-        found = iter(results)
-        out = [None if item is None else next(found) for item in items]
-        return dict(zip(labels, out)) if isinstance(data, Mapping) else out
+        if isinstance(data, Mapping):
+            return {label: results.get(label) for label in labels}
+        return [results.get(label) for label in labels]
 
     def _prepareDatasets(
         self,
@@ -630,25 +610,25 @@ class Api:
         frames: list[Any],
         container: bool,
         prepare_kwargs: dict[str, Any],
-    ) -> list[_Prepared | None]:
-        """Prepare and route each dataset on its own.  A ``ValueError`` or ``KeyError`` raised
-        for one dataset of a container skips it (None in its place, one warning per call);
-        other errors raise at once, and so does the first error when every dataset fails.
-        Preparation warnings are emitted once per message with the datasets that raised them."""
-        items: list[_Prepared | None] = []
+    ) -> dict[Hashable, _Prepared]:
+        """Prepare and route each dataset on its own, by label.  A ``ValueError`` or
+        ``KeyError`` raised for one dataset of a container skips it (absent from the result, one
+        warning per call); other errors raise at once, and so does the first error when every
+        dataset fails.  Preparation warnings are emitted once per message with the datasets
+        that raised them."""
+        prepared: dict[Hashable, _Prepared] = {}
         skipped: list[tuple[Hashable, Exception]] = []
         noted: dict[tuple[type, str], list[Hashable]] = {}
         for label, frame in zip(labels, frames):
             with warnings.catch_warnings(record=True) as caught:
                 warnings.simplefilter('always')
                 try:
-                    items.append(self._prepareDataset(frame, label, prepare_kwargs))
+                    prepared[label] = self._prepareDataset(frame, label, prepare_kwargs)
                 except (ValueError, KeyError) as exc:
-                    items.append(None)
                     skipped.append((label, exc))
             for w in caught:
                 noted.setdefault((w.category, str(w.message)), []).append(label)
-        if not any(item is not None for item in items):
+        if not prepared:
             label, exc = skipped[0]
             if container:
                 exc.add_note(f'raised while preparing dataset {label!r}')
@@ -663,43 +643,41 @@ class Api:
             if len(skipped) > LISTED_ROWS:
                 reasons.append(f'  … {len(skipped)} in all')
             warnings.warn(
-                f'Skipped {len(skipped)} of {len(items)} dataset(s) that could not be prepared '
+                f'Skipped {len(skipped)} of {len(labels)} dataset(s) that could not be prepared '
                 '(None in their place):\n' + '\n'.join(reasons),
                 skip_file_prefixes=INTERNAL_PREFIXES,
             )
-        return items
+        return prepared
 
     def _prepareDataset(
         self, data: Any, label: Hashable, prepare_kwargs: dict[str, Any]
     ) -> _Prepared:
         """One dataset prepared to a batch at its own padding, validated and routed."""
-        batch, datasets, metadata = self._prepare(data, **prepare_kwargs)
+        batch = self.prepareData(data, **prepare_kwargs)
         if not isinstance(batch, dict) or not isCollatedBatch(batch):
             raise TypeError('sample requires data prepared to batch stage')
+        metadata = batch.pop('_router_metadata', _Metadata())
         self._validateBatchFormat(batch)
         routes, validation = self._routeBatch(batch)
         for entry in validation:
             entry['dataset'] = label
-        return _Prepared(
-            label, toDevice(batch, self.device), datasets, routes, validation, metadata
-        )
+        return _Prepared(label, toDevice(batch, self.device), routes, validation, metadata)
 
     def _sizeKey(self, item: _Prepared) -> tuple[tuple[float, str], int, int]:
-        """Submodel, then number of groups, then largest group."""
+        """Submodel, then number of groups, then largest group (the batch's own padding)."""
         submodel = routingSortKey(self._submodel_by_id[item.routes[0]])
-        return submodel, int(item.batch['m'].max()), int(item.batch['ns'].max())
+        return submodel, item.batch['mask_n'].shape[1], item.batch['mask_n'].shape[2]
 
+    @staticmethod
     def _chunkBatch(
-        self, items: list[_Prepared], chunk: list[tuple[int, int, int]]
-    ) -> tuple[dict[str, torch.Tensor], list[str]]:
-        """A chunk's batch at its own padding and its routes: a slice of one dataset's batch, or
-        the datasets of several collated together."""
-        if len(chunk) == 1:
-            i, start, end = chunk[0]
-            return trimBatchPadding(sliceBatch(items[i].batch, start, end)), items[i].routes
-        datasets = [dataset for i, _, _ in chunk for dataset in items[i].datasets]
-        routes = [route for i, _, _ in chunk for route in items[i].routes]
-        return toDevice(collateGrouped(datasets), self.device), routes
+        items: dict[Hashable, _Prepared], chunk: list[tuple[Hashable, int, int]]
+    ) -> dict[str, torch.Tensor]:
+        """A chunk's batch at its own padding: the slices of its datasets' batches, joined."""
+        return trimBatchPadding(
+            concatBatches(
+                [sliceBatch(items[label].batch, start, end) for label, start, end in chunk]
+            )
+        )
 
     def _assembleResult(
         self, item: _Prepared, pieces: list[dict[str, Any]], prepare_kwargs: dict[str, Any]
@@ -717,20 +695,18 @@ class Api:
             if key in batch:
                 prior_params[key] = batch[key].long().cpu().numpy()
         meta = item.metadata
-        self._restoreFixedOrder(
-            proposal, prior_params, diags, safeguards, None if meta is None else meta.ffx_order
-        )
+        self._restoreFixedOrder(proposal, prior_params, diags, safeguards, meta.ffx_order)
         return RouterResult(
             proposal=proposal,
             routes=item.routes,
             validation=item.validation,
             diagnostics=diags,
-            param_names=None if meta is None else meta.param_names,
+            param_names=meta.param_names,
             formula=prepare_kwargs.get('formula'),
             priors_str=_priorStr(prepare_kwargs.get('priors')),
-            group_names=None if meta is None else meta.group_names,
+            group_names=meta.group_names,
             prior_params=prior_params or None,
-            scale_info=None if meta is None else meta.scale_info,
+            scale_info=meta.scale_info,
             batch=batch,
             ns=batch['ns'].cpu().numpy() if 'ns' in batch else None,
             safeguards=safeguards,
@@ -830,8 +806,8 @@ class Api:
             flagged, names = named(np.flatnonzero(sg['ess_flag'] & ~ran))
             if flagged.size:
                 e_vals = ', '.join(f'{ess_min[i]:.0f}' for i in flagged)
-                _, low = named(flagged[ess_min[flagged] < IMH_ESS_NUTS])
-                caveat = f' (may not suffice for {low})' if low != '[]' else ''
+                low = flagged[ess_min[flagged] < IMH_ESS_NUTS]
+                caveat = f' (may not suffice for {named(low)[1]})' if low.size else ''
                 warn(
                     f'Low effective sample size (ESS) for dataset(s) {names}: min ESS '
                     f'{e_vals} < {sg["ess_threshold"]:g}.\n'
@@ -1611,9 +1587,9 @@ class Api:
 
     def _collateForSelectedSubmodel(
         self, datasets: list[dict[str, np.ndarray]]
-    ) -> tuple[dict[str, torch.Tensor], list[dict[str, np.ndarray]]]:
+    ) -> dict[str, torch.Tensor]:
         """The batch of one dataset's priors, padded to the submodel they route to (the same
-        for every prior, as routing reads the dimensions only), and the padded datasets."""
+        for every prior, as routing reads the dimensions only)."""
         tentative = collateGrouped(datasets[:1])
         routes, _ = self._routeBatch(tentative)
         selected = self._submodel_by_id[routes[0]]
@@ -1627,7 +1603,7 @@ class Api:
         ]
         batch = collateGrouped(padded)
         self._attachRouterMetadata(batch, padded)
-        return batch, padded
+        return batch
 
     @staticmethod
     def _warnInconsistentColumns(
@@ -2210,7 +2186,6 @@ class Api:
         log_ev, log_ev_ref = result.evidence['log_evidence'], reference.evidence['log_evidence']
         log_bf = log_ev - log_ev_ref  # a one-row result broadcasts
         rows = result if len(log_ev) >= len(log_ev_ref) else reference
-        names = [entry.get('prior_name') for entry in rows.validation]
         return pd.DataFrame(
             {
                 'log BF': log_bf,
@@ -2218,7 +2193,7 @@ class Api:
                 'strength': [_bfStrength(b) for b in log_bf],
                 'PSIS k̂': np.maximum(result.evidence['psis_k'], reference.evidence['psis_k']),
             },
-            index=pd.Index(range(len(names)) if None in names else names, name='prior'),
+            index=pd.Index(_priorLabels(rows.validation), name='prior'),
         )
 
     def rfxSummary(
@@ -2346,48 +2321,49 @@ def _renamedArg(old: str, old_value: Any, new: str, new_value: Any) -> Any:
     return old_value
 
 
-def _asContainer(data: Any) -> tuple[list[Hashable], list[pd.DataFrame]] | None:
-    """The labels and frames of a list, tuple or dict of DataFrames; None for one dataset."""
+def _asContainer(data: Any) -> list[Hashable] | None:
+    """The labels (indices or keys) of a list, tuple or dict of DataFrames; None for one
+    dataset."""
     if isinstance(data, (list, tuple)):
-        labels, frames = list(range(len(data))), list(data)
+        labels = list(range(len(data)))
     elif isinstance(data, Mapping) and (
         not data or any(isinstance(v, pd.DataFrame) for v in data.values())
     ):
-        labels, frames = list(data), list(data.values())
+        labels = list(data)
     else:
         return None
-    if not frames:
+    if not labels:
         raise ValueError('sample needs at least one dataset')
-    other = [label for label, frame in zip(labels, frames) if not isinstance(frame, pd.DataFrame)]
+    other = [label for label in labels if not isinstance(data[label], pd.DataFrame)]
     if other:
         raise TypeError(
             f'every dataset of a list, tuple or dict must be a DataFrame; dataset(s) '
             f'{_listed(other)} are not'
         )
-    return labels, frames
+    return labels
 
 
 def _cutChunks(
-    items: list[_Prepared], order: list[int], chunk_rows: int
-) -> list[list[tuple[int, int, int]]]:
-    """Chunks of at most ``chunk_rows`` rows over the items in ``order``, as (item, start, end)
+    items: dict[Hashable, _Prepared], order: list[Hashable], chunk_rows: int
+) -> list[list[tuple[Hashable, int, int]]]:
+    """Chunks of at most ``chunk_rows`` rows over the items in ``order``, as (label, start, end)
     slices.  A chunk never mixes submodels, and a cut falls on an item boundary unless one
     item alone has more rows than a chunk."""
-    chunks: list[list[tuple[int, int, int]]] = []
-    rows = chunk_rows  # the open chunk's rows: full, so the first item opens a new one
-    for i in order:
-        item = items[i]
+    chunks: list[list[tuple[Hashable, int, int]]] = []
+    route, rows = None, 0  # the open chunk's submodel and rows
+    for label in order:
+        item = items[label]
         if item.rows > chunk_rows:
             chunks += [
-                [(i, start, min(start + chunk_rows, item.rows))]
+                [(label, start, min(start + chunk_rows, item.rows))]
                 for start in range(0, item.rows, chunk_rows)
             ]
-            rows = chunk_rows
-        elif rows + item.rows > chunk_rows or items[chunks[-1][0][0]].routes[0] != item.routes[0]:
-            chunks.append([(i, 0, item.rows)])
-            rows = item.rows
+            route, rows = None, chunk_rows
+        elif rows + item.rows > chunk_rows or item.routes[0] != route:
+            chunks.append([(label, 0, item.rows)])
+            route, rows = item.routes[0], item.rows
         else:
-            chunks[-1].append((i, 0, item.rows))
+            chunks[-1].append((label, 0, item.rows))
             rows += item.rows
     return chunks
 
@@ -2428,9 +2404,7 @@ def _rowLabels(items: list[_Prepared], *, with_dataset: bool) -> list[Any]:
     several = any(item.rows > 1 for item in items)
     labels = []
     for item in items:
-        for entry in item.validation:
-            prior = entry.get('prior_name')
-            prior = entry['index'] if prior is None else prior
+        for prior in _priorLabels(item.validation):
             if not with_dataset:
                 labels.append(prior)
             else:
@@ -2438,13 +2412,21 @@ def _rowLabels(items: list[_Prepared], *, with_dataset: bool) -> list[Any]:
     return labels
 
 
+def _priorLabels(validation: list[dict[str, Any]]) -> list[Any]:
+    """Each row's prior by its name, else its index."""
+    return [
+        entry['index'] if entry.get('prior_name') is None else entry['prior_name']
+        for entry in validation
+    ]
+
+
 def _flagRows(results: list[RouterResult], attr: str) -> dict[str, Any] | None:
-    """The results' safeguards or evidence joined row by row for the warnings; ``ess`` is
-    (rows, globals) and differs in width across submodels, and no warning reads it."""
+    """The results' safeguards or evidence joined row by row for the warnings, which read the
+    per-row vectors only (``ess`` is (rows, globals) and differs in width across submodels)."""
     parts = [getattr(result, attr) for result in results]
     if parts[0] is None:
         return None
-    return _joinRows([{k: v for k, v in part.items() if k != 'ess'} for part in parts])
+    return _joinRows([{k: v for k, v in part.items() if np.ndim(v) <= 1} for part in parts])
 
 
 def _listed(labels: list[Any]) -> str:
