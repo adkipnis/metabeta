@@ -945,7 +945,15 @@ _FORMULA = 'Reaction ~ Days + (1 | Subject)'
         ),
         (
             lambda api: api.posteriorSummary(
-                api.sample(api.prepareData(_sleepstudy(), formula=_FORMULA), n_samples=8)
+                # a collated batch without the metadata a formula batch carries
+                api.sample(
+                    {
+                        k: v
+                        for k, v in api.prepareData(_sleepstudy(), formula=_FORMULA).items()
+                        if k != '_router_metadata'
+                    },
+                    n_samples=8,
+                )
             ),
             'requires scale_info',
         ),
@@ -1087,15 +1095,13 @@ def test_warnings_fire_once_per_type_after_all_chunks(api: Api):
         )
     )
 
-    messages = [str(w.message) for w in caught]
     for lead in (
         'Low IMH acceptance',
         'Low effective sample size',
         'Evidence reliability',
         'MAP check',
     ):
-        (message,) = [m for m in messages if m.startswith(lead)]
-        assert '[0, 1, 2, 3, 4]' in message, lead  # rows of every chunk, named once
+        assert '[0, 1, 2, 3, 4]' in _theWarning(caught, lead), lead  # rows of every chunk, once
     assert all(w.filename == __file__ for w in caught)
     for key in ('accept_rate', 'ess_min', 'ess_flag', 'random_walk_ran', 'psis_k', 'map_z'):
         assert result.safeguards[key].shape == (5,), key
@@ -1270,9 +1276,14 @@ def test_preparation_warnings_fire_once_per_message_naming_the_datasets(api: Api
     assert hint.filename == __file__
 
 
-def _mapWarning(caught: list[warnings.WarningMessage]) -> str:
-    (message,) = [str(w.message) for w in caught if str(w.message).startswith('MAP check')]
+def _theWarning(caught: list[warnings.WarningMessage], lead: str) -> str:
+    """The one caught warning whose message starts with `lead`."""
+    (message,) = [str(w.message) for w in caught if str(w.message).startswith(lead)]
     return message
+
+
+def _mapWarning(caught: list[warnings.WarningMessage]) -> str:
+    return _theWarning(caught, 'MAP check')
 
 
 def test_safeguard_warnings_name_datasets_by_key_or_index(api: Api):
@@ -1314,7 +1325,7 @@ def test_safeguard_warnings_list_ten_rows_then_the_count(api: Api):
 
 
 def test_seed_reproduces_a_container_call(api: Api):
-    dfs = {'a': _sleepstudy(seed=1), 'b': _sleepstudy(m=8, n_i=6, seed=2)}
+    dfs = dict(zip(['a', 'b'], _twoStudies()))
     kwargs = dict(formula=_FORMULA, n_samples=64, seed=0)
     # load the routed model first: its initialization draws from the seeded stream
     api.model(api.route(dfs['a'], formula=_FORMULA)[0])
@@ -1347,7 +1358,7 @@ def test_validation_entries_carry_their_dataset_label(api: Api):
 
 
 def test_reports_work_on_each_result_of_a_container(api: Api):
-    dfs = {'a': _sleepstudy(seed=1), 'b': _sleepstudy(m=8, n_i=6, seed=2)}
+    dfs = dict(zip(['a', 'b'], _twoStudies()))
     priors = {'wide': None, 'narrow': {'fixed': {'Days': {'tau': 0.5}}}}
     kwargs = dict(n_samples=64, evidence=True)
     with_days = api.sample(dfs, formula=_FORMULA, priors=priors, **kwargs)
@@ -1368,7 +1379,7 @@ def test_reports_work_on_each_result_of_a_container(api: Api):
 
 
 def test_a_dataset_with_more_priors_than_the_chunk_keeps_all_its_rows(api: Api):
-    dfs = [_sleepstudy(seed=1), _sleepstudy(m=8, n_i=6, seed=2), _sleepstudy(m=6, seed=3)]
+    dfs = [*_twoStudies(), _sleepstudy(m=6, seed=3)]
     kwargs = dict(formula=_FORMULA, n_samples=64, evidence=True, loo=True)
     chunked = Api(api.joint_checkpoint, warmup=False, batch_size=3)
 
