@@ -61,6 +61,8 @@ each dataset to a pretrained `Approximator`.
 - Branch off `main`. One change per pull request, linked to its issue.
 - Please add a test with each significant change; mark a test that needs local checkpoints or data `slow`.
 - Format with `uv run blue metabeta tests` and run `uv run pytest`.
+- No AI slop allowed. If you use AI to assist you in coding (which you are welcome to), always
+  make sure that you have read, reviewed, and understood your code.
 
 Style:
 
