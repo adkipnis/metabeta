@@ -17,15 +17,15 @@ Normal variants  (likelihood_family=0)
   raw          lmmNormal only          (map_refine=False)
   map_5        +refineNormalMapSrfx    (map_steps=5,  no EB)
   map_10       +refineNormalMapSrfx    (map_steps=10, no EB)
-  map_20       +refineNormalMapSrfx    (map_steps=20, no EB)   ← default steps
+  map_20       +refineNormalMapSrfx    (map_steps=20, no EB)   <- default steps
   eb_only      +refineNormalLaplaceEb  only (map_steps=0 via 1-step map skipped)
-  default      map_steps=20 + EB                               ← full default
+  default      map_steps=20 + EB                               <- full default
 
 Bernoulli variants  (likelihood_family=1)
   raw          lmmBernoulli (PQL) only (map_refine=False)
   nagq_beta    +refineBernoulliNagqSrfx + refineBernoulliNestedBeta
   eb_12        +refineBernoulliLaplaceEb (12 outer steps)
-  default      +refineBernoulliLaplaceEb (24 steps, cal preset) ← full default
+  default      +refineBernoulliLaplaceEb (24 steps, cal preset) <- full default
 
 Contexts
   no_grad      torch.no_grad()    simulates inference / pre-computation
@@ -73,8 +73,8 @@ NORMAL_VARIANTS: list[tuple[str, dict]] = [
     ('default', dict(map_refine=True,  normal_laplace_eb=True,  map_steps=20)),
 ]
 
-# bernoulli_laplace_eb=True → mode 'all': every dataset in the batch goes through EB
-# bernoulli_laplace_eb='cal' → same as 'all' but with the calibrated 24-step preset
+# bernoulli_laplace_eb=True -> mode 'all': every dataset in the batch goes through EB
+# bernoulli_laplace_eb='cal' -> same as 'all' but with the calibrated 24-step preset
 BERNOULLI_VARIANTS: list[tuple[str, dict]] = [
     ('raw',       dict(map_refine=False)),
     ('nagq_beta', dict(map_refine=True, bernoulli_laplace_eb=False)),
@@ -240,11 +240,11 @@ def run(args: argparse.Namespace) -> None:
     if likelihood_family == 0:
         print('\nIncremental cost per MAP step:')
         inc_rows = [
-            ['raw → map_5  (+5)',  f'{meds["map_5"]  - raw_t:.2f}',
+            ['raw -> map_5  (+5)',  f'{meds["map_5"]  - raw_t:.2f}',
              f'{(meds["map_5"]  - raw_t)/5:.3f}'],
-            ['map_5 → map_10 (+5)', f'{meds["map_10"] - meds["map_5"]:.2f}',
+            ['map_5 -> map_10 (+5)', f'{meds["map_10"] - meds["map_5"]:.2f}',
              f'{(meds["map_10"] - meds["map_5"])/5:.3f}'],
-            ['map_10 → map_20 (+10)', f'{meds["map_20"] - meds["map_10"]:.2f}',
+            ['map_10 -> map_20 (+10)', f'{meds["map_20"] - meds["map_10"]:.2f}',
              f'{(meds["map_20"] - meds["map_10"])/10:.3f}'],
         ]
         print(tabulate(inc_rows, headers=['interval', 'delta ms/ds', 'ms/ds per step'],
@@ -252,12 +252,12 @@ def run(args: argparse.Namespace) -> None:
     elif likelihood_family == 1:
         print('\nIncremental cost (Bernoulli):')
         inc_rows = [
-            ['raw → nagq_beta',
+            ['raw -> nagq_beta',
              f'{meds["nagq_beta"] - raw_t:.2f}', ''],
-            ['nagq_beta → eb_12  (+12 steps)',
+            ['nagq_beta -> eb_12  (+12 steps)',
              f'{meds["eb_12"] - meds["nagq_beta"]:.2f}',
              f'{(meds["eb_12"] - meds["nagq_beta"])/12:.3f}'],
-            ['eb_12 → default  (+12 steps)',
+            ['eb_12 -> default  (+12 steps)',
              f'{meds["default"] - meds["eb_12"]:.2f}',
              f'{(meds["default"] - meds["eb_12"])/12:.3f}'],
         ]

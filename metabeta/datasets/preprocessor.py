@@ -920,7 +920,7 @@ class DataPreprocessor:
         # High-cardinality categoricals (> max_categories levels) are more appropriately
         # modelled as random effects than as lumped fixed-effect dummies.  If no group
         # variable has been found yet, route the highest-cardinality categorical column
-        # as the grouping factor, provided it has ≥ 2 observations per level on average.
+        # as the grouping factor, provided it has >= 2 observations per level on average.
         if not group_name:
             hi_card = [c for c in categorical(df).tolist() if df[c].nunique() > self.max_categories]
             if hi_card:

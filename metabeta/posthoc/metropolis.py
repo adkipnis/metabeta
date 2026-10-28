@@ -39,7 +39,7 @@ Three modes differ in how rfx (local params) are handled:
       (Approximator.estimate(local=False)); accuracy is identical, and the local flow -
       the dominant CPU cost at production pool sizes, ~linear in the group count - is gone.
       Mirrors the recipe that fixed the huge-Normal regime - added because isLaplace's
-      PSIS guardrail falls back on 13–50% of large/huge GLMM datasets
+      PSIS guardrail falls back on 13-50% of large/huge GLMM datasets
       (2026-07-29 ablation), and rejection-based correction has no fallback mode.
       Targets the same Laplace pseudo-posterior as isLaplace (shares its O(Laplace) bias).
 
@@ -54,7 +54,7 @@ Chain mechanics
 ---------------
 A pool of s = n_chains × n_steps proposals is drawn upfront.  All log weights are computed in
 one vectorised pass.  The MH loop is vectorised over (b, n_chains) and iterates as a Python
-loop over n_steps - typically 50–250 steps.  The first `burnin` steps are discarded; the
+loop over n_steps - typically 50-250 steps.  The first `burnin` steps are discarded; the
 remaining n_chains × (n_steps − burnin) samples are returned as a Proposal.
 
 Empirical comparison
@@ -71,15 +71,15 @@ LOO-NLL. Root causes (the first two are fixed in this module; the third is open)
 
 1. Argmax chain init (fixed). Chains were initialised at the pool-wide argmax of the
    log-weights of the very pool they then iterate over, so every later proposal had
-   log_alpha = lw_prop − lw_argmax ≤ 0 by construction; at low acceptance a chain sat at
+   log_alpha = lw_prop − lw_argmax <= 0 by construction; at low acceptance a chain sat at
    that single point through the whole post-burnin phase. This produced the severe
    under-dispersion signature (RFX joint ECE ≈ −0.65, median LOO Pareto k of −1 to −3.5
-   for 'joint' on Bernoulli/Poisson, acceptance 4–6%). Chains now initialise at t=0 of
+   for 'joint' on Bernoulli/Poisson, acceptance 4-6%). Chains now initialise at t=0 of
    their block - a fair draw from the proposal.
 2. Inconsistent marginal target (fixed). The 'marginal' branch computed its own weight
    with a diagonal-Σ_rfx marginal likelihood and *no* LKJ prior on z_corr, while
    `_sampleRfxConditional` conditioned rfx on those very z_corr dims - the chain targeted
-   one distribution and drew rfx from another. Explains Corr(RFX) R dropping 0.812 → 0.650
+   one distribution and drew rfx from another. Explains Corr(RFX) R dropping 0.812 -> 0.650
    and σ_eps miscalibration under 'marginal' on Normal. Weights are now delegated to
    ImportanceSampler.unnormalizedPosterior (single source of truth with IS), which
    includes the correlated marginal likelihood and the LKJ prior term.
@@ -102,7 +102,7 @@ TODO
 Findings (2026-09, 512 test datasets)
 -------------------------------------
 The robustified Laplace mode search removed init-dependent absorbing states from
-mode='laplace' (Poisson-large σ_rfx ECE −0.070 → −0.051, LOO-NLL unchanged at NUTS level).
+mode='laplace' (Poisson-large σ_rfx ECE −0.070 -> −0.051, LOO-NLL unchanged at NUTS level).
 The large/huge-regime FFX under-dispersion is the finite proposal pool - identical with the
 exact marginal target on Normal-huge, and shrinking with pool size (calibration error
 ≈ (ā·s)^−0.4 for the pseudo-marginal chain in a pool-size sweep) - hence the
@@ -157,7 +157,7 @@ from metabeta.utils.results import Proposal
 Mode = Literal['global', 'marginal', 'joint', 'laplace']
 
 # IS² draws per group of the pseudo-marginal chain (mode='laplace', n_inner > 0; 'imhPM'):
-# sd(log p̂(y|θ)) ≈ 0.08 median / ≤ 0.5 q90 at K = 8 (experiments/posthoc/is2_tuning.py)
+# sd(log p̂(y|θ)) ≈ 0.08 median / <= 0.5 q90 at K = 8 (experiments/posthoc/is2_tuning.py)
 IS2_N_INNER = 8
 
 # Effective-draw target from the pool-size sweep: the pseudo-marginal chain's FFX
@@ -387,7 +387,7 @@ class MetropolisSampler:
         # Initialise at each chain's first draw - a fair sample from the proposal.
         # Initialising at the pool-wide argmax (as done previously) guarantees
         # under-dispersion: every later proposal in the pool then has
-        # log_alpha = lw − lw_max ≤ 0, so low-acceptance chains sit at that single
+        # log_alpha = lw − lw_max <= 0, so low-acceptance chains sit at that single
         # point through the whole post-burnin phase (see Findings in the module
         # docstring).
         cur_g = sg_ct[:, :, 0].clone()   # (b, C, D_g)
@@ -422,7 +422,7 @@ class MetropolisSampler:
                     keep_l.append(cur_l.clone())
                 keep_acc.append(accept.float())
 
-        # Stack post-burnin samples: (T_post, b, C, D_g) → (b, C*T_post, D_g)
+        # Stack post-burnin samples: (T_post, b, C, D_g) -> (b, C*T_post, D_g)
         sg_out = torch.stack(keep_g, dim=0).permute(1, 2, 0, 3).reshape(b, C * T_post, D_g)
 
         sl_out = None
@@ -482,7 +482,7 @@ class MetropolisSampler:
         """Laplace factors of the kept chain states (mode='laplace').
 
         Every kept chain state is a member of the proposal pool, and the pool pass
-        (_logWeights → LaplaceImportanceSampler.unnormalizedPosterior) already computed its
+        (_logWeights -> LaplaceImportanceSampler.unnormalizedPosterior) already computed its
         per-group Laplace modes b* and Hessian factors. Gathering them by ``idx_out`` is
         therefore exact and avoids a second full Newton pass, which used to cost as much as
         the pool pass itself. With IS² weights (n_inner > 0) the state's weight-selected inner
@@ -509,7 +509,7 @@ class MetropolisSampler:
 
     @staticmethod
     def _gatherPool(t: Tensor, idx_out: Tensor) -> Tensor:
-        """Per-group pool tensor (b, m, s, ...) → its kept states (b, m, s_out, ...)."""
+        """Per-group pool tensor (b, m, s, ...) -> its kept states (b, m, s_out, ...)."""
         idx = idx_out[:, None, :].reshape(*idx_out.shape[:1], 1, -1, *([1] * (t.dim() - 3)))
         return torch.gather(t, 2, idx.expand(*t.shape[:2], idx_out.shape[1], *t.shape[3:]))
 

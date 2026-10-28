@@ -478,7 +478,7 @@ def _normalTailBetaCorrection(
         blend = min(max(float(beta_tail_grid_blend), 0.0), 1.0)
         both_trigger = cap_hit & stabilized
         if bool((both_trigger & eligible_d).any()):
-            # Both MAP β-cap AND in-MAP σ-grid stabilization fired → σ_rfx is inflated
+            # Both MAP β-cap AND in-MAP σ-grid stabilization fired -> σ_rfx is inflated
             # and GLS collapses toward the prior. The σ-grid GLS is also collapsed in this
             # regime. Use prior-regularized OLS (no σ_rfx dependence) as the blend target.
             d_ols = beta_output.shape[-1]

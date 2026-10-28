@@ -155,7 +155,7 @@ def _weightedMean(p: Proposal) -> dict[str, torch.Tensor]:
 def _weightedStd(p: Proposal) -> dict[str, torch.Tensor]:
     """Per-param posterior std for the whole batch, honouring p.weights.
 
-    Reuses evaluation.point.pointEstimate(..., 'std') (uniform → population std, so raw
+    Reuses evaluation.point.pointEstimate(..., 'std') (uniform -> population std, so raw
     MB / ADVI / NUTS / IMH rows are unchanged).
     """
     w = p.weights
@@ -699,7 +699,7 @@ def evaluateReal(
 
 METRICS = ['r', 'sigma_ratio', 'rank_mad', 'delta_nll', 'delta_tpd']
 
-HEADERS_MD = ['method', 'r ↑', 'σ-ratio → 1', 'rank-MAD ↓', 'ΔLOO-NLL ↓', 'Δtime ↓']
+HEADERS_MD = ['method', 'r ↑', 'σ-ratio -> 1', 'rank-MAD ↓', 'ΔLOO-NLL ↓', 'Δtime ↓']
 
 HEADERS_TEX = [
     r'$\mathrm{model}$',
@@ -763,7 +763,7 @@ def saveTables(
         md_parts.append(f'## {stat} over datasets\n\n{md_table}')
     md_path = outdir / f'real_{stem}.md'
     md_path.write_text('\n\n'.join(md_parts) + '\n')
-    logger.info('Saved Markdown → %s', md_path)
+    logger.info('Saved Markdown -> %s', md_path)
 
     # --- LaTeX: the primary statistic under the plain name (what the paper inputs), the
     # other as a separate file so an \input never pulls in two tabulars ---
@@ -792,7 +792,7 @@ def saveTables(
         suffix = '' if stat == PRIMARY_STAT else '_' + stat.split(' ')[0] + stat.split(' ')[-1]
         tex_path = outdir / f'real_{stem}{suffix}.tex'
         tex_path.write_text('\n'.join(lines))
-        logger.info('Saved LaTeX → %s', tex_path)
+        logger.info('Saved LaTeX -> %s', tex_path)
 
 
 # ---------------------------------------------------------------------------

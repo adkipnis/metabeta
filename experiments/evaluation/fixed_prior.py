@@ -91,7 +91,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_SIZES = ['small', 'medium', 'large', 'huge']
 
-# tag → display label.  Scale tags name τ₁/τ₀: 'wide9' is a P0 nine times wider than P1.
+# tag -> display label.  Scale tags name τ₁/τ₀: 'wide9' is a P0 nine times wider than P1.
 CONDITIONS: dict[str, str] = {
     'wide9': 'τ₁/τ₀=1/9',
     'wide3': 'τ₁/τ₀=1/3',
@@ -124,11 +124,11 @@ QUARTILES = ['Q1', 'Q2', 'Q3', 'Q4']
 FAMILY_LABELS = {'n': 'Gaussian', 'b': 'Bernoulli', 'p': 'Poisson'}
 
 # A condition emulates a fixed-prior network faithfully when the P0 flow is about as good a
-# proposal at P0 as the P1 flow is at P1: median IMH(P0) acceptance ≥ this share of the median
+# proposal at P0 as the P1 flow is at P1: median IMH(P0) acceptance >= this share of the median
 # MB(P1) acceptance (same family, same datasets).  Failing rows stay in every table, marked.
 VALIDITY_SHARE = 0.5
 # valid by the rule but footnoted in the paper table: Bambi's scale 2.5 exceeds the Poisson
-# training maximum (τ_β ≤ 1.5, τ_σ ≤ 1.0), so the stand-in is pessimistic
+# training maximum (τ_β <= 1.5, τ_σ <= 1.0), so the stand-in is pessimistic
 BORDERLINE = {('p', 'bambi')}
 
 FREEZE = """## Frozen design (2026-09-24, before the medium/large/huge runs)
@@ -150,7 +150,7 @@ FREEZE = """## Frozen design (2026-09-24, before the medium/large/huge runs)
   Against MetropolisSampler's own accept_rate on the same run (Gaussian small, 32 datasets,
   identity / Bambi / τ₁/τ₀=3): max |difference| 0.003, correlation 1.000.
 - Hyper-prior-mode scaling: stored τ × sd_y in the small test sets reproduces the training
-  hyper-prior quantiles (5–95%) within 3% for all three families (outcome calibration shrinks
+  hyper-prior quantiles (5-95%) within 3% for all three families (outcome calibration shrinks
   only the upper tail), so the hyper-prior-mode P0 is the simulation/prior.py mode divided by sd_y
   (Gaussian; sd_y = 1 for Bernoulli and Poisson).
 """
@@ -556,7 +556,7 @@ class FixedPriorStudy:
     def report(self) -> None:
         df = self.load(self.family)
         stats = self.conditionStats(df, self.family)
-        headers = ['P0', 'arm', 'n', 'r ↑', 'σ-ratio →1', 'rank-MAD ↓', 'ΔLOO-NLL ↓', 'accept']
+        headers = ['P0', 'arm', 'n', 'r ↑', 'σ-ratio ->1', 'rank-MAD ↓', 'ΔLOO-NLL ↓', 'accept']
         headers += ['EACE-g ↓', 'EACE-l ↓']
         validity = [
             [
@@ -578,7 +578,7 @@ class FixedPriorStudy:
             tabulate(self.summaryRows(df), headers=headers, tablefmt='pipe', stralign='right'),
             '',
             f'## Emulation validity (IMH(P0) acceptance vs MB(P1) acceptance '
-            f'{stats[0]["accept_p1"]:.3f}; valid at share ≥ {VALIDITY_SHARE})\n',
+            f'{stats[0]["accept_p1"]:.3f}; valid at share >= {VALIDITY_SHARE})\n',
             tabulate(
                 validity,
                 headers=['P0', 'IMH(P0) accept', 'share', 'valid'],
@@ -733,7 +733,7 @@ class FixedPriorStudy:
                 markeredgewidth=0.8,
             )
         ax_l.set_xticks(x, QUARTILES)
-        ax_l.set_xlabel('$m/q$ quartile (low → high information)')
+        ax_l.set_xlabel('$m/q$ quartile (low -> high information)')
         ax_l.set_ylabel(r'$\sigma$-ratio of MB$^0$($P_0$) vs. NUTS($P_1$)')
         ax_l.set_title('a   Bambi-default $P_0$: posterior width', loc='left', fontsize=8)
         ax_l.legend(frameon=False, loc='upper right', handlelength=1.8)

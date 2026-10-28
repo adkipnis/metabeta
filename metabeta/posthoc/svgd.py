@@ -9,7 +9,7 @@ gradient) that prevents collapse to the MAP:
 
     φ(θ_i) = (1/s) Σ_j [ k(θ_j, θ_i) ∇_{θ_j} log p(θ_j|y)
                           + ∇_{θ_j} k(θ_j, θ_i) ]
-    θ_i ← θ_i + lr · φ(θ_i)
+    θ_i <- θ_i + lr · φ(θ_i)
 
 Parameterisation
 ----------------
@@ -39,8 +39,8 @@ Notes
 -----
 - Particles are initialized from the flow proposal (already a good warm start).
 - Gradient clipping (element-wise) guards against large early-step gradients.
-- SVGD is asymptotically correct as s → ∞ and lr → 0.  With s=100–500 flow
-  particles as initialization, convergence in 50–200 steps is typical.
+- SVGD is asymptotically correct as s -> ∞ and lr -> 0.  With s=100-500 flow
+  particles as initialization, convergence in 50-200 steps is typical.
 """
 
 import argparse
@@ -71,7 +71,7 @@ class SVGDRefiner:
     n_steps : int
         Number of SVGD update steps.
     lr : float
-        Step size (equivalent to Adam lr; typical range 1e-3 – 5e-2).
+        Step size (equivalent to Adam lr; typical range 1e-3 - 5e-2).
     grad_clip : float
         Element-wise gradient clamp applied before kernel weighting.
     """
@@ -372,7 +372,7 @@ class SVGDRefiner:
         denom = max(self.n_steps - 1, 1)
 
         for step in range(self.n_steps):
-            # Cosine schedule: lr → lr * lr_decay over n_steps
+            # Cosine schedule: lr -> lr * lr_decay over n_steps
             t = step / denom
             cos_factor = 0.5 * (1.0 + math.cos(math.pi * t))
             lr_t = self.lr * (self.lr_decay + (1.0 - self.lr_decay) * cos_factor)

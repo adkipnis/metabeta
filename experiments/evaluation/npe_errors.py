@@ -105,7 +105,7 @@ def perDatasetNRMSE(
     Note: evaluate.py reports mean_d(sqrt(mean_B(err²)) / std_d) - aggregate
     over B first, then dims.  This benchmark reports
     median_B(sqrt(mean_d(err²/std_d²))) - aggregate over dims first, then
-    datasets.  Because sqrt(mean(x²)) ≥ mean(sqrt(x²)) and median ≤ mean for
+    datasets.  Because sqrt(mean(x²)) >= mean(sqrt(x²)) and median <= mean for
     right-skewed distributions, the benchmark median will always be lower than
     evaluate.py's figure even with identical normalization.
 
@@ -192,7 +192,7 @@ def perDatasetCoverageError(
                 gt = gt.unsqueeze(-1)
                 ci = ci.unsqueeze(-1)
 
-            # ci: (B, [m,] 2, d)  –  lower at [..., 0, :], upper at [..., 1, :]
+            # ci: (B, [m,] 2, d)  -  lower at [..., 0, :], upper at [..., 1, :]
             above = ci[..., 0, :] - EPS_CI <= gt
             below = gt <= ci[..., 1, :] + EPS_CI
             inside = (above & below).float()
@@ -296,8 +296,8 @@ def runGLMMDiagnostics(
       glmm_combined_nrmse - mean(ffx, sigma[, seps]) - for ranking/correlation
     BLUP calibration:
       glmm_blup_var_ratio - mean(err²) / mean(blup_var) per dataset;
-                            > 1 → GLMM overconfident (BLUPs too shrunk)
-                            < 1 → GLMM underconfident
+                            > 1 -> GLMM overconfident (BLUPs too shrunk)
+                            < 1 -> GLMM underconfident
     Family-specific diagnostics (GLMM only):
       phi_pearson         - overdispersion estimate
       psi_0               - initial variance-component estimate
@@ -596,7 +596,7 @@ def printGLMMSection(
         _dist(glmm_diag[k], k)
     if 'glmm_blup_var_ratio' in glmm_diag:
         print('\n  BLUP variance calibration (mean err² / mean blup_var per dataset):')
-        print('  > 1 → GLMM overconfident (BLUPs overshrunk)  < 1 → underconfident')
+        print('  > 1 -> GLMM overconfident (BLUPs overshrunk)  < 1 -> underconfident')
         _dist(glmm_diag['glmm_blup_var_ratio'], 'blup_var_ratio')
     for k in ('phi_pearson', 'psi_0'):
         if k in glmm_diag:
@@ -625,8 +625,8 @@ def printGLMMSection(
     # ── Propagation: does GLMM failure predict NPE failure? ──────────────────
     _section('GLMM FAILURE PROPAGATION TO NPE  (Spearman ρ)')
     print(
-        '  High ρ(GLMM_err, MB_err) → shared data difficulty.\n'
-        '  Low ρ or negative gap → NPE-specific failure (amortization error).'
+        '  High ρ(GLMM_err, MB_err) -> shared data difficulty.\n'
+        '  Low ρ or negative gap -> NPE-specific failure (amortization error).'
     )
 
     nrmse_mb = nrmse_all['MB']
@@ -652,7 +652,7 @@ def printGLMMSection(
     # ── Amortization gap: MB_nrmse − GLMM_nrmse ──────────────────────────────
     gap = combined_mb - gc
     print(f'\n  Amortization gap = MB_combined_nrmse − GLMM_combined_nrmse:')
-    print('  Positive → MB fails more than GLMM (NPE-specific failure).')
+    print('  Positive -> MB fails more than GLMM (NPE-specific failure).')
     _dist(gap, 'gap')
     frac_positive = float((gap > 0).mean())
     print(f'    ↳ gap > 0 on {frac_positive:.1%} of datasets')

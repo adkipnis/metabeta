@@ -52,7 +52,7 @@ class ActNorm(Transform):
             mean = x.sum(dims) / n
             std = ((x - mean).square() * mask).sum(dims).div((n - 1).clamp_min(1.0)).sqrt()
         self.shift.data.copy_(mean)
-        # Clamp std from below: dimensions with n≤1 active samples get std=0, which
+        # Clamp std from below: dimensions with n<=1 active samples get std=0, which
         # would produce log_scale≈-18 and blow up downstream layers via 1/exp(log_scale).
         # Fall back to identity (log_scale=0) for under-sampled dimensions.
         self.log_scale.data.copy_(std.clamp(min=1.0).log())

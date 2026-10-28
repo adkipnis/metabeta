@@ -351,7 +351,7 @@ class CurveExperiment:
         lines += [f"{r['data_id']},{r['method']},{r['metric']},{r['value']:.6g}" for r in self.rows]
         (stem.with_suffix('.csv')).write_text('\n'.join(lines) + '\n')
 
-        header = ['data id', 'method', 'group', 'n', 'r ↑', 'σ-ratio → 1', 'rank-MAD ↓']
+        header = ['data id', 'method', 'group', 'n', 'r ↑', 'σ-ratio -> 1', 'rank-MAD ↓']
         md = ['| ' + ' | '.join(header) + ' |', '|' + '---|' * len(header)]
         for r in self.agreement:
             md.append(

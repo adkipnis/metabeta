@@ -245,7 +245,7 @@ def collateGrouped(
         rfx[b, idx] = torch.as_tensor(ds['rfx'], dtype=dtype)
     out['rfx'] = rfx
 
-    # correlation matrix (q, q) → (B, q, q); eta_rfx=0 means identity
+    # correlation matrix (q, q) -> (B, q, q); eta_rfx=0 means identity
     out['corr_rfx'] = quickCollate(batch, 'corr_rfx', dtype)
     out['eta_rfx'] = quickCollate(batch, 'eta_rfx', dtype)
 
@@ -423,7 +423,7 @@ def trimBatchPadding(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
 
     A batch sliced out of a larger collation keeps the parent's padding in the group (m) and
     observation (n) axes, and every (b, m, n, s) tensor built on it pays for that - on the
-    test splits the split-wide padding is 3–4x the sub-batch's own. This shrinks both axes
+    test splits the split-wide padding is 3-4x the sub-batch's own. This shrinks both axes
     to the sub-batch maxima (from mask_n), touching only per-group / per-observation keys,
     so the result equals what collateGrouped would produce for these datasets alone. Raises
     if a dropped region is not entirely zero (a padding-convention violation, never silent).

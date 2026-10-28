@@ -151,7 +151,7 @@ def sampleGroupedPermutation(
     d: int,
     q: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Sample column permutations that preserve FFX↔RFX alignment.
+    """Sample column permutations that preserve FFX<->RFX alignment.
 
     Permutes within two non-overlapping groups:
       - mixed-effects slots 1..q-1: same permutation for FFX and RFX columns

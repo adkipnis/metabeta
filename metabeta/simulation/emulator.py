@@ -23,7 +23,7 @@ _TEST_META_DB: list[dict] | None = None
 _DATA_CACHE: dict[Path, dict] = {}
 
 
-# y_type strings saved by preprocess.py → compatible likelihood families
+# y_type strings saved by preprocess.py -> compatible likelihood families
 # family 0=normal (always), 1=bernoulli, 2=poisson
 _Y_TYPE_FAMILIES: dict[str, set[int]] = {
     'continuous': {0},

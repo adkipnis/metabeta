@@ -1,5 +1,5 @@
 #!/bin/bash
-# Array layout:  0 → valid,  1 → test,  2+ → train epochs
+# Array layout:  0 -> valid,  1 -> test,  2+ -> train epochs
 # Total tasks:   2 + N_TRAIN_EPOCHS  (adjust --array accordingly)
 
 #SBATCH --job-name=precompute

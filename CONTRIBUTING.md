@@ -39,7 +39,7 @@ uv run blue --check metabeta tests   # the formatting that CI checks
 metabeta/
   models/       the public Api (api.py), the approximator, Set Transformers and flows
   analytical/   closed-form estimates that join the summaries
-  posthoc/      corrections of the networks' draws: importance sampling, Metropolis–Hastings
+  posthoc/      corrections of the networks' draws: importance sampling, Metropolis-Hastings
   evaluation/   posterior summaries, intervals, predictive checks and calibration
   plotting/     the figures, plotParameters and plotPPD among them
   utils/        configs, the checkpoint download, priors, families and shared helpers

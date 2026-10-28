@@ -1,9 +1,9 @@
-"""MB↔NUTS posterior agreement as a function of the design-matrix condition number κ₂(X).
+"""MB<->NUTS posterior agreement as a function of the design-matrix condition number κ₂(X).
 
 κ₂(X) = σ_max/σ_min of each dataset's stacked fixed-effects design (a property of the
 input) is the independent variable; datasets are binned by it. Within each bin we report
 per-dataset agreement to the NUTS reference, reusing real_posterior.py's metrics: r (mean
-correlation), σ-ratio (std_MB/std_NUTS → 1), rank-MAD (marginal shape → 0), and ΔLOO-NLL.
+correlation), σ-ratio (std_MB/std_NUTS -> 1), rank-MAD (marginal shape -> 0), and ΔLOO-NLL.
 These are paired to NUTS on the same dataset, so the intrinsic posterior widening at high κ
 cancels; % NUTS-converged per bin marks the reference's own operating boundary.
 
@@ -92,7 +92,7 @@ METHOD_LABELS = {
 METRIC_KEYS = ('r', 'sigma_ratio', 'rank_mad', 'delta_nll')
 AGREE_METRICS = [
     ('r', 'r ↑'),
-    ('sigma_ratio', 'σ-ratio →1'),
+    ('sigma_ratio', 'σ-ratio ->1'),
     ('rank_mad', 'rank-MAD ↓'),
     ('delta_nll', 'ΔLOO-NLL ↓'),
 ]
@@ -144,7 +144,7 @@ def _agreementArrays(
     summary_chunk_size,
     nuts_loo,
 ) -> dict[str, np.ndarray]:
-    """Per-dataset MB↔NUTS agreement (over the converged subset) for one proposal."""
+    """Per-dataset MB<->NUTS agreement (over the converged subset) for one proposal."""
     summary = loadOrComputeSummary(
         proposal,
         batch_c,
@@ -412,7 +412,7 @@ def renderBinnedTex(rows: list[dict], dp: int = 3) -> str:
 def spearmanTable(records: dict[str, np.ndarray], methods: list[str]) -> list[dict]:
     """Rank correlation of κ with each agreement metric over all converged datasets (no bins).
 
-    Sign gives the direction of degradation: for r (→1) negative ρ is degradation; for
+    Sign gives the direction of degradation: for r (->1) negative ρ is degradation; for
     σ-ratio, rank-MAD, ΔLOO-NLL, positive ρ is degradation (or, for σ-ratio, growing
     over-dispersion). Rank-based, so the singular (κ=∞) datasets contribute as the top ranks.
     """
@@ -453,7 +453,7 @@ def renderSpearmanMd(rows: list[dict]) -> str:
 def setup() -> argparse.Namespace:
     # fmt: off
     parser = argparse.ArgumentParser(
-        description='MB↔NUTS agreement vs design-matrix condition number on real-n data.',
+        description='MB<->NUTS agreement vs design-matrix condition number on real-n data.',
     )
     parser.add_argument('--sizes', type=str, nargs='+', default=DEFAULT_SIZES,
                         choices=DEFAULT_SIZES, help='Real sizes to pool (default: all).')
@@ -555,7 +555,7 @@ def main() -> None:
     table_methods = ['mb'] + methods
     rows = binnedTable(records, KAPPA_EDGES, table_methods)
     binned_md = renderBinnedMd(rows, dp=cfg.decimals)
-    print('\n=== MB↔NUTS agreement by κ₂(X) bin (median ± MAD over converged datasets) ===\n')
+    print('\n=== MB<->NUTS agreement by κ₂(X) bin (median ± MAD over converged datasets) ===\n')
     print(binned_md)
 
     # Bins-free robustness check: Spearman ρ(κ, metric) over all converged datasets.
@@ -567,7 +567,7 @@ def main() -> None:
 
     stem = f'condition_number_agreement_{tag}'
     (outdir / f'{stem}.md').write_text(
-        f'# MB↔NUTS agreement vs κ₂(X) ({tag})\n\n'
+        f'# MB<->NUTS agreement vs κ₂(X) ({tag})\n\n'
         f'Sizes: {", ".join(cfg.sizes)} (real-{family}). Reference: NUTS.\n\n'
         f'{binned_md}\n\n'
         f'## Bins-free robustness: Spearman ρ(κ, metric)\n\n'

@@ -89,7 +89,7 @@ def test_log_jacobian_standardization():
 
 
 def test_corr_prior_is_a_density_over_stored_r():
-    """The LKJ term in the weights is LKJ(z) in the dataset's own q minus the padded z→r Jacobian.
+    """The LKJ term in the weights is LKJ(z) in the dataset's own q minus the padded z->r Jacobian.
 
     For q_i = q = 2 the Jacobian is exactly log(1 - rho^2), i.e. the weight differs from the
     legacy density-over-z convention by -log(1 - rho^2).

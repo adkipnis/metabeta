@@ -59,7 +59,7 @@ def padToModel(
     d = int(ds['d'])
     q = int(ds['q'])
 
-    # --- fixed-effects dimension (d → max_d) ---
+    # --- fixed-effects dimension (d -> max_d) ---
     if d < max_d:
         n = ds['X'].shape[0]
         X = np.zeros((n, max_d), dtype=ds['X'].dtype)
@@ -71,7 +71,7 @@ def padToModel(
             padded[:d] = ds[key]
             ds[key] = padded
 
-    # --- random-effects dimension (q → max_q) ---
+    # --- random-effects dimension (q -> max_q) ---
     if q < max_q:
         for key in ('sigma_rfx', 'tau_rfx'):
             padded = np.zeros(max_q, dtype=ds[key].dtype)
@@ -119,7 +119,7 @@ def padToModel(
             continue
         s = ds[ffx_key].shape[-1]
 
-        # trim then pad ffx: (d_file, s) → (d, s) → (max_d, s)
+        # trim then pad ffx: (d_file, s) -> (d, s) -> (max_d, s)
         ds[ffx_key] = ds[ffx_key][:d]
         if d < max_d:
             padded = np.zeros((max_d, s), dtype=ds[ffx_key].dtype)

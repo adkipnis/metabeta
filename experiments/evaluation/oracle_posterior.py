@@ -195,7 +195,7 @@ def loadRegimeBatch(
     fit tensors are never materialized). Pass ``fits=('nuts',)`` etc. to load exactly one
     method's fits.
 
-    When the test set fits within the model (d_file ≤ max_d, q_file ≤ max_q), loads with
+    When the test set fits within the model (d_file <= max_d, q_file <= max_q), loads with
     max_d/max_q so the model receives correctly-padded inputs. Otherwise loads natively,
     filters datasets by capacity, and trims to max_d/max_q.
 
@@ -276,7 +276,7 @@ def _meanStd(t: torch.Tensor) -> tuple[float, float]:
     return t.mean().item(), std
 
 
-# Statistic name → (center, spread) function.
+# Statistic name -> (center, spread) function.
 STATS = {'mean ± std': _meanStd, 'median ± MAD': _medianMad}
 # Primary statistic per column (the paper's tables). r/NRMSE/ECE/EACE are per-parameter
 # aggregates over the test set, so their spread runs over parameter dimensions (fixed effects,
@@ -439,7 +439,7 @@ def evaluateRegime(
             'Run metabeta/analytical/precompute.py for this data_id/partition.',
             data_path.name,
         )
-    logger.info('  Capacity filter: %d / %d (d≤%d, q≤%d)', n_kept, n_total, max_d, max_q)
+    logger.info('  Capacity filter: %d / %d (d<=%d, q<=%d)', n_kept, n_total, max_d, max_q)
     if n_kept == 0:
         logger.warning('  No datasets pass capacity filter - skipping.')
         return [], None
@@ -651,7 +651,7 @@ def saveTables(
         md_parts.append(f'## {label}\n\n{md_table}')
     md_path = outdir / f'oracle_{run_name}.md'
     md_path.write_text('\n\n'.join(md_parts) + '\n')
-    logger.info('Saved Markdown → %s', md_path)
+    logger.info('Saved Markdown -> %s', md_path)
 
     # --- LaTeX: the per-column primary table under the plain name (what the paper inputs),
     # the single-statistic tables as separate files so an \input never pulls in two tabulars ---
@@ -677,7 +677,7 @@ def saveTables(
         suffix = '' if stat == 'primary' else '_' + stat.split(' ')[0] + stat.split(' ')[-1]
         tex_path = outdir / f'oracle_{run_name}{suffix}.tex'
         tex_path.write_text('\n'.join(lines))
-        logger.info('Saved LaTeX → %s', tex_path)
+        logger.info('Saved LaTeX -> %s', tex_path)
 
     saveClassTable(rows_by_regime, outdir, run_name, dp)
 
@@ -740,7 +740,7 @@ def saveClassTable(
     lines += [r'    \bottomrule', r'\end{tabular}', '']
     tex_path = outdir / f'oracle_{run_name}_class.tex'
     tex_path.write_text('\n'.join(lines))
-    logger.info('Saved LaTeX → %s', tex_path)
+    logger.info('Saved LaTeX -> %s', tex_path)
 
 
 # ---------------------------------------------------------------------------

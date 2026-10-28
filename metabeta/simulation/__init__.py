@@ -11,7 +11,7 @@ __all__ = [
     'Generator',
 ]
 
-# submodule → names it exports; loaded lazily on first attribute access
+# submodule -> names it exports; loaded lazily on first attribute access
 _LAZY: dict[str, tuple[str, ...]] = {
     '.prior': ('Prior', 'hypersample', 'bambiDefaultPriors'),
     '.synthesizer': ('Synthesizer', 'Scammer'),

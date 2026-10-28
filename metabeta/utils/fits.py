@@ -36,7 +36,7 @@ _SHA_KEY = 'source_sha'
 
 
 def fitPath(data_path: Path, tag: str) -> Path:
-    """``.../test.npz`` → ``.../test.{tag}.npz``."""
+    """``.../test.npz`` -> ``.../test.{tag}.npz``."""
     if tag not in FIT_TAGS:
         raise ValueError(f'unknown fit tag {tag!r}; expected one of {FIT_TAGS}')
     return Path(data_path).with_suffix(f'.{tag}.npz')

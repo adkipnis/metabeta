@@ -921,7 +921,7 @@ def test_router_warns_unstandardized_continuous_y(tmp_path: Path):
     bad = _full_batch(d=3, q=2, m=12, family=0)
     bad['likelihood_family'] = torch.tensor([0])
     bad['sd_y'] = torch.ones(1)
-    # y with large mean → unstandardized
+    # y with large mean -> unstandardized
     bad['y'] = bad['y'] + 100.0
 
     with pytest.warns(RuntimeWarning, match='unstandardized'):

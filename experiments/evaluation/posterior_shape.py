@@ -372,9 +372,9 @@ def _printRank(rows: list[dict]) -> None:
     print(
         tabulate([[fmt(r[h]) for h in headers] for r in rows], headers=headers, tablefmt='simple')
     )
-    print('  Values near expected → shapes match')
+    print('  Values near expected -> shapes match')
     print(
-        '  p50 ≠ 0.50 → bias  |  compressed quantiles → MB overdispersed  |  spread → MB underdispersed\n'
+        '  p50 ≠ 0.50 -> bias  |  compressed quantiles -> MB overdispersed  |  spread -> MB underdispersed\n'
     )
 
 
@@ -401,8 +401,8 @@ def _printLocalUncertainty(rows: list[dict]) -> None:
         )
     )
     print('  ratio = cond_std / marginal_std')
-    print('  ratio → 0: global uncertainty dominates rfx spread')
-    print('  ratio → 1: local (conditional) uncertainty dominates rfx spread\n')
+    print('  ratio -> 0: global uncertainty dominates rfx spread')
+    print('  ratio -> 1: local (conditional) uncertainty dominates rfx spread\n')
 
 
 # ---------------------------------------------------------------------------

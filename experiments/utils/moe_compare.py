@@ -194,9 +194,9 @@ def evaluateComparison(
 
     For each (eval_run, mix_run) pair, runs three conditions - all on the
     eval run's test data:
-      baseline   : eval model, k=0, n_samples       → n_samples total
-      pseudo-MoE : eval model, k=1, n_samples       → 2*n_samples total
-      true MoE   : [eval_model, mix_model], k=0     → 2*n_samples total
+      baseline   : eval model, k=0, n_samples       -> n_samples total
+      pseudo-MoE : eval model, k=1, n_samples       -> 2*n_samples total
+      true MoE   : [eval_model, mix_model], k=0     -> 2*n_samples total
     """
     if len(eval_runs) != len(mix_runs):
         raise ValueError('--configs and --mix-configs must have the same length')
@@ -301,7 +301,7 @@ def evaluateMulti(
     partition = 'valid' if use_valid else 'test'
 
     print(f"\n{'=' * 60}")
-    print(f'True MoE: {len(run_names)} checkpoint(s) → eval on {eval_run}')
+    print(f'True MoE: {len(run_names)} checkpoint(s) -> eval on {eval_run}')
     print(f'Run names: {run_names}')
     print(f'Partition: {partition}')
     print(f"{'=' * 60}")
@@ -606,6 +606,6 @@ if __name__ == '__main__':
     )
     tex_path = outdir / f'{outfile}.tex'
     tex_path.write_text(formatTable(rows, fmt='latex') + '\n')
-    print(f'\nMarkdown → {md_path}')
-    print(f'LaTeX    → {tex_path}')
+    print(f'\nMarkdown -> {md_path}')
+    print(f'LaTeX    -> {tex_path}')
     print('\nDone.')

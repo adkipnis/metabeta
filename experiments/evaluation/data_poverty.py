@@ -14,7 +14,7 @@ is ambiguous, so we report it under the full range of defensible parameter count
                              groups) - so the honest n<p question is per-group (local ρ).
 
 On sampled data we have ground-truth θ, so per ρ / γ bin we score three posteriors - raw
-amortized (MB), MB refined by independent Metropolis–Hastings (MB+IMH), and NUTS - against
+amortized (MB), MB refined by independent Metropolis-Hastings (MB+IMH), and NUTS - against
 the same ground truth, on complementary quality dimensions:
 
   EACE ↓    expected absolute calibration error: mean over credible levels of
@@ -676,7 +676,7 @@ def main() -> None:
         print('\n=== Global-parameter quality by dataset γ (adversarial p_all) ===\n' + tbl_global)
         md += [
             '## Random-effect quality by per-group ρ = n_i/(d+q)  (local n<p at ρ<1)\n',
-            'Counts are # groups. EACE→0 = calibrated; NRMSE = recovery; cov90 nominal 0.900. '
+            'Counts are # groups. EACE->0 = calibrated; NRMSE = recovery; cov90 nominal 0.900. '
             'NUTS uses its converged subset.\n',
             tbl_local,
             '',

@@ -34,7 +34,7 @@ to test this machinery end-to-end against logMarginalLikelihoodNormal.
 
 Findings (2026-07 posthoc ablation, 128 validation datasets, small models)
 --------------------------------------------------------------------------
-Weight health is excellent (PSIS k ≈ 0.03 Bernoulli / 0.18 Poisson, 2–3% guardrail
+Weight health is excellent (PSIS k ≈ 0.03 Bernoulli / 0.18 Poisson, 2-3% guardrail
 fallback, ~69% sample efficiency), i.e. the flow is a good proposal for the Laplace
 target - but the Laplace target itself is measurably biased: σ_rfx ECE shifts from
 ≈ +0.03/−0.01 (raw) to ≈ −0.10 on both families, the classic downward Laplace/PQL
@@ -47,8 +47,8 @@ Findings (2026-09, 512 test datasets)
 Most of the σ_rfx shift above was Newton-instability contamination of the weights, not
 Laplace bias: full-step Newton oscillated on extreme proposals (huge-count Poisson),
 making log p̂(y|θ_g) depend on the warm start by 1e4+ nats on top-weight samples. With the
-robustified mode search below, Poisson-large isLaplace σ_rfx ECE went −0.046 → −0.031
-(raw −0.027) and Bernoulli-huge max PSIS k 15.4 → 2.6.
+robustified mode search below, Poisson-large isLaplace σ_rfx ECE went −0.046 -> −0.031
+(raw −0.027) and Bernoulli-huge max PSIS k 15.4 -> 2.6.
 """
 
 import math
@@ -254,7 +254,7 @@ def laplaceRfxModes(
 
     # Extra phase: only the entries still above tol keep iterating (up to n_newton_extra
     # more steps), compacted to a (K, n, ·) layout. After the standard phase these are
-    # 0.1–2% of the entries (huge-count Poisson proposals), so a global rule that kept
+    # 0.1-2% of the entries (huge-count Poisson proposals), so a global rule that kept
     # every entry stepping until the last one resolved cost ~3x the whole pass.
     unresolved = decrement > tol
     if n_newton_extra > 0 and bool(unresolved.any()):
@@ -579,7 +579,7 @@ def logMarginalLikelihoodIS2(
         cand = torch.where(from_prior.unsqueeze(-1), f.priorDraw(z), f.laplaceDraw(z))
         log_w = f.logWeight(cand)
         log_sum_new = torch.logaddexp(log_sum, log_w)
-        take = torch.rand_like(log_w) < torch.exp(log_w - log_sum_new)  # NaN (both −inf) → keep
+        take = torch.rand_like(log_w) < torch.exp(log_w - log_sum_new)  # NaN (both −inf) -> keep
         rfx = torch.where(take.unsqueeze(-1), cand, rfx)
         log_sum = log_sum_new
 

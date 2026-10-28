@@ -276,7 +276,7 @@ def printKDiagnostics(mb_k: np.ndarray, nuts_k: np.ndarray) -> None:
     print('=== Pareto-k diagnostics (fraction of datasets with mean k > 0.7) ===')
     print(f'  MB:   {_frac_bad(mb_k):.3f}')
     print(f'  NUTS: {_frac_bad(nuts_k):.3f}')
-    print('  (k > 0.7 → LOO estimate unreliable for that dataset)\n')
+    print('  (k > 0.7 -> LOO estimate unreliable for that dataset)\n')
 
 
 # ---------------------------------------------------------------------------

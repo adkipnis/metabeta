@@ -375,7 +375,7 @@ class Target:
         sigma_eps: torch.Tensor | None,
         corr: torch.Tensor | None,
     ) -> torch.Tensor:
-        """(s, d_i), (s, q_i), (s,) or None, (s, q, q) constrained draws → (s, dim) unconstrained."""
+        """(s, d_i), (s, q_i), (s,) or None, (s, q, q) constrained draws -> (s, dim) unconstrained."""
         parts = [
             ffx[:, : self.d_i].double(),
             sigma_rfx[:, : self.q_i].double().clamp_min(1e-8).log(),
@@ -614,7 +614,7 @@ def tFit(
 
 
 def jeffreys(log_bf: float) -> float:
-    """Signed Jeffreys category of ln BF: 0 anecdotal … ±4 decisive; NaN for a non-finite BF."""
+    """Signed Jeffreys category of ln BF: 0 anecdotal ... ±4 decisive; NaN for a non-finite BF."""
     if not np.isfinite(log_bf):
         return np.nan
     return float(np.sign(log_bf) * np.searchsorted(JEFFREYS_EDGES, abs(log_bf), side='right'))
@@ -684,8 +684,8 @@ def summarize(df: pd.DataFrame, pool_sizes: list[int], label: str) -> str:
 
     lines += ['', f'## By PSIS k (S={s_max})', '']
     bins = (
-        ('k ≤ 0.5', k_max <= 0.5),
-        ('0.5 < k ≤ 0.7', (k_max > 0.5) & (k_max <= 0.7)),
+        ('k <= 0.5', k_max <= 0.5),
+        ('0.5 < k <= 0.7', (k_max > 0.5) & (k_max <= 0.7)),
         ('k > 0.7', k_max > 0.7),
     )
     lines.append(_table({name: _absStats(d_max[sel]) for name, sel in bins}))

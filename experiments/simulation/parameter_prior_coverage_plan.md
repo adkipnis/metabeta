@@ -88,14 +88,14 @@ scaled by the same factor so the stored prior context remains coherent.
 reveal a cumulative linear-predictor variance problem for large d:
 
 - `hypersample()` draws `tau_ffx ~ skewedBeta(0.01, 3.0, mode=0.8)` per predictor.
-- For d=13–16 (huge), `SD(eta_FFX) = sqrt(sum tau_j^2)` has mean ≈ 4.5 and reaches 6.6.
+- For d=13-16 (huge), `SD(eta_FFX) = sqrt(sum tau_j^2)` has mean ≈ 4.5 and reaches 6.6.
 - P(|eta| > 10) at SD=6.6 is ≈ 13% per observation - irrecoverable by 20 rerolls.
 - Generation logs show 26 "remained high after rerolls" warnings across all sizes,
   concentrated in large/huge batches.
 
 From the real-b-reference NUTS posteriors:
-- `sd(eta_hat)` = 0.91–3.27, mean ≈ 2.2, p95 ≈ 3.2.
-- Even for d=16 (guimmun) and d=22 (guprenat), sd(eta_hat) ≤ 3.3 because real
+- `sd(eta_hat)` = 0.91-3.27, mean ≈ 2.2, p95 ≈ 3.2.
+- Even for d=16 (guimmun) and d=22 (guprenat), sd(eta_hat) <= 3.3 because real
   high-d datasets tend to have many small, sparse effects.
 
 Unlike Normal, there is no `sigma_eps` to act as a lever - the entire signal amplitude
@@ -123,11 +123,11 @@ Analogous to the Normal's `_calibrateBernoulliResidualShare`, introduce
 
 Cap bounds rationale:
 - Lower = 2.0: preserves high-signal datasets up to the real-data maximum.
-- Upper = 4.0: at SD=4 → P(|eta| > 10) ≈ 1.2%, well below the 5% reroll threshold.
+- Upper = 4.0: at SD=4 -> P(|eta| > 10) ≈ 1.2%, well below the 5% reroll threshold.
 
 Acceptance target: essentially eliminate "remained high after rerolls" warnings;
 generated sd(eta) distribution should overlap substantially with NUTS sd(eta_hat)
-range (0.9–3.3), while still covering the full range of plausible Bernoulli signals.
+range (0.9-3.3), while still covering the full range of plausible Bernoulli signals.
 
 ## Guardrails
 

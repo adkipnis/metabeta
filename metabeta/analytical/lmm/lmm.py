@@ -290,8 +290,8 @@ def _remlNewtonStep(
     H_diag = H_diag.clamp(min=0.0) * active[:, :, None].to(H_diag.dtype)  # (B, m, q)
 
     # Exact REML signal: (Z'V_g⁻¹r_g)²_k via Woodbury V_g⁻¹=σ⁻²(I-Z W Z'/σ²)
-    # Z'V⁻¹r = (Ztr - ZtZ_W @ Ztr / σ²) / σ². At Ψ=0: W_g→0, reduces to Ztr/σ².
-    # At true Ψ: gradient→0, so this is safe without a gate (no overshoot at MLE).
+    # Z'V⁻¹r = (Ztr - ZtZ_W @ Ztr / σ²) / σ². At Ψ=0: W_g->0, reduces to Ztr/σ².
+    # At true Ψ: gradient->0, so this is safe without a gate (no overshoot at MLE).
     Ztr = torch.einsum('bmnq,bmn->bmq', Zm, gls.resid)  # (B, m, q)
     ZtZ_W_Ztr = torch.einsum('bmqr,bmr->bmq', ZtZ_W, Ztr)  # (B, m, q)
     Vr = (Ztr - ZtZ_W_Ztr / se2_3d) / se2_3d  # Z'V_g⁻¹r per group
@@ -425,7 +425,7 @@ def _lmmNormalFull(
     Zm: torch.Tensor,  # (B, m, n, q)
     mask_n: torch.Tensor,  # (B, m, n)  1 for active observations
     mask_m: torch.Tensor,  # (B, m)     1 for active groups
-    ns: torch.Tensor,  # (B, m)     group sizes (float, ≥ 1 for active)
+    ns: torch.Tensor,  # (B, m)     group sizes (float, >= 1 for active)
     n_total: torch.Tensor,  # (B,)       total active observations
     n_em: int = 3,
     uncorr: torch.Tensor | None = None,  # (B,) bool - force Ψ diagonal for these datasets
@@ -615,10 +615,10 @@ def _lmmNormalFull(
     blup_var = blup_var * (1.0 + 2.0 / df_sigma.clamp(min=2.0))[:, None, None]
 
     # Kackar-Harville correction: blup_var = diag(σ²W_g) conditions on β as known, but actual
-    # BLUP error also includes W_g Z^T X (β_hat - β). Dominant for large groups where W_g→Ψ⁻¹,
-    # (1-λ)Ψ→0.
+    # BLUP error also includes W_g Z^T X (β_hat - β). Dominant for large groups where W_g->Ψ⁻¹,
+    # (1-λ)Ψ->0.
     # beta_var uses a truncated eigendecomposition of A_gls_reg: near-zero eigenvalues (rank
-    # deficiency from m<d, collinear group means, or q≥d collapse) inflate beta_var_kh via
+    # deficiency from m<d, collinear group means, or q>=d collapse) inflate beta_var_kh via
     # the adaptive-ridge reciprocal ≈1e6. Truncating below 1e-3 × max_eig caps beta_var at
     # the identified directions only, zeroing contributions from the null space.
     vals_kh, vecs_kh = torch.linalg.eigh(A_gls_reg)                # (B, d), (B, d, d)
@@ -630,7 +630,7 @@ def _lmmNormalFull(
     )
     beta_var_kh = (vecs_kh**2 * inv_vals_kh[:, None, :]).sum(dim=-1).clamp(min=1e-8)  # (B, d)
     kh_corr = (W_ZtX**2 * beta_var_kh[:, None, None, :]).sum(dim=-1)  # (B, m, q)
-    # Zero KH for collapsed GLS (q≥d or G<d): those datasets use beta_wg so β-uncertainty
+    # Zero KH for collapsed GLS (q>=d or G<d): those datasets use beta_wg so β-uncertainty
     # is not meaningful; truncation above handles the collinear-group-means case.
     gls_determined = G >= float(d)  # (B,)
     kh_corr = kh_corr * (beta_identified & gls_determined)[:, None, None]
@@ -643,7 +643,7 @@ def _lmmNormalFull(
     blup_var = blup_var.clamp(min=blup_var_floor)
     # Ψ-uncertainty additive floor: when Ψ̂ is noisy (small G_mom), the dominant
     # blup prediction error source is Ψ̂/G_mom regardless of n_g. This term stays
-    # finite for large groups where σ²W_g→0, preventing catastrophic overconfidence.
+    # finite for large groups where σ²W_g->0, preventing catastrophic overconfidence.
     blup_var_psi_floor = psi_diag[:, None, :] / G_mom.clamp(min=1.0)[:, None, None]
     blup_var = blup_var + blup_var_psi_floor
 

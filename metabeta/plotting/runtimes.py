@@ -3,7 +3,7 @@ Runtime vs n_params figure (Panel A of warm-start figure).
 
 Lines: MB | MB-NUTS (warm_2000) | NUTS | ADVI
 X-axis: n_params = d + q + m*q (effective model parameters per dataset)
-Line + band: equal-count bins → median + 5th/95th percentile
+Line + band: equal-count bins -> median + 5th/95th percentile
 
 Data sources:
 - NUTS (cold_std), ADVI and PF wall times: test.{nuts,advi1,pathfinder1}.npz
@@ -452,4 +452,4 @@ if __name__ == '__main__':
         show=args.show,
     )
     if path:
-        print(f'Saved → {path}')
+        print(f'Saved -> {path}')

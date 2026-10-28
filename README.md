@@ -13,7 +13,7 @@ Bayesian inference for GLMMs (generalized linear mixed-effects models) in under 
   random effects, and their standard deviations (SDs) and correlations.
 - **Priors as input**: you can change them without retraining, fit several at once, and compare models using
   Bayes factors.
-- **Asymptotically exact**: Metropolis–Hastings refines the networks' posterior samples against the exact unnormalized posterior.
+- **Asymptotically exact**: Metropolis-Hastings refines the networks' posterior samples against the exact unnormalized posterior.
 - **Diagnostics included**: every fit reports diagnostics and suggests a remedy.
 - **A familiar workflow**: lme4-style tables, per-group effects, pair plots and
   posterior predictive checks.
@@ -104,7 +104,7 @@ draws = 1000   acceptance = 0.78   min ESS = 456   PSIS k̂ = 0.240   MAP z = 0.
 - **Objective**: all networks are trained end-to-end to optimize the probability of the true
   parameters under the proposed posterior.
 
-A GLMM fit is then a forward pass through the trained networks. Metropolis–Hastings refines its draws to grant the estimated posterior asymptotic exactness.
+A GLMM fit is then a forward pass through the trained networks. Metropolis-Hastings refines its draws to grant the estimated posterior asymptotic exactness.
 
 ## FAQ
 
@@ -141,7 +141,7 @@ free runtimes are slower: one to a few seconds on CPU or T4. To use a GPU, pass 
 
 They are in the summary's last line and in `result.safeguards`:
 
-- `acceptance`: the share of the networks' draws that Metropolis–Hastings accepts.
+- `acceptance`: the share of the networks' draws that Metropolis-Hastings accepts.
 - `min ESS`: the smallest effective sample size (ESS).
 - `PSIS k̂`: how well the networks' draws match the posterior, by Pareto-smoothed importance
   sampling (PSIS); lower is better.

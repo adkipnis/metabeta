@@ -128,7 +128,7 @@ class EvaluationSummary:
     def subset(self, mask: np.ndarray) -> 'EvaluationSummary':
         """Return a new summary with per-dataset fields filtered by a boolean mask.
 
-        Aggregated fields (coverage, corr, nrmse, ece, …) are carried over unchanged
+        Aggregated fields (coverage, corr, nrmse, ece, ...) are carried over unchanged
         - they reflect the original population and are not re-aggregated.
         """
         return EvaluationSummary(

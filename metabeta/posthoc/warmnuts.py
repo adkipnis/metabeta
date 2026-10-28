@@ -29,14 +29,14 @@ blocks, and exact-duplicate picks are nudged forward).  Each sample is
 back-transformed:
 
   Independent rfx (eta_rfx == 0 or q == 1):
-      z_j  = rfx_j / σ_rfx_j    →  '{1|i,x1|i,...}_offset'
-      σ_rfx_j                    →  '{1|i,x1|i,...}_sigma'
+      z_j  = rfx_j / σ_rfx_j    ->  '{1|i,x1|i,...}_offset'
+      σ_rfx_j                    ->  '{1|i,x1|i,...}_sigma'
 
   Correlated rfx (eta_rfx > 0, q >= 2):
       Σ_rfx = D @ R @ D  (D = diag(σ_rfx), R = corr_rfx from the proposal)
       chol  = lower_cholesky(Σ_rfx)
-      z     = rfx @ chol⁻ᵀ                    →  '_rfx_offset'
-      packed lower triangle of chol            →  '_lkj_rfx'
+      z     = rfx @ chol⁻ᵀ                    ->  '_rfx_offset'
+      packed lower triangle of chol            ->  '_lkj_rfx'
       (previously the LKJCholeskyCov was left at PyMC defaults, so the offsets
       z - computed from the proposal's chol - were inconsistent with the chol
       the chain actually started at)
@@ -44,7 +44,7 @@ back-transformed:
 The resulting dict list is passed as `initvals` to pm.sample.
 
 NB: pm.sample(nuts_kwargs={'max_treedepth': ...}) is *silently ignored* by
-PyMC ≥ 5 (**kwargs there are step_kwargs keyed by stepper name, and unknown
+PyMC >= 5 (**kwargs there are step_kwargs keyed by stepper name, and unknown
 keys inside the NUTS constructor vanish into its **kwargs chain) - the runs
 before 2026-08 therefore all used the default tree depth 10.  max_treedepth is
 now passed to the NUTS constructor directly.
@@ -264,7 +264,7 @@ class WarmNuts:
             D_mat = np.diag(sr_i)
             Sigma = D_mat @ R @ D_mat + 1e-6 * np.eye(q)
             chol = np.linalg.cholesky(Sigma)   # lower triangular
-            # rfx = z @ chol.T  →  z = solve(chol, rfx.T).T
+            # rfx = z @ chol.T  ->  z = solve(chol, rfx.T).T
             iv['_rfx_offset'] = np.linalg.solve(chol, rfx_i.T).T   # (m, q)
             # warm-start the LKJCholeskyCov at the same chol the offsets assume
             iv['_lkj_rfx'] = chol[np.tril_indices(q)]              # (q(q+1)/2,)
@@ -336,7 +336,7 @@ class WarmNuts:
         return QuadPotentialDiagAdapt(arr.shape[1], mean, var, 10)
 
     # ------------------------------------------------------------------
-    # Trace → Proposal conversion
+    # Trace -> Proposal conversion
     # ------------------------------------------------------------------
 
     def _traceToProposal(self, trace: az.InferenceData) -> Proposal:
@@ -366,7 +366,7 @@ class WarmNuts:
             parts.append(sigma_eps.unsqueeze(-1))              # (n_s, 1)
 
         samples_g = torch.cat(parts, dim=-1).unsqueeze(0)               # (1, n_s, D)
-        # (q, m, n_s) → permute(1, 2, 0) → (m, n_s, q) → unsqueeze(0) → (1, m, n_s, q)
+        # (q, m, n_s) -> permute(1, 2, 0) -> (m, n_s, q) -> unsqueeze(0) -> (1, m, n_s, q)
         samples_l = _f32(out['wn_rfx']).permute(1, 2, 0).unsqueeze(0)
 
         proposed = {
@@ -547,9 +547,9 @@ def _stackProposals(
     Parameters
     ----------
     target_d : int or None
-        Target fixed-effects dimension (≥ max actual d). Defaults to max actual d.
+        Target fixed-effects dimension (>= max actual d). Defaults to max actual d.
     target_q : int or None
-        Target random-effects dimension (≥ max actual q). Defaults to max actual q.
+        Target random-effects dimension (>= max actual q). Defaults to max actual q.
     """
     has_sigma_eps = proposals[0].has_sigma_eps
     n_s = proposals[0].n_samples
@@ -574,7 +574,7 @@ def _stackProposals(
         else:
             parts.append(srfx)
         if has_sigma_eps:
-            parts.append(p.sigma_eps.unsqueeze(-1))  # (1, n_s) → (1, n_s, 1)
+            parts.append(p.sigma_eps.unsqueeze(-1))  # (1, n_s) -> (1, n_s, 1)
         sg_list.append(torch.cat(parts, dim=-1))   # (1, n_s, max_d+max_q+1)
         lg_list.append(p.log_prob_g)               # (1, n_s)
 

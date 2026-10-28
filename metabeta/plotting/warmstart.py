@@ -4,7 +4,7 @@ Warm-start efficiency figure.
 Panel B: ESS/s vs n_params - NUTS (cold_std) vs MB-NUTS (warm_2000)
 
 X-axis: n_params = d + q + m*q (effective model parameters per dataset)
-Line + band: equal-count bins in n_params space → median + 5th/95th percentile
+Line + band: equal-count bins in n_params space -> median + 5th/95th percentile
 
 Usage (from repo root):
     uv run python -m metabeta.plotting.warmstart \\
@@ -100,4 +100,4 @@ if __name__ == '__main__':
         show=args.show,
     )
     if path:
-        print(f'Saved → {path}')
+        print(f'Saved -> {path}')

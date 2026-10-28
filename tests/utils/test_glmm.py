@@ -144,7 +144,7 @@ def test_glmm_finite_and_valid(likelihood_family):
 
 
 # ---------------------------------------------------------------------------
-# 3. Trivial case: zero random-effects variance → psi_0 ≈ 0, Psi_lap ≈ 0
+# 3. Trivial case: zero random-effects variance -> psi_0 ≈ 0, Psi_lap ≈ 0
 # ---------------------------------------------------------------------------
 
 
@@ -154,7 +154,7 @@ def test_glmm_trivial_zero_rfx(likelihood_family):
     rng = np.random.default_rng(SEED + 2)
     B, d, q, m, n_per_group = 16, 2, 1, 20, 50
 
-    # build datasets forcing sigma_rfx → 0
+    # build datasets forcing sigma_rfx -> 0
     datasets = []
     for _ in range(B):
         ns_arr = np.full(m, n_per_group, dtype=int)
@@ -477,7 +477,7 @@ def test_refine_normal_map_beta_sigma_grid_replaces_capped_report_only():
 
 
 # ---------------------------------------------------------------------------
-# 4. Recovery test: nonzero rfx → sigma_rfx_est should be positive
+# 4. Recovery test: nonzero rfx -> sigma_rfx_est should be positive
 # ---------------------------------------------------------------------------
 
 

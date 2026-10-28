@@ -276,7 +276,7 @@ def test_sampleFfxTorch_empty_shape():
 
 
 # ---------------------------------------------------------------------------
-# Round-trip: sample → log_prob consistency
+# Round-trip: sample -> log_prob consistency
 # ---------------------------------------------------------------------------
 
 

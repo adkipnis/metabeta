@@ -3,9 +3,9 @@
 Takes existing sampled test datasets, keeps predictors/groups and all generating parameters,
 and regenerates y under a misspecified conditional outcome distribution with a severity knob:
 
-    Normal    → Student-t errors        y = η + σ_ε·t_df,        df ∈ {10, 5, 3}
-    Poisson   → Negative Binomial       μ = exp(η), Var = μ(1+μ/φ), φ ∈ {10, 3, 1}
-    Bernoulli → latent logit noise      y ~ Bern(expit(η + σ_c·ε)), σ_c ∈ {0.5, 1, 2}
+    Normal    -> Student-t errors        y = η + σ_ε·t_df,        df ∈ {10, 5, 3}
+    Poisson   -> Negative Binomial       μ = exp(η), Var = μ(1+μ/φ), φ ∈ {10, 3, 1}
+    Bernoulli -> latent logit noise      y ~ Bern(expit(η + σ_c·ε)), σ_c ∈ {0.5, 1, 2}
 
 (Beta-Binomial with a single trial is exactly Bernoulli - mean-matched overdispersion is
 undetectable in binary data - hence the latent-noise contamination, the binary analog of
@@ -60,7 +60,7 @@ DEFAULT_SIZES = ['small', 'medium', 'large', 'huge']
 DEFAULT_FAMILIES = ['n', 'b', 'p']
 BASE_TAG = 'misbase'
 
-# family letter → (kind, [(ds_type tag, severity)]); severity is df / φ / σ_c.
+# family letter -> (kind, [(ds_type tag, severity)]); severity is df / φ / σ_c.
 CONDITIONS: dict[str, tuple[str, list[tuple[str, float]]]] = {
     'n': ('student', [('student10', 10.0), ('student5', 5.0), ('student3', 3.0)]),
     'p': ('negbin', [('negbin10', 10.0), ('negbin3', 3.0), ('negbin1', 1.0)]),

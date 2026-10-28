@@ -85,7 +85,7 @@ def getConstrainers(
 
 
 def corrToUnconstrained(corr: torch.Tensor) -> torch.Tensor:
-    """Correlation matrix (..., q, q) → unconstrained vector (..., q*(q-1)//2).
+    """Correlation matrix (..., q, q) -> unconstrained vector (..., q*(q-1)//2).
 
     Identity correlation maps to zero. Inverse: unconstrainedToCholesky.
     """
@@ -104,13 +104,13 @@ def corrToUnconstrained(corr: torch.Tensor) -> torch.Tensor:
 
 
 def corrToLower(corr: torch.Tensor) -> torch.Tensor:
-    """Correlation matrix (..., q, q) → lower-triangle values (..., q*(q-1)//2)."""
+    """Correlation matrix (..., q, q) -> lower-triangle values (..., q*(q-1)//2)."""
     q = corr.shape[-1]
     return torch.stack([corr[..., i, j] for i in range(q) for j in range(i)], dim=-1)
 
 
 def unconstrainedToCholesky(z: torch.Tensor, q: int) -> torch.Tensor:
-    """Unconstrained vector (..., q*(q-1)//2) → lower-triangular Cholesky (..., q, q).
+    """Unconstrained vector (..., q*(q-1)//2) -> lower-triangular Cholesky (..., q, q).
 
     Correlation matrix is L @ L.mT. Inverse of corrToUnconstrained.
 
@@ -142,7 +142,7 @@ def unconstrainedToCholesky(z: torch.Tensor, q: int) -> torch.Tensor:
 
 
 def corrLowerToCorr(r: torch.Tensor, q: int) -> torch.Tensor:
-    """Lower-triangle values (..., d_corr) → symmetric (..., q, q) correlation matrix."""
+    """Lower-triangle values (..., d_corr) -> symmetric (..., q, q) correlation matrix."""
     batch = r.shape[:-1]
     corr = (
         torch.eye(q, device=r.device, dtype=r.dtype)
@@ -160,14 +160,14 @@ def corrLowerToCorr(r: torch.Tensor, q: int) -> torch.Tensor:
 
 
 def corrLowerToUnconstrained(r: torch.Tensor, q: int) -> torch.Tensor:
-    """Lower-triangle correlation values (..., d_corr) → unconstrained (..., d_corr)."""
+    """Lower-triangle correlation values (..., d_corr) -> unconstrained (..., d_corr)."""
     return corrToUnconstrained(corrLowerToCorr(r, q))
 
 
 def logDetJacobianCorr(z: torch.Tensor, q: int) -> torch.Tensor:
     """log |d corrToLower(L L^T) / dz| for the LKJ partial-correlation encoding.
 
-    The Jacobian of z → corrToLower(L(z) @ L(z)^T) is lower-triangular. The diagonal
+    The Jacobian of z -> corrToLower(L(z) @ L(z)^T) is lower-triangular. The diagonal
     entry for z_{i,j} (row i, column j of the Cholesky factor) equals
     sech²(z_{i,j}) × rem_{i,j} × L_{j,j}. Multiplying across all entries yields:
 
@@ -210,7 +210,7 @@ def globalMask(
 def unconstrainGlobals(
     theta: torch.Tensor, d: int, q: int, has_sigma_eps: bool, d_corr: int
 ) -> torch.Tensor:
-    """Constrained globals → the flow's coordinates (inverse-softplus sigmas, partial-correlation
+    """Constrained globals -> the flow's coordinates (inverse-softplus sigmas, partial-correlation
     z); padded sigmas (0) map to 0."""
     q_var = q + int(has_sigma_eps)
     u = theta.clone()

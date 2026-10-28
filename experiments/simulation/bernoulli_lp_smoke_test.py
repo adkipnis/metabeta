@@ -2,7 +2,7 @@
 
 Samples datasets across a range of d/q/m values and checks that the resulting
 linear predictor sd is in line with the real-b-reference NUTS posteriors
-(sd(eta_hat) range: 0.91 – 3.27, mean ≈ 2.2, p95 ≈ 3.2).
+(sd(eta_hat) range: 0.91 - 3.27, mean ≈ 2.2, p95 ≈ 3.2).
 
 Usage from repo root:
     uv run python experiments/simulation/bernoulli_lp_smoke_test.py

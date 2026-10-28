@@ -81,7 +81,7 @@ class Condition:
     draws: int
     chains: int
     max_treedepth: int = 10
-    warm: bool = True  # False → cold NUTS (PyMC default init, no flow start)
+    warm: bool = True  # False -> cold NUTS (PyMC default init, no flow start)
 
 
 CONDITIONS: list[Condition] = [
@@ -471,7 +471,7 @@ def _iqr(x: np.ndarray) -> tuple[float, float, float]:
 
 def _fmt(med: float, p25: float, p75: float, decimals: int = 3) -> str:
     fmt = f'{{:.{decimals}f}}'
-    return f'{fmt.format(med)} [{fmt.format(p25)}–{fmt.format(p75)}]'
+    return f'{fmt.format(med)} [{fmt.format(p25)}, {fmt.format(p75)}]'
 
 
 def printSummary(results: list[dict], active_conds: list[str]) -> str:
@@ -748,14 +748,14 @@ def run(args: argparse.Namespace) -> None:
             print(
                 f'\nMB timings (test.npz, {len(arr)} datasets): '
                 f'median={np.median(arr):.3f}s  '
-                f'[{np.percentile(arr, 25):.3f}–{np.percentile(arr, 75):.3f}]'
+                f'[{np.percentile(arr, 25):.3f}, {np.percentile(arr, 75):.3f}]'
             )
 
         out_dir: Path = args.out_dir
         out_dir.mkdir(parents=True, exist_ok=True)
         md_path = out_dir / f'{ckpt_name}__{data_id}__{n_ds}ds.md'
         md_path.write_text('\n'.join(md_sections) + '\n')
-        print(f'\nSaved → {md_path}')
+        print(f'\nSaved -> {md_path}')
 
 
 if __name__ == '__main__':

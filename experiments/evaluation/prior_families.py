@@ -393,7 +393,7 @@ def renderBinnedMd(rows: list[dict], dp: int = 3) -> str:
             lead
             + [
                 f"{r['axis']} Q{r['bin']}",
-                f"{r['lo']:.1f}–{r['hi']:.1f}",
+                f"{r['lo']:.1f}-{r['hi']:.1f}",
                 r['n_entries'],
                 f"{r['sd_ref']:.{dp}f}",
                 _fmtMs(r['ratio'], dp),
@@ -549,7 +549,7 @@ def plotBinned(rows: list[dict], out_path: Path) -> None:
             {
                 'title': f'{group}',
                 'title_fs': 22,
-                'xlabel': f"{group_rows[0]['axis']} quantile bin (low → high information)",
+                'xlabel': f"{group_rows[0]['axis']} quantile bin (low -> high information)",
                 'xlabel_fs': 20,
                 'ylabel': 'SD-ratio vs narrowest prior',
                 'ylabel_fs': 20,

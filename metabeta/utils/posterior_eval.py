@@ -6,7 +6,7 @@ MB flow posterior, optionally layer post-hoc refinements on it, load NUTS/ADVI/L
 proposals, and summarise each. This module holds the parts that are identical between them:
 
   * post-hoc method registry + family compatibility filtering
-  * checkpoint loading and fit → Proposal conversion
+  * checkpoint loading and fit -> Proposal conversion
   * MB sampling and the on-disk caches (posterior samples, refinements, summaries)
 
 The per-script pieces (CLI, metric computation, table layout) stay in the scripts, since
@@ -51,7 +51,7 @@ from metabeta.evaluation.summary import getSummary
 
 logger = logging.getLogger(__name__)
 
-# Likelihood-family index → dataset-id letter (Normal / Bernoulli / Poisson).
+# Likelihood-family index -> dataset-id letter (Normal / Bernoulli / Poisson).
 FAM_LETTER = {0: 'n', 1: 'b', 2: 'p'}
 
 # Post-hoc refinement methods that can be layered on the raw MB flow posterior.
@@ -119,7 +119,7 @@ def loadModel(
 
 
 # ---------------------------------------------------------------------------
-# Fit → Proposal conversion + MB sampling
+# Fit -> Proposal conversion + MB sampling
 
 
 def fitBatchMask(batch: dict[str, torch.Tensor], prefix: str) -> np.ndarray:
@@ -475,7 +475,7 @@ def refineProposal(
 
 
 def _subBatchSize(b: int, m: int, n: int, s: int, max_elements: int) -> int:
-    """Datasets per sub-batch so that b' × m × n × s ≤ max_elements (at least 1)."""
+    """Datasets per sub-batch so that b' × m × n × s <= max_elements (at least 1)."""
     per_dataset = max(m * n * s, 1)
     return max(1, min(b, max_elements // per_dataset))
 

@@ -354,7 +354,7 @@ def logProbRfxCorrelated(
     )
     loc = torch.zeros(*L_cov.shape[:-1], dtype=L_corr.dtype, device=L_corr.device)
     dist = D.MultivariateNormal(loc=loc, scale_tril=L_cov)  # batch (b, 1, s), event (q,)
-    lp = dist.log_prob(rfx)  # rfx (b, m, s, q) → lp (b, m, s)
+    lp = dist.log_prob(rfx)  # rfx (b, m, s, q) -> lp (b, m, s)
     if mask is not None:
         # mask shape (b, m, 1, q) - reduce to (b, m, s) by checking any active q dim
         active = mask[..., 0].expand_as(lp)  # (b, m, s)
@@ -363,7 +363,7 @@ def logProbRfxCorrelated(
 
 
 def _logJacobianZtoL(z: torch.Tensor, L: torch.Tensor, q: int) -> torch.Tensor:
-    """Log |det J| of the z → L map from unconstrainedToCholesky. Returns (...,)."""
+    """Log |det J| of the z -> L map from unconstrainedToCholesky. Returns (...,)."""
     log_jac = torch.zeros(z.shape[:-1], dtype=z.dtype, device=z.device)
     cursor = 0
     for i in range(1, q):
@@ -513,7 +513,7 @@ def logMarginalLikelihoodNormal(
     # both Sigma_inv and log(sigma_rfx) numerically degenerate.
     sigma_rfx = sigma_rfx.clamp(min=1e-6)
 
-    # Σ_rfx^{-1} and log det Σ_rfx  →  (b, s, q, q), (b, s)
+    # Σ_rfx^{-1} and log det Σ_rfx  ->  (b, s, q, q), (b, s)
     s2e = sigma_eps.pow(2)                                          # (b, s)
     if L_corr is None:
         s2r_inv = 1.0 / sigma_rfx.pow(2)                            # (b, s, q)
@@ -527,7 +527,7 @@ def logMarginalLikelihoodNormal(
         diag_corr = L_corr.diagonal(dim1=-2, dim2=-1).clamp(min=1e-8)
         log_det_Sigma = 2.0 * (sigma_rfx.log() + diag_corr.log()).sum(-1)
 
-    # M_i = Σ_rfx^{-1} + Z_i^T Z_i / σ²_eps  →  (b, m, s, q, q)
+    # M_i = Σ_rfx^{-1} + Z_i^T Z_i / σ²_eps  ->  (b, m, s, q, q)
     M = Sigma_inv.unsqueeze(1) + ZtZ.unsqueeze(2) / s2e[:, None, :, None, None]
 
     # Cholesky factorisation of M - jitter diagonal for numerical stability.
@@ -658,7 +658,7 @@ def sampleRfxConditionalNormal(
     M = Sigma_inv.unsqueeze(1) + ZtZ.unsqueeze(2) / s2e[:, None, :, None, None]
     # extreme flow samples (σ_eps ≈ 0 / huge σ_rfx) can make M numerically non-PD
     # or non-finite in float32; those samples carry zero IS weight anyway
-    # (logMarginalLikelihoodNormal fails the same factorisation → -inf ll), so a
+    # (logMarginalLikelihoodNormal fails the same factorisation -> -inf ll), so a
     # placeholder N(0, I) draw for them never influences downstream results.
     chol_M, degenerate = safeCholesky(M)  # (b, m, s, q, q), (b, m, s)
 

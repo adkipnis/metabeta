@@ -358,7 +358,7 @@ def _pqlPass(
     ctx: _PqlPassContext,
     bg_init: torch.Tensor | None = None,  # warm start; None = cold start from zeros
 ) -> _PqlPassResult:
-    """One PQL pass: damped Newton → Ψ̂_Lap M-step → GLS β̂ and BLUPs.
+    """One PQL pass: damped Newton -> Ψ̂_Lap M-step -> GLS β̂ and BLUPs.
 
     Newton starts from bg_init (or zeros if None) under (beta, Psi_inv).
     After Newton, computes Ψ̂_Lap = mean_g(b̂_g b̂_g' + H_g^{-1}), then
@@ -579,7 +579,7 @@ def _lmmGlmm(
     blup_kh_var = pql_pass.blup_kh_var
     beta_gls, Psi_lap = _sanitizePassInputs(beta_gls, Psi_lap, family, uncorr)
 
-    # Passes 2–max_passes: warm start, ridge-regularized Ψ̂_Lap, until convergence.
+    # Passes 2-max_passes: warm start, ridge-regularized Ψ̂_Lap, until convergence.
     # Each pass refines (β, b̂_g, Ψ̂_Lap) jointly. Early exit when the 95th-percentile
     # change across the batch is below tolerance - avoids running all max_passes when a
     # few pathological datasets (small m) never satisfy the strict amax criterion.
@@ -617,7 +617,7 @@ def _lmmGlmm(
 
     # Per-group posterior variance: diagonal of K_g^{-1} = (ZWZ + Ψ̂_Lap^{-1})^{-1}.
     # Uses the GLS-consistent Ψ̂_Lap precision (not the ridge-inflated Newton Ψ⁻¹),
-    # mirroring the Normal path's σ²_ε · W_g.  Cap at 25 (std ≤ 5).
+    # mirroring the Normal path's σ²_ε · W_g.  Cap at 25 (std <= 5).
     blup_var = Kg_inv.diagonal(dim1=-2, dim2=-1).clamp(min=0.0, max=25.0)  # (B, m, q)
     blup_var = (blup_var * mask_m[:, :, None]).nan_to_num(nan=0.0, posinf=0.0)
 

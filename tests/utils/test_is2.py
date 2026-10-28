@@ -77,7 +77,7 @@ def _problem(likelihood_family, seed=0):
         y = torch.randn(m, n, generator=g).double()
     elif likelihood_family == 1:
         y = torch.bernoulli(torch.full((m, n), 0.6), generator=g).double()
-        y[0] = 1.0  # all successes: likelihood flat as b → ∞, the heavy-tail case
+        y[0] = 1.0  # all successes: likelihood flat as b -> ∞, the heavy-tail case
     else:
         y = torch.poisson(torch.full((m, n), 3.0), generator=g).double()
     y = y * mask_n[..., 0]
@@ -133,7 +133,7 @@ def test_is2_marginal_is_unbiased(likelihood_family):
 
 @pytest.mark.parametrize('likelihood_family', [1, 2])
 def test_is2_rfx_weighted_by_estimate_recover_conditional_mean(likelihood_family):
-    """Σ_r p̂_r b_r / Σ_r p̂_r → E[b_j | θ, y_j]: the returned draw is the one the pseudo-marginal
+    """Σ_r p̂_r b_r / Σ_r p̂_r -> E[b_j | θ, y_j]: the returned draw is the one the pseudo-marginal
     extended target pairs with p̂, so p̂-weighted draws are exact conditional posterior draws."""
     torch.manual_seed(2)
     problem = _problem(likelihood_family)
@@ -277,7 +277,7 @@ def _gridPosterior(data):
 
 
 def _gaussianProposal(s, m, loc_beta, scale_beta, scale_sigma):
-    """β₀ ~ N, σ ~ HalfNormal (covers σ → 0, where the posterior keeps mass); the rfx are
+    """β₀ ~ N, σ ~ HalfNormal (covers σ -> 0, where the posterior keeps mass); the rfx are
     zeros, they only seed the Newton search."""
     q_beta = D.Normal(torch.tensor(loc_beta, dtype=torch.float64), scale_beta)
     q_sigma = D.HalfNormal(torch.tensor(scale_sigma, dtype=torch.float64))

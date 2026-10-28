@@ -95,7 +95,7 @@ def getSummary(
     # Posterior predictive quantities, chunked over datasets to bound peak memory.
     # (b, m, n, s) tensors can be several GB for MCMC (s≈4000); process chunk datasets at a time.
     # m and n are padded to the split-wide max (huge splits: 200 × 150 padded slots vs
-    # ≤ 3000 real observations per dataset), so the chunk is additionally capped to keep
+    # <= 3000 real observations per dataset), so the chunk is additionally capped to keep
     # one padded (chunk, m, n, s) tensor at ~1 GB float32 - each iteration materializes
     # about three of them (predictive params, log_p, log_w).
     b = proposal.samples_g.shape[0]

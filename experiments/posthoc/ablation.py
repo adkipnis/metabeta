@@ -35,7 +35,7 @@ imhPM        : pseudo-marginal IMH (Bernoulli/Poisson only; the GLMM default sin
                estimate (IS2_N_INNER draws per group, posthoc/laplace_glmm.py), so the chain
                targets the exact posterior; each kept state's rfx get one iterated-SIR move,
                so rejected steps do not repeat the rfx vector (without it the rfx were
-               under-covered at large/huge acceptance 0.14–0.35). Added 2026-09-25.
+               under-covered at large/huge acceptance 0.14-0.35). Added 2026-09-25.
 imhMarginal+moves, imhPM+moves : imhMarginal (Normal) / imhPM (Bernoulli/Poisson) followed by
                pseudo-marginal random-walk moves on the datasets whose IMH min bulk ESS is below
                150 (posthoc/metropolis.py, LocalMoves; utils/posterior_eval.py, MOVES_RW), for flow
@@ -497,7 +497,7 @@ def imhSampleCount(n_samples: int) -> tuple[int, int]:
     """(n_steps, pool size) for IMH given the flow sample budget; pool = chains × steps."""
     n_steps = n_samples // IMH_N_CHAINS
     if n_steps <= IMH_BURNIN:
-        raise ValueError(f'--n-samples {n_samples} leaves ≤ {IMH_BURNIN} steps per chain')
+        raise ValueError(f'--n-samples {n_samples} leaves <= {IMH_BURNIN} steps per chain')
     return n_steps, IMH_N_CHAINS * n_steps
 
 

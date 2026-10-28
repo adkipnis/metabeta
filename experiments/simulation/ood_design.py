@@ -5,14 +5,14 @@ distribution to the design distribution.  Takes existing sampled test datasets, 
 grouping structure and all generating parameters, replaces the predictors X wholesale with
 draws from sources outside the training simulator, and regenerates y under the ORIGINAL
 likelihood.  The fitted model therefore stays correctly specified - y | X, θ follows the
-stored family and priors exactly - so NUTS remains an exact reference and any metabeta↔NUTS
+stored family and priors exactly - so NUTS remains an exact reference and any metabeta<->NUTS
 divergence isolates the amortization gap on out-of-distribution designs.
 
 Conditions (family-independent, with a severity dial where applicable):
 
     Heavy-tailed marginals   X_ij ~ t_ν i.i.d., ν ∈ {2, 1}.  Training designs have finite
-        variance by construction (scamd draws Student-t causes with ν ≥ 2.5, clamps them
-        to ±10 and standardizes; all other cause families are lighter-tailed), so ν ≤ 2
+        variance by construction (scamd draws Student-t causes with ν >= 2.5, clamps them
+        to ±10 and standardizes; all other cause families are lighter-tailed), so ν <= 2
         (infinite variance; ν = 1 is Cauchy) lies outside the training support.
     Tail dependence          Clayton copula over the predictors with standard-normal
         marginals, Kendall τ ∈ {0.5, 0.9}.  The training copula is Gaussian, which has
@@ -111,7 +111,7 @@ def setup() -> argparse.Namespace:
 
 
 def sampleClaytonUniform(rng: np.random.Generator, n: int, k: int, tau: float) -> np.ndarray:
-    """Clayton copula uniforms via the Marshall–Olkin frailty construction; τ = θ/(θ+2)."""
+    """Clayton copula uniforms via the Marshall-Olkin frailty construction; τ = θ/(θ+2)."""
     theta = 2.0 * tau / (1.0 - tau)
     v = np.maximum(rng.gamma(1.0 / theta, 1.0, size=n), 1e-300)
     e = rng.exponential(size=(n, k))

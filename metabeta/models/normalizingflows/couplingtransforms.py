@@ -248,7 +248,7 @@ class RationalQuadratic(CouplingTransform):
         params: dict[str, torch.Tensor],
     ) -> dict[str, torch.Tensor]:
 
-        # --- affine tail params: softclamped; zeros → identity for fixed domain
+        # --- affine tail params: softclamped; zeros -> identity for fixed domain
         log_weight = self.alpha * torch.tanh(params['log_weight'] / self.alpha)
         weight = log_weight.exp()
         bias = self.alpha * torch.tanh(params['bias'] / self.alpha)
@@ -268,7 +268,7 @@ class RationalQuadratic(CouplingTransform):
         top = weight * right + bias
         bounds = torch.cat([left, right, bottom, top], dim=-1)
 
-        # --- widths: softmax → min-shifted → stretched to [left, right]
+        # --- widths: softmax -> min-shifted -> stretched to [left, right]
         widths = params['widths']
         widths = F.softmax(widths, dim=-1)
         widths = self.min_bin + (1 - self.min_bin * self.n_bins) * widths
@@ -276,7 +276,7 @@ class RationalQuadratic(CouplingTransform):
         cumwidths = F.pad(cumwidths, (1, 0))
         cumwidths = (right - left) * cumwidths + left
 
-        # --- heights: softmax → min-shifted → stretched to [bottom, top]
+        # --- heights: softmax -> min-shifted -> stretched to [bottom, top]
         heights = params['heights']
         heights = F.softmax(heights, dim=-1)
         heights = self.min_bin + (1 - self.min_bin * self.n_bins) * heights

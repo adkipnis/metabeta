@@ -194,7 +194,7 @@ def test_ppc_calibrated_coverage():
 
 
 def test_ppc_diffuse_overcoverage():
-    """Very diffuse predictive → near 100% coverage even for tight intervals."""
+    """Very diffuse predictive -> near 100% coverage even for tight intervals."""
     torch.manual_seed(7)
     b, m, n, s = 4, 3, 8, 256
     y = torch.randn(b, m, n)

@@ -1,16 +1,16 @@
-"""MB↔NUTS agreement and posterior quality under predictor (design) misspecification.
+"""MB<->NUTS agreement and posterior quality under predictor (design) misspecification.
 
 Companion to experiments/simulation/ood_design.py, which replaces test designs with
 draws from sources outside the training simulator - heavy-tailed marginals (Student-t,
 ν ∈ {2, 1}), Clayton tail dependence (Kendall τ ∈ {0.5, 0.9}), and longitudinal
 growth-curve designs - and regenerates y under the ORIGINAL likelihood.  Unlike likelihood
 misspecification, the fitted model remains correctly specified, so NUTS is an exact
-reference and the generating parameters are the true ones: any metabeta↔NUTS divergence or
+reference and the generating parameters are the true ones: any metabeta<->NUTS divergence or
 calibration loss isolates the amortization gap on out-of-distribution designs.
 
 Tables mirror experiments/evaluation/likelihood_misspec.py:
 
-  1. MB↔NUTS agreement per condition (r, σ-ratio, rank-MAD, ΔLOO-NLL; median ± MAD over
+  1. MB<->NUTS agreement per condition (r, σ-ratio, rank-MAD, ΔLOO-NLL; median ± MAD over
      the NUTS-converged subset, paired).
   2. Quality vs the generating parameters per condition (NRMSE / EACE, global and
      local, plus LOO-NLL) for MB, refinements, and NUTS - here directly interpretable
@@ -71,7 +71,7 @@ CONDITIONS: list[tuple[str, str]] = [
 def setup() -> argparse.Namespace:
     # fmt: off
     parser = argparse.ArgumentParser(
-        description='MB↔NUTS agreement and posterior quality under predictor misspecification.',
+        description='MB<->NUTS agreement and posterior quality under predictor misspecification.',
     )
     parser.add_argument('--family', type=str, default='n', choices=list(FAMILY_NAMES))
     parser.add_argument('--sizes', type=str, nargs='+', default=DEFAULT_SIZES, choices=DEFAULT_SIZES)
@@ -141,7 +141,7 @@ def main() -> None:
     rows_agree = agreementRows(pooled_agree, labels, methods)
     agree_md = renderAgreementMd(rows_agree, dp=cfg.decimals)
     print(
-        '\n=== MB↔NUTS agreement by predictor-misspecification condition (median ± MAD, converged) ===\n'
+        '\n=== MB<->NUTS agreement by predictor-misspecification condition (median ± MAD, converged) ===\n'
     )
     print(agree_md)
 
@@ -156,12 +156,12 @@ def main() -> None:
         'All metrics on the NUTS-converged subset (paired). The fitted model is correctly '
         'specified under every condition (only the design distribution shifts), so NUTS is '
         'an exact reference and divergence from it isolates the amortization gap.\n',
-        '## MB↔NUTS agreement by condition (median ± MAD over converged datasets)\n',
+        '## MB<->NUTS agreement by condition (median ± MAD over converged datasets)\n',
         agree_md,
         '',
         '## Quality vs generating parameters by condition\n',
         'Global (ffx, σ_rfx' + (', σ_ε' if lf == 0 else '') + ') and local (rfx) parameters; '
-        'NRMSE→0 recovery, EACE→0 calibrated, LOO-NLL median per dataset. The generating '
+        'NRMSE->0 recovery, EACE->0 calibrated, LOO-NLL median per dataset. The generating '
         'parameters are the true parameters of the fitted model, so degradation here is '
         'attributable to the approximation, not the model.\n',
         quality_md,

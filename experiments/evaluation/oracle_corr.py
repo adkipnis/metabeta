@@ -131,8 +131,8 @@ def correlatedMask(batch: dict[str, torch.Tensor]) -> np.ndarray:
 def corrMetrics(proposal: Proposal, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     """Recovery / calibration of the correlation pairs only (no predictive block).
 
-    Mirrors the parameter block of getSummary (point estimates → r / NRMSE, credible intervals
-    → coverage errors → ECE / EACE) and keeps only the ``corr_rfx`` entries, restricted to the
+    Mirrors the parameter block of getSummary (point estimates -> r / NRMSE, credible intervals
+    -> coverage errors -> ECE / EACE) and keeps only the ``corr_rfx`` entries, restricted to the
     pairs that are active in at least one dataset.
     """
     proposal.to('cpu')
@@ -195,7 +195,7 @@ def evaluateRegime(
     logger.info('\n--- Regime: %s (correlation parameters) ---', regime)
 
     data_batch, n_total, n_kept, cap_mask = loadRegimeBatch(data_path, max_d, max_q)
-    logger.info('  Capacity filter: %d / %d (d≤%d, q≤%d)', n_kept, n_total, max_d, max_q)
+    logger.info('  Capacity filter: %d / %d (d<=%d, q<=%d)', n_kept, n_total, max_d, max_q)
     if n_kept == 0 or max_q < 2:
         logger.warning('  No correlation parameters to evaluate - skipping.')
         return [], {}
@@ -325,7 +325,7 @@ def saveTables(rows: list[dict], counts: dict[str, int], outdir: Path, run_name:
         md_parts.append(f'## {stat}\n\n{table}')
     md_path = outdir / f'oracle_corr_{run_name}.md'
     md_path.write_text('\n\n'.join(md_parts) + '\n')
-    logger.info('Saved Markdown → %s', md_path)
+    logger.info('Saved Markdown -> %s', md_path)
 
     header = r'$\mathrm{regime}$ & $\mathrm{model}$ & $r$ & $\mathrm{NRMSE}$ & $\mathrm{ECE}$ & $\mathrm{EACE}$ \\'
     for stat in STATS:
@@ -344,11 +344,11 @@ def saveTables(rows: list[dict], counts: dict[str, int], outdir: Path, run_name:
         suffix = '' if stat == PRIMARY else '_' + stat.split(' ')[0] + stat.split(' ')[-1]
         tex_path = outdir / f'oracle_corr_{run_name}{suffix}.tex'
         tex_path.write_text('\n'.join(lines))
-        logger.info('Saved LaTeX → %s', tex_path)
+        logger.info('Saved LaTeX -> %s', tex_path)
 
 
 def resolvePlotRows(rows: list[dict], wanted: list[str]) -> list[tuple[str, dict]]:
-    """Map CLI labels to result rows: 'MB' → refined row if present (paper's MB), 'MB0' → raw."""
+    """Map CLI labels to result rows: 'MB' -> refined row if present (paper's MB), 'MB0' -> raw."""
     by_label = {r['method']: r for r in rows}
     refined = [lbl for lbl in by_label if lbl.startswith('MB+')]
     out = []
@@ -408,7 +408,7 @@ def plotCorrRecovery(rows: list[dict], q: int, outdir: Path, run_name: str) -> P
     path = savePlot(outdir, f'oracle_corr_{run_name}', ending='pdf')
     savePlot(outdir, f'oracle_corr_{run_name}', ending='png')
     plt.close(fig)
-    logger.info('Saved figure → %s', path)
+    logger.info('Saved figure -> %s', path)
     return path
 
 

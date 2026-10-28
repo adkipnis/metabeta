@@ -429,7 +429,7 @@ class Api:
 
         ``refine='is'`` selects the previous self-normalized importance-sampling
         correction instead, with the PSIS shape diagnostic k̂ (Yao et al., 2018) computed
-        per dataset: datasets with k̂ ≤ ``k_threshold`` receive the correction, datasets
+        per dataset: datasets with k̂ <= ``k_threshold`` receive the correction, datasets
         above it keep the raw flow posterior and trigger a warning.  ``refine=False``
         returns the raw flow posterior.  Refinement (like the MAP cross-check) applies
         only when ``n_samples >= MIN_SAFEGUARD_SAMPLES`` and is skipped silently below.
@@ -1997,7 +1997,7 @@ class Api:
     ) -> str:
         """Return a formatted per-group random effects summary for a sampled RouterResult.
 
-        Produces one table per random-effect component (intercept, slope, …), each under
+        Produces one table per random-effect component (intercept, slope, ...), each under
         its own header, rather than a single wide table with repeated column groups.
         ``x_scale`` has the meaning it has in ``posteriorSummary``: on the original scale a
         slope is per unit of its predictor and the intercept is the group's deviation at x = 0.
@@ -2185,7 +2185,7 @@ def _priorStr(priors: Any) -> str:
         return priors
     if isinstance(priors, dict):
         keys = list(priors.keys())
-        suffix = '…' if len(keys) > 3 else ''
+        suffix = '...' if len(keys) > 3 else ''
         return f'custom ({", ".join(keys[:3])}{suffix})'
     return 'custom'
 
@@ -2490,10 +2490,10 @@ def posteriorTable(
         note = ' (random-walk moves ran)' if random_walk else ''
         footer_parts.append(f'min ESS = {ess_min:.0f}{note}')
     if psis_k is not None:
-        note = '' if psis_k <= psis_k_threshold else ' (⚠ unreliable - consider MCMC)'
+        note = '' if psis_k <= psis_k_threshold else ' (unreliable - consider MCMC)'
         footer_parts.append(f'PSIS k̂ = {psis_k:.3f}{note}')
     if map_z is not None:
-        note = '' if map_z <= map_z_threshold else ' (⚠ disagrees with MAP - consider MCMC)'
+        note = '' if map_z <= map_z_threshold else ' (disagrees with MAP - consider MCMC)'
         footer_parts.append(f'MAP z = {map_z:.1f}{note}')
     if fit is not None:
         footer_parts.append(f'{fit_label} = {fit:.3f}')

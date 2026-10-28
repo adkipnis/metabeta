@@ -150,7 +150,7 @@ class HierarchicalModel:
         return m
 
     # ------------------------------------------------------------------
-    # NCP ↔ centered conversion
+    # NCP <-> centered conversion
     # ------------------------------------------------------------------
 
     def rfxFromU(self, sigma_rfx: Tensor, u: Tensor, z_corr: Tensor | None = None) -> Tensor:
@@ -244,7 +244,7 @@ class HierarchicalModel:
             lp = lp + logProbCorrRfx(z_corr, self.q, self.eta_rfx)
 
         # Prior on u: N(0, I), masked over valid (group, rfx-dim) pairs
-        # u: (b, m, s, q) - sum over dims 1 (m) and 3 (q) → (b, s)
+        # u: (b, m, s, q) - sum over dims 1 (m) and 3 (q) -> (b, s)
         mask_u = (
             self._mask_m[:, :, None, None]  # (b, m, 1, 1)
             * self._mask_q[:, None, None, :]  # (b, 1, 1, q)
@@ -255,7 +255,7 @@ class HierarchicalModel:
         return ll + lp
 
     # ------------------------------------------------------------------
-    # Proposal ↔ NCPParams conversion
+    # Proposal <-> NCPParams conversion
     # ------------------------------------------------------------------
 
     def initFromProposal(self, proposal: Proposal) -> NCPParams:

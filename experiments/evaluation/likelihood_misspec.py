@@ -1,11 +1,11 @@
-"""MB↔NUTS agreement and posterior quality under likelihood misspecification.
+"""MB<->NUTS agreement and posterior quality under likelihood misspecification.
 
 Companion to experiments/simulation/likelihood_misspec.py, which regenerates test outcomes
-under contaminated likelihoods (Normal→Student-t, Poisson→NegBin, Bernoulli→latent logit
+under contaminated likelihoods (Normal->Student-t, Poisson->NegBin, Bernoulli->latent logit
 noise) with increasing severity, while both metabeta and NUTS fit the original - now
-misspecified - model with the stored priors.  This script produces the dose–response tables:
+misspecified - model with the stored priors.  This script produces the dose-response tables:
 
-  1. MB↔NUTS agreement per severity (r, σ-ratio, rank-MAD, ΔLOO-NLL; real_posterior.py
+  1. MB<->NUTS agreement per severity (r, σ-ratio, rank-MAD, ΔLOO-NLL; real_posterior.py
      metrics, median ± MAD over the NUTS-converged subset).  If MB's agreement with NUTS is
      stable across severities, MB's extra error under misspecification is attributable to the
      model, not the amortization.
@@ -70,7 +70,7 @@ OUT_DIR = RESULTS_DIR
 DEFAULT_SIZES = ['small', 'medium', 'large', 'huge']
 NUTS_LABEL = 'NUTS'
 
-# family letter → ordered (ds_type tag, display label); severity 0 first.
+# family letter -> ordered (ds_type tag, display label); severity 0 first.
 CONDITIONS: dict[str, list[tuple[str, str]]] = {
     'n': [
         ('misbase', 'baseline'),
@@ -94,7 +94,7 @@ CONDITIONS: dict[str, list[tuple[str, str]]] = {
 
 AGREE_METRICS = [
     ('r', 'r ↑'),
-    ('sigma_ratio', 'σ-ratio →1'),
+    ('sigma_ratio', 'σ-ratio ->1'),
     ('rank_mad', 'rank-MAD ↓'),
     ('delta_nll', 'ΔLOO-NLL ↓'),
 ]
@@ -445,7 +445,7 @@ def renderQualityTex(rows: list[dict], dp: int = 3) -> str:
 def setup() -> argparse.Namespace:
     # fmt: off
     parser = argparse.ArgumentParser(
-        description='MB↔NUTS agreement and posterior quality under likelihood misspecification.',
+        description='MB<->NUTS agreement and posterior quality under likelihood misspecification.',
     )
     parser.add_argument('--family', type=str, default='n', choices=list(FAMILY_NAMES))
     parser.add_argument('--sizes', type=str, nargs='+', default=DEFAULT_SIZES, choices=DEFAULT_SIZES)
@@ -518,7 +518,7 @@ def main() -> None:
 
     rows_agree = agreementRows(pooled_agree, labels, methods)
     agree_md = renderAgreementMd(rows_agree, dp=cfg.decimals)
-    print('\n=== MB↔NUTS agreement by misspecification severity (median ± MAD, converged) ===\n')
+    print('\n=== MB<->NUTS agreement by misspecification severity (median ± MAD, converged) ===\n')
     print(agree_md)
 
     rows_quality = qualityRows(pooled_entries, pooled_agree, labels, methods)
@@ -530,12 +530,12 @@ def main() -> None:
         f'# Likelihood misspecification ({family})\n',
         f'Sizes: {", ".join(sizes)}. Reference: NUTS. '
         f'All metrics on the NUTS-converged subset (paired).\n',
-        '## MB↔NUTS agreement by severity (median ± MAD over converged datasets)\n',
+        '## MB<->NUTS agreement by severity (median ± MAD over converged datasets)\n',
         agree_md,
         '',
         '## Quality vs generating parameters by severity\n',
         'Global (ffx, σ_rfx' + (', σ_ε' if lf == 0 else '') + ') and local (rfx) parameters; '
-        'NRMSE→0 recovery, EACE→0 calibrated, LOO-NLL median per dataset. Under contamination '
+        'NRMSE->0 recovery, EACE->0 calibrated, LOO-NLL median per dataset. Under contamination '
         "the generating parameters differ from the misspecified model's pseudo-true values, so "
         'absolute degradation is expected - the comparison is MB vs NUTS.\n',
         quality_md,

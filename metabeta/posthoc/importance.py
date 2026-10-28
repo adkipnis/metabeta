@@ -197,7 +197,7 @@ class ImportanceSampler:
         # corr_rfx: the flow's log q_g is a density over the *stored* constrained r
         # (_postprocess subtracts logDetJacobianCorr(z, q_max)), so the LKJ prior is expressed
         # in the same coordinates: LKJ density in the dataset's own q_i minus that padded
-        # z→r Jacobian. Evaluating LKJ over z in q_max dims instead leaves a spurious
+        # z->r Jacobian. Evaluating LKJ over z in q_max dims instead leaves a spurious
         # (1 - ρ²)-type factor in every weight of a correlated dataset.
         if self.corr_prior and proposal.d_corr > 0 and self.eta_rfx is not None:
             r_corr = proposal.samples_g[..., -proposal.d_corr :]  # (b, s, d_corr)
@@ -359,7 +359,7 @@ class ImportanceSampler:
 
 
 class ResampleMoveSampler:
-    """Resample-move correction: marginal SNIS → systematic resampling → K
+    """Resample-move correction: marginal SNIS -> systematic resampling -> K
     independence-MH rejuvenation sweeps with fresh flow proposals.
 
     Where plain marginal SNIS falls back to uniform weights when PSIS k exceeds

@@ -1,4 +1,4 @@
-"""MB↔NUTS agreement and posterior quality under prior misspecification.
+"""MB<->NUTS agreement and posterior quality under prior misspecification.
 
 Companion to experiments/simulation/prior_misspec.py, which rewrites the stored prior of the
 sampled test sets (τ×c, ν+kτ, family rotation) while leaving the data and the generating
@@ -6,10 +6,10 @@ parameters untouched.  Both metabeta and NUTS read that prior from the data dir,
 the same misspecified model - the same arrangement as the likelihood-misspecification study,
 and the reason the perturbation happens at generation time rather than in memory.
 
-Two dose–response tables, sharing their whole collection and table layer with
+Two dose-response tables, sharing their whole collection and table layer with
 experiments/evaluation/likelihood_misspec.py:
 
-  1. MB↔NUTS agreement per condition (r, σ-ratio, rank-MAD, ΔLOO-NLL; median ± MAD over the
+  1. MB<->NUTS agreement per condition (r, σ-ratio, rank-MAD, ΔLOO-NLL; median ± MAD over the
      NUTS-converged subset).  Both sides now fit the *same* wrong prior, so stable agreement
      across conditions means MB's extra error is attributable to the misspecification rather
      than to the amortization.
@@ -71,7 +71,7 @@ logger = logging.getLogger(__name__)
 OUT_DIR = RESULTS_DIR
 DEFAULT_SIZES = ['small', 'medium', 'large', 'huge']
 
-# ds_type tag → display label; severity 0 first.  Tags must match the dirs written by
+# ds_type tag -> display label; severity 0 first.  Tags must match the dirs written by
 # experiments/simulation/prior_misspec.py.
 CONDITIONS: list[tuple[str, str]] = [
     ('priorbase', 'correct'),
@@ -90,7 +90,7 @@ CONDITIONS: list[tuple[str, str]] = [
 def setup() -> argparse.Namespace:
     # fmt: off
     parser = argparse.ArgumentParser(
-        description='MB↔NUTS agreement and posterior quality under prior misspecification.',
+        description='MB<->NUTS agreement and posterior quality under prior misspecification.',
     )
     parser.add_argument('--family', type=str, default='n', choices=list(FAMILY_NAMES))
     parser.add_argument('--sizes', type=str, nargs='+', default=DEFAULT_SIZES, choices=DEFAULT_SIZES)
@@ -168,7 +168,7 @@ def main() -> None:
 
     rows_agree = agreementRows(pooled_agree, labels, methods)
     agree_md = renderAgreementMd(rows_agree, dp=cfg.decimals)
-    print('\n=== MB↔NUTS agreement by prior perturbation (median ± MAD, converged) ===\n')
+    print('\n=== MB<->NUTS agreement by prior perturbation (median ± MAD, converged) ===\n')
     print(agree_md)
 
     rows_quality = qualityRows(pooled_entries, pooled_agree, labels, methods)
@@ -180,12 +180,12 @@ def main() -> None:
         f'# Prior misspecification ({family})\n',
         f'Sizes: {", ".join(sizes)}. Reference: NUTS, refit under '
         'each perturbed prior. All metrics on the NUTS-converged subset (paired).\n',
-        '## MB↔NUTS agreement by perturbation (median ± MAD over converged datasets)\n',
+        '## MB<->NUTS agreement by perturbation (median ± MAD over converged datasets)\n',
         agree_md,
         '',
         '## Quality vs generating parameters by perturbation\n',
         'Global (ffx, σ_rfx' + (', σ_ε' if lf == 0 else '') + ') and local (rfx) parameters; '
-        'NRMSE→0 recovery, EACE→0 calibrated, LOO-NLL median per dataset. The generating '
+        'NRMSE->0 recovery, EACE->0 calibrated, LOO-NLL median per dataset. The generating '
         'parameters come from the correct prior, so a perturbed prior is a genuine modelling '
         'error and absolute degradation is expected - the comparison is MB vs NUTS.\n',
         quality_md,

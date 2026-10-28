@@ -1,4 +1,4 @@
-"""Public-`Api` tests on DataFrames: sample → posteriorSummary / rfxSummary / plotParameters.
+"""Public-`Api` tests on DataFrames: sample -> posteriorSummary / rfxSummary / plotParameters.
 
 Every test goes through `Api` on the tiny-Approximator joint checkpoint, never a private helper.
 """

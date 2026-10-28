@@ -61,7 +61,7 @@ def setup() -> argparse.Namespace:
     Resume / extend training epochs:
         python generate.py --size small --family 0 --ds_type toy --partition train -b 11 -e 30
 
-        Generates epochs 11–30, leaving already-generated epochs untouched.
+        Generates epochs 11-30, leaving already-generated epochs untouched.
 
     Load config from a saved YAML:
         python generate.py --config outputs/data/small-n-toy/config.yaml --partition train -b 21 -e 40
@@ -297,7 +297,7 @@ class Generator:
         """Sample per-group observation counts with per-dataset entropy variation.
 
         Each dataset independently draws a regime:
-          - balanced  (p=_P_BALANCED): all active groups get the same n → H_ratio=1.
+          - balanced  (p=_P_BALANCED): all active groups get the same n -> H_ratio=1.
           - variable  (p=1-_P_BALANCED): group sizes drawn from Dirichlet(α·1_m)
             where α ~ LogUniform(_ALPHA_LOW, _ALPHA_HIGH) controls spread.
 
@@ -567,7 +567,7 @@ class Generator:
         if getattr(self.cfg, 'loop', False) or self.cfg.ds_type in ('scm', 'mixed'):
             datasets = []
             for i in tqdm(range(n_datasets), desc=desc):
-                # If min_bg_df is set, retry until m − d ≥ min_bg_df.  Trimming X
+                # If min_bg_df is set, retry until m − d >= min_bg_df.  Trimming X
                 # while keeping Y intact creates mismatched ground truth (dropped
                 # predictors inflate sigma_eps), so we redraw instead.
                 retry_seeds = seedseqs[i].spawn(_max_retries)
@@ -610,7 +610,7 @@ class Generator:
 
     @staticmethod
     def _clampQ(ds: dict[str, np.ndarray], min_bg_df: int) -> dict[str, np.ndarray]:
-        """Reduce q so that q(q+1)/2 + min_bg_df ≤ m (Ψ identifiability).
+        """Reduce q so that q(q+1)/2 + min_bg_df <= m (Ψ identifiability).
 
         Handles cases where the Emulator returned fewer groups than requested,
         causing m to fall below the identifiability floor for the current q.
@@ -620,7 +620,7 @@ class Generator:
         systematically inflating sigma_eps).  d is left unchanged since
         fixed-effect estimation pools over all n observations, not group means.
 
-        The largest feasible q satisfies q(q+1)/2 ≤ m − min_bg_df, solved via
+        The largest feasible q satisfies q(q+1)/2 <= m − min_bg_df, solved via
         the positive root of the quadratic: q* = floor((√(1+8k)−1)/2), k = m−min_bg_df.
         """
         m = int(ds['ns'].shape[0])
@@ -719,7 +719,7 @@ class Generator:
     @property
     def info(self) -> str:
         cfg = self.cfg
-        epoch_range = f'{cfg.begin}–{cfg.epochs}' if cfg.partition in ['train', 'all'] else 'n/a'
+        epoch_range = f'{cfg.begin}-{cfg.epochs}' if cfg.partition in ['train', 'all'] else 'n/a'
         return f"""
 ====================
 data id:    {cfg.data_id}
@@ -727,11 +727,11 @@ likelihood: {LIKELIHOOD_FAMILIES[cfg.likelihood_family]}
 ds type:    {cfg.ds_type}
 partition:  {cfg.partition}
 epochs:     {epoch_range}
-d:          {cfg.min_d}–{cfg.max_d}
-q:          1–{cfg.max_q}
-m:          {cfg.min_m}–{self.max_m_feasible}
-n:          {cfg.min_n}–{cfg.max_n}
-n_total:    ≤{cfg.max_n_total}
+d:          {cfg.min_d}-{cfg.max_d}
+q:          1-{cfg.max_q}
+m:          {cfg.min_m}-{self.max_m_feasible}
+n:          {cfg.min_n}-{cfg.max_n}
+n_total:    <={cfg.max_n_total}
 bs_train:   {cfg.bs_train}
 bs_valid:   {cfg.bs_valid}
 bs_test:    {cfg.bs_test}

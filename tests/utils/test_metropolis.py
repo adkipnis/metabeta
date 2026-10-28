@@ -17,9 +17,9 @@ def test_suggest_pool_size_hits_target():
     accept = torch.tensor([[0.8, 0.8, 0.8, 0.8], [0.17, 0.17, 0.17, 0.17]])
     s = suggestPoolSize(accept)
     assert s.dtype == torch.long
-    # easy dataset: 700/0.8 = 875 → rounds to 1000 (also the floor)
+    # easy dataset: 700/0.8 = 875 -> rounds to 1000 (also the floor)
     assert int(s[0]) == SUGGEST_MIN
-    # huge-regime acceptance: 700/0.17 ≈ 4118 → rounds up to 4500
+    # huge-regime acceptance: 700/0.17 ≈ 4118 -> rounds up to 4500
     assert int(s[1]) == 4500
     assert (s[1] * accept[1].mean()) >= N_EFF_TARGET
 
@@ -27,7 +27,7 @@ def test_suggest_pool_size_hits_target():
 def test_suggest_pool_size_monotone_in_acceptance():
     accept = torch.linspace(0.05, 0.95, 10).unsqueeze(-1)
     s = suggestPoolSize(accept)
-    assert (s[:-1] >= s[1:]).all()  # lower acceptance → larger suggestion
+    assert (s[:-1] >= s[1:]).all()  # lower acceptance -> larger suggestion
 
 
 def test_suggest_pool_size_clamps():

@@ -15,7 +15,7 @@ from metabeta.utils.results import Proposal
 
 
 def _batch(structures, m, n, lf=0):
-    """Datasets of (d, q, eta) simulated from the model, padded to the batch's d and q (≤ 2);
+    """Datasets of (d, q, eta) simulated from the model, padded to the batch's d and q (<= 2);
     priors N(0, 1) on β and half-N(1) on the SDs."""
     b = len(structures)
     d_max, q_max = max(s[0] for s in structures), max(s[1] for s in structures)

@@ -6,7 +6,7 @@ Compares:
   - ADVI with Adagrad-window at learning rates [1e-2, 1e-3, 1e-4]
   - Pathfinder (L-BFGS, no LR / budget needed)
 
-…on a random subset of tiny-n-toy test datasets, recording ELBO curves for
+...on a random subset of tiny-n-toy test datasets, recording ELBO curves for
 the ADVI variants and wall times for all methods.
 
 Usage (from repo root):
@@ -392,12 +392,12 @@ def run(args: argparse.Namespace) -> None:
     )
     out_path = OUT_DIR / 'advi_elbo_convergence.pdf'
     fig.savefig(out_path, bbox_inches='tight')
-    print(f'Figure saved → {out_path}')
+    print(f'Figure saved -> {out_path}')
 
     # -----------------------------------------------------------------------
     # Summary table
     # -----------------------------------------------------------------------
-    print('\n--- Convergence summary (plateau_rel; green < 0.005, orange < 0.02, red ≥ 0.02) ---')
+    print('\n--- Convergence summary (plateau_rel; green < 0.005, orange < 0.02, red >= 0.02) ---')
     col_w = 10
     header = f'{"ds":>3}  {"n":>5}  {"q":>2}  ' + '  '.join(
         f'{c[0]:>{col_w}}' for c in ADVI_CONFIGS
@@ -411,8 +411,8 @@ def run(args: argparse.Namespace) -> None:
         for cfg in row['advi']:
             pr = cfg['plateau_rel']
             sr = cfg['still_rising']
-            tag = '✓' if pr < 0.005 and not sr else '~' if pr < 0.02 else '✗'
-            line += f'  {tag}{pr:.4f}'.rjust(col_w + 2)
+            tag = 'ok' if pr < 0.005 and not sr else '~' if pr < 0.02 else 'x'
+            line += f'  {tag} {pr:.4f}'.rjust(col_w + 2)
         if row['pathfinder']:
             pf = row['pathfinder']
             line += f'  {"OK" if pf["ok"] else "ERR"} {pf["wall"]:.1f}s'.rjust(col_w + 2)

@@ -260,12 +260,12 @@ class Approximator(nn.Module):
         """Append analytical metadata to a set-transformer summary.
 
         Three distinct call sites, each serving a different role:
-          • Local for global summarizer (local=True, stats=stats):
+          - Local for global summarizer (local=True, stats=stats):
               n_obs, eta_rfx + [REML blup_est, blup_std, λ_g if stats]
               REML BLUPs give the global SetTransformer the best available per-group signal.
-          • Global posterior context (local=False, stats=stats):
+          - Global posterior context (local=False, stats=stats):
               n_total, n_groups, prior params + families + [beta_est, sigma_rfx, sigma_eps/phi, psi_corr if stats]
-          • Local posterior context (local=True, stats=None):
+          - Local posterior context (local=True, stats=None):
               n_obs, eta_rfx only - REML BLUPs intentionally omitted; _localContext injects
               analytically exact BLUPs conditioned on the current global-param sample instead.
         """

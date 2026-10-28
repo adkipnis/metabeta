@@ -144,7 +144,7 @@ def test_detect_multiclass_numeric_not_multiclass():
 
 
 def test_detect_multiclass_numeric_strings_not_multiclass():
-    # "0"/"1"/"2" as strings are parseable → not detected as multiclass
+    # "0"/"1"/"2" as strings are parseable -> not detected as multiclass
     y = pd.Series(['0', '1', '2', '0'])
     assert not detectMulticlassY(y)
 
@@ -312,7 +312,7 @@ def test_imputation_group_aware():
 
 def test_hi_card_cat_routed_as_random_effect():
     rng = np.random.default_rng(0)
-    n, m = 200, 20  # 20 levels > max_categories=10 → should become random effect
+    n, m = 200, 20  # 20 levels > max_categories=10 -> should become random effect
     group = np.repeat(np.arange(m), n // m).astype(str)
     df = pd.DataFrame(
         {
@@ -381,7 +381,7 @@ def test_preprocessor_treatment_contrasts():
     cat = np.tile(['a', 'b', 'c'], n // 3)
     df = pd.DataFrame({'cat': cat, 'y': rng.normal(size=n)})
     result = DataPreprocessor().fit_transform(df)
-    # 3 levels → 2 dummies (drop='first')
+    # 3 levels -> 2 dummies (drop='first')
     assert result['X'].shape[1] == 2
 
 

@@ -177,7 +177,7 @@ def _pStar(p: float) -> str:
 def variantRow(family: str, size: str, tag: str, per_s: dict, per_r: dict) -> dict:
     """Sampled-vs-real contrast for one (family, size) pair at one budget level.
 
-    Divergence prevalence is compared with Fisher's exact test on the ≥1-divergence
+    Divergence prevalence is compared with Fisher's exact test on the >=1-divergence
     counts; the per-dataset divergence-count distributions with a two-sided
     Mann-Whitney U; the R-hat violation shares again with Fisher's exact test.
     """
@@ -214,7 +214,7 @@ BENCH_COLS = [
     ('level', 'level', '{}'),
     ('B', 'B', '{}'),
     ('total_div', 'divg.', '{}'),
-    ('pct_any_div', '% ≥1 divg.', '{:.0f}'),
+    ('pct_any_div', '% >=1 divg.', '{:.0f}'),
     ('med_div_affected', 'med. divg.|>0', '{:.0f}'),
     ('max_rhat', 'max R̂', '{:.2f}'),
     ('pct_tree', '% tree-sat', '{:.1f}'),
@@ -228,8 +228,8 @@ BENCH_COLS = [
 VARIANT_COLS = [
     ('pair', 'benchmark pair', '{}'),
     ('level', 'level', '{}'),
-    ('pct_any_s', '% ≥1 divg. (sampled)', '{:.0f}'),
-    ('pct_any_r', '% ≥1 divg. (real)', '{:.0f}'),
+    ('pct_any_s', '% >=1 divg. (sampled)', '{:.0f}'),
+    ('pct_any_r', '% >=1 divg. (real)', '{:.0f}'),
     ('p_any', 'p (Fisher)', '{}'),
     ('p_mw', 'p (MW, counts)', '{}'),
     ('pct_rhat_s', f'% R̂>{RHAT_MAX} (sampled)', '{:.1f}'),
@@ -358,7 +358,7 @@ def main() -> None:
     if variant_md:
         md += (
             '\n## Sampled (oracle) vs real fits\n\n'
-            'Divergence prevalence (Fisher exact on ≥1-divergence counts), per-dataset '
+            'Divergence prevalence (Fisher exact on >=1-divergence counts), per-dataset '
             'divergence-count distributions (two-sided Mann-Whitney U), and R̂ violation '
             'shares (Fisher exact). Stars: *p<.05, **p<.01, ***p<.001.\n\n'
             f'{variant_md}\n'
@@ -367,7 +367,7 @@ def main() -> None:
         md += (
             '\n## Divergence drivers (Normal sampled)\n\n'
             f'σ̃ε is the generative noise scale in standardized space (σε/sd(y)); '
-            f'"% divg." columns give the share of datasets with ≥1 divergent transition.\n'
+            f'"% divg." columns give the share of datasets with >=1 divergent transition.\n'
             'LOO-NLL is the composite-NUTS posterior predictive LOO-NLL from `summary_test_nuts.pt`. '
             'Spearman stars: *p<.05, **p<.01, ***p<.001.\n\n'
             f'{driver_md}\n'

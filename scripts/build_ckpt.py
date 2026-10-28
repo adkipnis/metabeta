@@ -38,7 +38,7 @@ OUTPUT_DIR = Path(__file__).parent.parent / 'metabeta' / 'outputs' / 'joint'
 HF_REPO_ID = 'adkipnis/metabeta'
 CHECKPOINT_VERSION = 'v1'  # HF Hub git tag - bump only on architecture changes
 
-# Map (family, size) → best seed.  Set to None to skip that combo.
+# Map (family, size) -> best seed.  Set to None to skip that combo.
 BEST_SEEDS: dict[tuple[str, str], int | None] = {
     ('normal', 'small'): 13,
     ('normal', 'medium'): 14,
@@ -91,7 +91,7 @@ def build(dry_run: bool = False) -> list[Path]:
             continue
 
         output_path = OUTPUT_DIR / f'metabeta-{family}.pt'
-        print(f'[BUILD] {family}: {list(checkpoints)} → {output_path}')
+        print(f'[BUILD] {family}: {list(checkpoints)} -> {output_path}')
         if not dry_run:
             joinCheckpoints(checkpoints, output_path=output_path)
         built.append(output_path)
@@ -106,7 +106,7 @@ def upload(dry_run: bool = False) -> None:
 
     model_card = Path(__file__).parent / 'hf_model_card.md'
     if model_card.exists():
-        print(f'[UPLOAD] {model_card.name}  → {HF_REPO_ID}')
+        print(f'[UPLOAD] {model_card.name}  -> {HF_REPO_ID}')
         if not dry_run:
             api.upload_file(
                 path_or_fileobj=str(model_card),
@@ -122,7 +122,7 @@ def upload(dry_run: bool = False) -> None:
             print(f'[SKIP]  {path.name} not found - run --build first')
             continue
         size_mb = path.stat().st_size / 1e6
-        print(f'[UPLOAD] {path.name}  ({size_mb:.0f} MB)  → {HF_REPO_ID}')
+        print(f'[UPLOAD] {path.name}  ({size_mb:.0f} MB)  -> {HF_REPO_ID}')
         if not dry_run:
             api.upload_file(
                 path_or_fileobj=str(path),
@@ -138,7 +138,7 @@ def tag(dry_run: bool = False) -> None:
     from huggingface_hub.utils import HfHubHTTPError
 
     api = HfApi()
-    print(f'[TAG]   moving {CHECKPOINT_VERSION!r} → HEAD on {HF_REPO_ID}')
+    print(f'[TAG]   moving {CHECKPOINT_VERSION!r} -> HEAD on {HF_REPO_ID}')
     if not dry_run:
         try:
             api.delete_tag(HF_REPO_ID, tag=CHECKPOINT_VERSION, repo_type='model')

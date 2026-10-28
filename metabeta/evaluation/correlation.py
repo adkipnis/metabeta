@@ -209,7 +209,7 @@ def mergeCorrelationResults(results_list: list[dict]) -> dict:
     with different max_q (and therefore different n_pairs) are handled correctly.
     The (b,) tensors eta_rfx and offdiag_mae/percentile are also concatenated.
     """
-    # pair-level keys: (b, n_pairs) → flatten to 1D before cat
+    # pair-level keys: (b, n_pairs) -> flatten to 1D before cat
     pair_keys = [
         'corr_mean',
         'corr_true',
@@ -222,7 +222,7 @@ def mergeCorrelationResults(results_list: list[dict]) -> dict:
         'm_pairs',
         'percentile_pairs',
     ]
-    # dataset-level keys: (b,) → cat directly
+    # dataset-level keys: (b,) -> cat directly
     dataset_keys = ['eta_rfx', 'offdiag_mae', 'percentile']
 
     merged: dict = {}

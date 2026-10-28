@@ -7,7 +7,7 @@ the stored hyperparameters that define the fitted model are rewritten:
 
     τ×c         all prior scales (τ_ffx, τ_rfx, τ_ε) multiplied by c ∈ {1/3, 3}
     ν+kτ        ν_ffx shifted by k prior SDs, k ∈ {1, 2} (location, not scale)
-    family+1    prior families rotated (Normal↔Student-t, Half-Normal→Half-Student-t→Exp.)
+    family+1    prior families rotated (Normal<->Student-t, Half-Normal->Half-Student-t->Exp.)
 
 Because metabeta reads those fields as posterior context and ``utils/pymc.buildPymc`` reads
 them to construct the PyMC model, writing them into a data dir is enough to make *both*
@@ -69,7 +69,7 @@ logger = logging.getLogger(__name__)
 
 BASE_TAG = 'priorbase'
 
-# ds_type tag → (τ multiplier, ν_ffx shift in units of τ_ffx, rotate prior families).
+# ds_type tag -> (τ multiplier, ν_ffx shift in units of τ_ffx, rotate prior families).
 # Kept in step with the display labels in experiments/evaluation/prior_misspec.py.
 CONDITIONS: dict[str, tuple[float, float, bool]] = {
     'tau033': (1.0 / 3.0, 0.0, False),

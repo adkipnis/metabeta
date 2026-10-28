@@ -70,7 +70,7 @@ def _breakdown(
         for i in range(len(edges) - 1):
             lo, hi = edges[i], edges[i + 1]
             mask = finite & (factor >= lo) & (factor <= (hi if i == len(edges) - 2 else hi - 1e-9))
-            bins.append((f'{lo:.3f}–{hi:.3f}', mask))
+            bins.append((f'{lo:.3f}-{hi:.3f}', mask))
 
     rows = []
     for label, mask in bins:
@@ -398,14 +398,14 @@ def run_diagnostic(
 
     # ===========================================================================
     # 5b. blup_var calibration: predicted posterior variance vs actual MSE
-    #     ratio > 1  → underconfident (predicted var too large)
-    #     ratio < 1  → overconfident  (predicted var too small, BLUPs overshrunk)
+    #     ratio > 1  -> underconfident (predicted var too large)
+    #     ratio < 1  -> overconfident  (predicted var too small, BLUPs overshrunk)
     # ===========================================================================
     print('\n=== blup_var calibration: mean(err²) / mean(blup_var) by group size ===')
     print(
-        '  Ratio > 1 → overconfident (blup_var too small; actual errors exceed predicted variance → BLUPs overshrunk)'
+        '  Ratio > 1 -> overconfident (blup_var too small; actual errors exceed predicted variance -> BLUPs overshrunk)'
     )
-    print('  Ratio < 1 → underconfident (blup_var too large)')
+    print('  Ratio < 1 -> underconfident (blup_var too large)')
     rfx_err2_flat = rfx_err_flat**2
     finite_mask = np.isfinite(rfx_err2_flat) & np.isfinite(blup_var_flat) & (blup_var_flat > 0)
     edges_ng = np.nanpercentile(blup_ns_flat[finite_mask], np.linspace(0, 100, 6))
@@ -424,7 +424,7 @@ def run_diagnostic(
         mvar = float(np.mean(blup_var_flat[sel]))
         ratio = mse / max(mvar, 1e-30)
         calib_rows.append(
-            [f'{lo:.0f}–{hi:.0f}', int(sel.sum()), f'{mvar:.4f}', f'{mse:.4f}', f'{ratio:.3f}']
+            [f'{lo:.0f}-{hi:.0f}', int(sel.sum()), f'{mvar:.4f}', f'{mse:.4f}', f'{ratio:.3f}']
         )
     print(
         tabulate(
@@ -463,7 +463,7 @@ def run_diagnostic(
                     f'{r["srfx_err_mean"]:+.3f}',
                     f'{r["seps_err"]:+.3f}',
                     f'{r["snr"]:.2f}',
-                    '✓' if r['srfx_clipped'] else '',
+                    'x' if r['srfx_clipped'] else '',
                 ]
                 for r in worst
             ]
@@ -494,7 +494,7 @@ def run_diagnostic(
                     r['bg_df'],
                     f'{r["srfx_true_mean"]:.3f}',
                     f'{r["srfx_err_mean"]:+.3f}',
-                    '✓' if r['srfx_clipped'] else '',
+                    'x' if r['srfx_clipped'] else '',
                 ]
                 for r in worst
             ]
@@ -557,7 +557,7 @@ def run_diagnostic(
             sel = (m_all_corr >= lo) & (m_all_corr < hi)
             if sel.sum() < 5:
                 continue
-            label = f'm={lo}–{hi-1}' if hi < 1000 else f'm≥{lo}'
+            label = f'm={lo}-{hi-1}' if hi < 1000 else f'm>={lo}'
             r_r = float(np.corrcoef(r_hat_all[sel].reshape(-1), r_true_all[sel].reshape(-1))[0, 1])
             shrunk3 = r_hat_all[sel] * alpha_all[3][sel]
             r_s = float(np.corrcoef(shrunk3.reshape(-1), r_true_all[sel].reshape(-1))[0, 1])
