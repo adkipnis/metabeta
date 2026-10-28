@@ -1,8 +1,8 @@
 """
-warmstart_nuts.py — Warm-started NUTS vs cold NUTS baseline on real data.
+warmstart_nuts.py - Warm-started NUTS vs cold NUTS baseline on real data.
 
 cold_std baseline is always loaded from test.nuts.npz (NUTS, ta=0.80, tune=2000,
-draws=1000, chains=4) — no NUTS is re-run by this script.
+draws=1000, chains=4) - no NUTS is re-run by this script.
 
 Conditions (warm only)
 ----------------------
@@ -158,7 +158,7 @@ def loadFitDatasets(
     """Load datasets from a test.npz file, padded to model capacity.
 
     Datasets whose d or q exceed the model's capacity are skipped.
-    Returns (tensor_batch, list of unpadded dicts) — same contract as loadData.
+    Returns (tensor_batch, list of unpadded dicts) - same contract as loadData.
     """
     with np.load(data_path, allow_pickle=True) as raw:
         raw = dict(raw)
@@ -271,7 +271,7 @@ def runCold(
             chains=cond.chains,
             target_accept=cond.target_accept,
             # NB: the old nuts_kwargs={...} spelling is silently ignored by
-            # PyMC >= 5 — a direct kwarg is forwarded to the NUTS constructor
+            # PyMC >= 5 - a direct kwarg is forwarded to the NUTS constructor
             max_treedepth=cond.max_treedepth,
             random_seed=seed,
             return_inferencedata=True,
@@ -422,8 +422,8 @@ def printQualityTable(quality: dict[str, dict[str, float]], active_conds: list[s
                 f'{q["r"]:.3f}',
                 f'{q["nrmse"]:.3f}',
                 f'{q["eace"]:.3f}',
-                f'{q["loo_nll"]:.3f}' if np.isfinite(q['loo_nll']) else '—',
-                f'{q["loo_k"]:.3f}' if np.isfinite(q['loo_k']) else '—',
+                f'{q["loo_nll"]:.3f}' if np.isfinite(q['loo_nll']) else '-',
+                f'{q["loo_k"]:.3f}' if np.isfinite(q['loo_k']) else '-',
             ]
         )
     headers = ['Condition', 'r ↑', 'NRMSE ↓', 'EACE ↓', 'LOO-NLL ↓', 'LOO k']
@@ -452,7 +452,7 @@ def printQualityDiff(quality: dict[str, dict[str, float]], active_conds: list[st
                 f'{q["eace"] - baseline["eace"]:+.3f}',
                 f'{q["loo_nll"] - baseline["loo_nll"]:+.3f}'
                 if np.isfinite(q['loo_nll']) and np.isfinite(baseline['loo_nll'])
-                else '—',
+                else '-',
             ]
         )
     headers = ['Condition', 'Δr ↑', 'Δ NRMSE ↓', 'Δ EACE ↓', 'Δ LOO-NLL ↓']
@@ -492,7 +492,7 @@ def printSummary(results: list[dict], active_conds: list[str]) -> str:
         for key, _, dec in metrics:
             arr = np.array([v.get(key, float('nan')) for v in vals], dtype=float)
             med, p25, p75 = _iqr(arr)
-            row.append('—' if np.isnan(med) else _fmt(med, p25, p75, dec))
+            row.append('-' if np.isnan(med) else _fmt(med, p25, p75, dec))
         rows.append(row)
     headers = ['Condition'] + [m[1] for m in metrics]
     print(tabulate(rows, headers=headers, tablefmt='simple'))
@@ -553,7 +553,7 @@ def printAnalysis(results: list[dict], active_conds: list[str]) -> str | None:
 def _importColdStd(data_path: Path, fits_dir: Path, n: int, refit: bool = False) -> list[dict]:
     """Load NUTS fits from test.nuts.npz, cache ALL datasets as cold_std, return first n.
 
-    All datasets are cached (free — no NUTS re-running) so plotting scripts see the
+    All datasets are cached (free - no NUTS re-running) so plotting scripts see the
     full distribution. Only the first n results are returned for quality comparison
     against warm conditions.
     """
@@ -626,7 +626,7 @@ def run(args: argparse.Namespace) -> None:
         fits_dir = data_dir / f'fits_warm_{ckpt_name}'
 
         if not data_dir.exists():
-            print(f'[{data_id}] data directory not found: {data_dir} — skipping')
+            print(f'[{data_id}] data directory not found: {data_dir} - skipping')
             continue
 
         print(f'\n{"#" * 70}')
@@ -642,7 +642,7 @@ def run(args: argparse.Namespace) -> None:
 
         test_path = data_dir / 'test.npz'
         if not fitPath(test_path, 'nuts').exists():
-            print(f'  [warn] test.nuts.npz not found in {data_dir} — skipping')
+            print(f'  [warn] test.nuts.npz not found in {data_dir} - skipping')
             continue
 
         if args.benchmark_mb and model is not None:
@@ -708,7 +708,7 @@ def run(args: argparse.Namespace) -> None:
 
         display_conds = ['cold_std'] + args.conditions
         print(f'\n{"=" * 70}')
-        print(f'Summary — {data_id}  ({n_ds} datasets)')
+        print(f'Summary - {data_id}  ({n_ds} datasets)')
         print(f'{"=" * 70}')
         md_sections: list[str] = [f'# {data_id}  ({n_ds} datasets)  ckpt={ckpt_name}\n']
         md_sections.append('## MCMC diagnostics\n')
@@ -724,7 +724,7 @@ def run(args: argparse.Namespace) -> None:
         d_rfx = model.d_rfx if model is not None else int(tensor_batch['mask_q'].shape[-1])
         lf = int(tensor_batch['likelihood_family'][0].item())
 
-        print(f'\nQuality — {data_id}  (recovery / calibration / PSIS-LOO)')
+        print(f'\nQuality - {data_id}  (recovery / calibration / PSIS-LOO)')
         quality: dict[str, dict[str, float]] = {}
         for cond_label in display_conds:
             cond_results = [r for r in all_results if r['cond'] == cond_label]

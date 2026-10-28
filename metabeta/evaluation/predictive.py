@@ -78,7 +78,7 @@ def posteriorPredictiveNLL(
     mode='mixture':
         -log E_p(theta|D)[ p(y | theta) ]
     mode='loo_proxy':
-        log E_p(theta|D)[ 1/p(y | theta) ]  — naive IS LOO estimate; always >= mixture NLL
+        log E_p(theta|D)[ 1/p(y | theta) ]  - naive IS LOO estimate; always >= mixture NLL
     """
     if log_p is None:
         y_obs = data['y'].unsqueeze(-1)   # (b, m, n, 1)
@@ -159,7 +159,7 @@ def psisLooNLL(
 
     b, m, n, s = log_p.shape
 
-    # PSIS per observation — psislw expects (n_obs, n_draws) with last axis = samples.
+    # PSIS per observation - psislw expects (n_obs, n_draws) with last axis = samples.
     # Only run PSIS on real (non-padded) observations; scatter results back afterward.
     valid = mask.reshape(b * m * n).cpu().numpy()  # (b*m*n,) bool
     log_w_flat = log_w.detach().reshape(b * m * n, s).cpu().numpy()
@@ -219,7 +219,7 @@ def _predQuantile(
 ) -> torch.Tensor:
     """Predictive quantiles at given probability levels.
 
-    y_rep  : (b, m, n, s) — one draw per posterior sample
+    y_rep  : (b, m, n, s) - one draw per posterior sample
     levels : (n_levels,) in [0, 1], sorted ascending
     w      : (b, s) IS weights or None (uniform)
 
@@ -255,16 +255,16 @@ def _ppcNormal(
 
     Avoids sampling and sorting by working directly with the Normal CDF.
 
-    Coverage: for each observation, compute the mixture CDF at y_obs —
+    Coverage: for each observation, compute the mixture CDF at y_obs -
         F(y) = mean_s[ Φ((y - mu_s) / sigma_s) ]
     then y is inside the (1-alpha) interval iff alpha/2 <= F(y) <= 1 - alpha/2.
 
-    Width: moment approximation for the Normal mixture —
+    Width: moment approximation for the Normal mixture -
         std_mix = sqrt( E_s[sigma_s^2] + Var_s[mu_s] )
     which is exact when all components are identical and a tight lower bound
     otherwise. Sufficient for comparing dispersion across methods.
     """
-    # mixture CDF at y_obs — shape (b, m, n)
+    # mixture CDF at y_obs - shape (b, m, n)
     y_exp = y_obs.unsqueeze(-1)   # (b, m, n, 1) broadcasts against (b, m, n, s)
     if w is None:
         F_y = pp.cdf(y_exp).mean(dim=-1)
@@ -320,8 +320,8 @@ def posteriorPredictiveCoverage(
 
     Returns
     -------
-    coverage : (n_alphas, b) — fraction of y_obs inside each interval
-    width    : (n_alphas, b) — mean predictive interval width over valid obs
+    coverage : (n_alphas, b) - fraction of y_obs inside each interval
+    width    : (n_alphas, b) - mean predictive interval width over valid obs
     """
     from metabeta.evaluation.intervals import ALPHAS as _ALPHAS
 

@@ -2,8 +2,8 @@
 
 Companion to experiments/simulation/likelihood_misspec.py, which regenerates test outcomes
 under contaminated likelihoods (Normal→Student-t, Poisson→NegBin, Bernoulli→latent logit
-noise) with increasing severity, while both metabeta and NUTS fit the original — now
-misspecified — model with the stored priors.  This script produces the dose–response tables:
+noise) with increasing severity, while both metabeta and NUTS fit the original - now
+misspecified - model with the stored priors.  This script produces the dose–response tables:
 
   1. MB↔NUTS agreement per severity (r, σ-ratio, rank-MAD, ΔLOO-NLL; real_posterior.py
      metrics, median ± MAD over the NUTS-converged subset).  If MB's agreement with NUTS is
@@ -12,13 +12,13 @@ misspecified — model with the stored priors.  This script produces the dose–
   2. Quality vs the generating parameters per severity (NRMSE / EACE for global and
      local parameters, plus LOO-NLL) for MB, MB+IMH and NUTS.  Under contamination the
      generating parameters are no longer the fitted model's pseudo-true values, so absolute
-     numbers degrade by design — the question is whether MB degrades in step with NUTS.
+     numbers degrade by design - the question is whether MB degrades in step with NUTS.
 
 Simulator-clipped datasets (utils.evaluation.simulatorClipped) are left out; all metrics are
 computed on the NUTS-converged subset of the rest (paired comparisons); % converged per
 severity marks where the reference itself starts to fail.  Sizes are pooled per severity;
 ``--per_size`` adds per-size agreement breakdowns.  Each size uses its regime-matched
-checkpoint (BEST_SEEDS from scripts/build_ckpt.py — one pretrained model per family × size).
+checkpoint (BEST_SEEDS from scripts/build_ckpt.py - one pretrained model per family × size).
 
 Usage (from repo root):
     uv run python experiments/evaluation/likelihood_misspec.py --family n
@@ -121,13 +121,13 @@ def collectCondition(
     seed = BEST_SEEDS.get((FAMILY_NAMES[family], size))
     if seed is None:
         logger.warning(
-            '%s: no BEST_SEEDS checkpoint for (%s, %s) — skipping', data_id, family, size
+            '%s: no BEST_SEEDS checkpoint for (%s, %s) - skipping', data_id, family, size
         )
         return None
     ckpt_dir = _ckpt_dir(FAMILY_NAMES[family], size, seed)
     data_path = DATA_DIR / data_id / 'test.npz'
     if not fitPath(data_path, 'nuts2').exists() or not ckpt_dir.exists():
-        logger.warning('%s: data, NUTS fit or checkpoint missing — skipping', data_id)
+        logger.warning('%s: data, NUTS fit or checkpoint missing - skipping', data_id)
         return None
 
     model, model_cfg = loadModel(ckpt_dir, cfg.prefix, device)
@@ -244,7 +244,7 @@ def alignSizes(per_cond: dict[str, list[dict]]) -> tuple[dict[str, list[dict]], 
     """Restrict every condition to the sizes collected under *all* of them.
 
     Conditions are pooled across sizes and then read row against row, so a condition still
-    missing a size — its NUTS fits are not in yet — would be compared against a baseline
+    missing a size - its NUTS fits are not in yet - would be compared against a baseline
     pooled over more (and larger) datasets, and the size composition rather than the
     perturbation would drive the difference.  A ragged campaign is a normal intermediate
     state, so warn and shrink instead of failing, and hand back the sizes actually used so
@@ -256,7 +256,7 @@ def alignSizes(per_cond: dict[str, list[dict]]) -> tuple[dict[str, list[dict]], 
         missing = sorted(set(sizes) - common)
         if missing:
             logger.warning(
-                '%s: dropping %s — not collected under every condition', tag, ', '.join(missing)
+                '%s: dropping %s - not collected under every condition', tag, ', '.join(missing)
             )
     aligned = {
         tag: [r for r in per if r['agree']['size'][0] in common] for tag, per in per_cond.items()
@@ -268,7 +268,7 @@ def alignSizes(per_cond: dict[str, list[dict]]) -> tuple[dict[str, list[dict]], 
     # equal sizes still leave room for a partially reintegrated dir, which the n column shows
     counts = {tag: sum(len(r['agree']['size']) for r in per) for tag, per in aligned.items()}
     if len(set(counts.values())) > 1:
-        logger.warning('Datasets per condition differ (%s) — some fits are incomplete', counts)
+        logger.warning('Datasets per condition differ (%s) - some fits are incomplete', counts)
     return aligned, order
 
 
@@ -504,7 +504,7 @@ def main() -> None:
         return
     per_cond, sizes = alignSizes(per_cond)
     if not per_cond:
-        logger.error('No size was collected under every condition — nothing comparable to pool.')
+        logger.error('No size was collected under every condition - nothing comparable to pool.')
         return
 
     pooled_agree = {tag: _poolAgree(per) for tag, per in per_cond.items()}
@@ -537,7 +537,7 @@ def main() -> None:
         'Global (ffx, σ_rfx' + (', σ_ε' if lf == 0 else '') + ') and local (rfx) parameters; '
         'NRMSE→0 recovery, EACE→0 calibrated, LOO-NLL median per dataset. Under contamination '
         "the generating parameters differ from the misspecified model's pseudo-true values, so "
-        'absolute degradation is expected — the comparison is MB vs NUTS.\n',
+        'absolute degradation is expected - the comparison is MB vs NUTS.\n',
         quality_md,
         '',
     ]

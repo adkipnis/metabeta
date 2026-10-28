@@ -38,14 +38,14 @@ CATALOG_API_URL = 'https://archive.ics.uci.edu/api/datasets/list'
 DATASET_API_URL = 'https://archive.ics.uci.edu/api/dataset'
 
 # Datasets excluded from the collection.
-# 312  Dow Jones Index           — dollar-formatted price strings ($15.82 etc.) treated as
+# 312  Dow Jones Index           - dollar-formatted price strings ($15.82 etc.) treated as
 #                                  high-cardinality categoricals; 700+ unique values / 750 rows
 #                                  → top-10 lumping destroys all numeric information.
-# 380  YouTube Spam Collection   — features are author, date, and free-text content; after
+# 380  YouTube Spam Collection   - features are author, date, and free-text content; after
 #                                  lumping all three collapse to 'other', leaving no signal.
-# 461  Drug Reviews (Druglib.com)— benefitsReview / sideEffectsReview / commentsReview are
+# 461  Drug Reviews (Druglib.com) - benefitsReview / sideEffectsReview / commentsReview are
 #                                  4000+ unique free-text fields; pure NLP dataset.
-# 911  Recipe Reviews            — text / user_id / user_name columns (10k–18k unique each);
+# 911  Recipe Reviews            - text / user_id / user_name columns (10k–18k unique each);
 #                                  pure NLP dataset.
 BLACKLIST: set[int] = {312, 380, 461, 911}
 

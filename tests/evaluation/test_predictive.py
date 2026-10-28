@@ -102,7 +102,7 @@ def test_psisLooNLL_optimism_on_average():
     y = torch.randn(b, m, n)
     data = {'y': y, 'mask_n': torch.ones(b, m, n, dtype=torch.bool)}
 
-    # pp strongly centered on y — leaving one out shifts the distribution away
+    # pp strongly centered on y - leaving one out shifts the distribution away
     loc = y.unsqueeze(-1) + 0.1 * torch.randn(b, m, n, s)
     scale = torch.full((b, m, n, s), 0.3)
     pp = D.Normal(loc, scale)

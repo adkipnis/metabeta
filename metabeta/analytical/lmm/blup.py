@@ -7,9 +7,9 @@ from metabeta.utils.regularization import unconstrainedToCholesky
 
 def analyticalBLUPContext(
     data: dict[str, torch.Tensor],
-    beta: torch.Tensor,  # (B, S, d) fixed effects — constrained scale
-    sigma_rfx: torch.Tensor,  # (B, S, q) — constrained scale
-    sigma_eps: torch.Tensor,  # (B, S)   — constrained scale
+    beta: torch.Tensor,  # (B, S, d) fixed effects - constrained scale
+    sigma_rfx: torch.Tensor,  # (B, S, q) - constrained scale
+    sigma_eps: torch.Tensor,  # (B, S)   - constrained scale
     z_corr: torch.Tensor | None,  # (B, S, d_corr) unconstrained atanh or None
     clamp: float = 20.0,
 ) -> torch.Tensor:

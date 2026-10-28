@@ -2,7 +2,7 @@
 
 The prior counterpart of experiments/simulation/likelihood_misspec.py.  That script keeps the
 prior and contaminates the outcomes; this one keeps the outcomes and contaminates the prior.
-Predictors, groups, outcomes and every generating parameter are copied over untouched — only
+Predictors, groups, outcomes and every generating parameter are copied over untouched - only
 the stored hyperparameters that define the fitted model are rewritten:
 
     τ×c         all prior scales (τ_ffx, τ_rfx, τ_ε) multiplied by c ∈ {1/3, 3}
@@ -11,7 +11,7 @@ the stored hyperparameters that define the fitted model are rewritten:
 
 Because metabeta reads those fields as posterior context and ``utils/pymc.buildPymc`` reads
 them to construct the PyMC model, writing them into a data dir is enough to make *both*
-inference paths fit the same misspecified prior — no changes to fit.py or fit-ref.sh.  That
+inference paths fit the same misspecified prior - no changes to fit.py or fit-ref.sh.  That
 is the whole point of doing this at generation time rather than perturbing in memory: without
 a matching NUTS refit there is no gold standard to compare the degradation against.
 
@@ -21,9 +21,9 @@ genuine modelling error, and the question is whether metabeta degrades in step w
 Each (size, family) source produces standard-format data dirs under outputs/data/:
 
     {size}-{fam}-priorbase      unperturbed baseline: slice of the original test.npz AND its
-                                test.nuts.npz (existing NUTS fits reused — zero refits)
+                                test.nuts.npz (existing NUTS fits reused - zero refits)
     {size}-{fam}-{tag}          one dir per condition (tau033, tau3, mu1, mu2, famrot),
-                                test.npz only — NUTS fits to be produced with fit.py
+                                test.npz only - NUTS fits to be produced with fit.py
 
 Analytical stats are a function of the prior, so they are dropped from every dir (baseline
 included, to keep the conditions comparable): either rerun precompute.py on all of them, or
@@ -179,7 +179,7 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
     src_dir = DATA_DIR / src_id
     test_path = src_dir / 'test.npz'
     if not test_path.exists() or not fitPath(test_path, REFERENCE_TAG).exists():
-        logger.warning('%s: test.npz or its %s fit missing — skipping', src_id, REFERENCE_TAG)
+        logger.warning('%s: test.npz or its %s fit missing - skipping', src_id, REFERENCE_TAG)
         return []
 
     with np.load(test_path, allow_pickle=True) as z:
@@ -193,7 +193,7 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
     base_id = f'{size}-{family}-{BASE_TAG}'
     base_dir = DATA_DIR / base_id
     if base_dir.exists() and not cfg.overwrite:
-        logger.info('%s: exists — skipping (use --overwrite)', base_id)
+        logger.info('%s: exists - skipping (use --overwrite)', base_id)
     else:
         base_dir.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(base_dir / 'test.npz', **_dropStaleKeys(source, idx))
@@ -211,10 +211,10 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
         out_dir = DATA_DIR / data_id
         created.append(data_id)
         if out_dir.exists() and not cfg.overwrite:
-            logger.info('%s: exists — skipping (use --overwrite)', data_id)
+            logger.info('%s: exists - skipping (use --overwrite)', data_id)
             continue
         if out_dir.exists():
-            # a rewritten prior invalidates any fits of the previous data — remove them so
+            # a rewritten prior invalidates any fits of the previous data - remove them so
             # stale per-index fit files cannot be reintegrated against the new prior
             stale = [fitPath(out_dir / 'test.npz', t) for t in availableFits(out_dir / 'test.npz')]
             stale += sorted((out_dir / 'fits').glob('*.npz'))

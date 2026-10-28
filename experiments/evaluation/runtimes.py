@@ -2,7 +2,7 @@
 
 Every size uses its regime-matched checkpoint (BEST_SEEDS from scripts/build_ckpt.py) on its
 own test set, the same arrangement as the misspecification studies.  The cross-product of the
-old script — every model against every test set — is no longer meaningful: the size presets
+old script - every model against every test set - is no longer meaningful: the size presets
 now define *disjoint* d bands (small 1-4, medium 5-8, large 9-12, huge 13-16), so a smaller
 model cannot represent a single dataset of a larger regime, and the cross terms are empty.
 
@@ -23,26 +23,26 @@ metabeta appears as four rows, all timed per dataset with a batch of one (the la
 comparable to the per-dataset wall times the fit backends record).  Two are operating modes a
 user gets, two are the components of the default one:
 
-  * **MB^0** — the raw flow a user gets with ``refine=False``: one amortized forward pass and
+  * **MB^0** - the raw flow a user gets with ``refine=False``: one amortized forward pass and
     ``n_samples`` draws, the local posterior flow among them (``Api.sample`` draws
     ``local=True`` when it does not refine).
-  * **MBG** — the global pass alone: the same forward pass drawing only the global flow
+  * **MBG** - the global pass alone: the same forward pass drawing only the global flow
     (``local=False``), i.e. the proposal the default pipeline hands to IMH.
-  * **IMH** — the head: rescaling, the IMH chains on ``device`` (4 chains, burn-in 25, in the
+  * **IMH** - the head: rescaling, the IMH chains on ``device`` (4 chains, burn-in 25, in the
     rescaled space, as the oracle/real benchmarks run it; with the '+moves' presets default also
     the local moves where the IMH ESS is low) and the copy of the refined draws back to the
     host.  Because the head marginalizes the rfx out of the target and reimputes them from
-    their analytical conditional at the accepted globals, it needs no local-flow draws — which
+    their analytical conditional at the accepted globals, it needs no local-flow draws - which
     is why MBG can skip the local posterior network.
-  * **MB** — the default pipeline, MBG + IMH timed as one region (``Api.sample`` passes
+  * **MB** - the default pipeline, MBG + IMH timed as one region (``Api.sample`` passes
     ``local=False`` whenever it refines).  MB is therefore *not* MB^0 plus a head: the local
-    flow is paid only by MB^0, and on CPU — where it is the dominant cost for the discrete
-    families — MB can be the faster of the two modes.  The speedups of the reliability table
+    flow is paid only by MB^0, and on CPU - where it is the dominant cost for the discrete
+    families - MB can be the faster of the two modes.  The speedups of the reliability table
     are against MB, the posterior a user actually gets by default.
 
 Not timed here, and deliberately so: batching several datasets through one forward pass, and
 recomputing the analytical MAP/EB statistics that condition the summarizer instead of reading
-the precomputed ones the batch carries.  Both are one-line statements in the paper — the fit is
+the precomputed ones the batch carries.  Both are one-line statements in the paper - the fit is
 data-only, so its cost is checkpoint-independent, and the batched cost of the default pipeline
 is what the oracle benchmark's time column reports.
 
@@ -219,13 +219,13 @@ def pipelineOnce(
     synchronisation.  The first and the last are *independent* end-to-end latencies (the two
     modes are not add-ons to one another); the middle one is a split of the last:
 
-      * ``flow_seconds`` — MB^0, the raw flow a user gets with ``refine=False``: one amortized
+      * ``flow_seconds`` - MB^0, the raw flow a user gets with ``refine=False``: one amortized
         pass with the local posterior flow sampled (``Api.sample`` draws ``local=True`` when it
         does not refine).  NaN when ``time_flow`` is False (already cached).
-      * ``global_seconds`` — the global pass alone: the proposal drawn WITHOUT the local flow
+      * ``global_seconds`` - the global pass alone: the proposal drawn WITHOUT the local flow
         (``Api.sample`` passes ``local=False`` whenever it refines, since 'marginal'/'laplace'
         redraw the rfx from their conditional at the accepted globals).
-      * ``mb_seconds`` — MB, the default pipeline: that proposal, then rescaled and refined —
+      * ``mb_seconds`` - MB, the default pipeline: that proposal, then rescaled and refined -
         the IMH chains on ``device`` and the copy of the refined draws back to the host
         (``refineProposal`` returns on the CPU).  ``mb_seconds - global_seconds`` is the head.
     """
@@ -326,7 +326,7 @@ def timeLatency(
 
 
 # ---------------------------------------------------------------------------
-# Timing cache — a sibling of test.npz, like the posterior-sample caches
+# Timing cache - a sibling of test.npz, like the posterior-sample caches
 
 
 def cachePath(
@@ -351,7 +351,7 @@ def loadCache(path: Path, data_path: Path, ckpt_dir: Path, prefix: str) -> dict[
     if ckpt_file.exists():
         ref_mtime = max(ref_mtime, ckpt_file.stat().st_mtime)
     if path.stat().st_mtime < ref_mtime:
-        logger.info('Timing cache %s is older than its data/checkpoint — recomputing', path)
+        logger.info('Timing cache %s is older than its data/checkpoint - recomputing', path)
         return {}
     with open(path) as f:
         raw = json.load(f)
@@ -427,7 +427,7 @@ def refinementMethod(cfg: argparse.Namespace, lf: int, data_id: str) -> str | No
     valid = validMethods(requested, lf)
     if not valid:
         logger.warning(
-            '%s: no valid refinement method for lf=%d (requested %s) — MB row skipped',
+            '%s: no valid refinement method for lf=%d (requested %s) - MB row skipped',
             data_id,
             lf,
             requested or '(none)',
@@ -447,13 +447,13 @@ def collectCell(
     seed = BEST_SEEDS.get((FAMILY_NAMES[family], size))
     if seed is None:
         logger.warning(
-            '%s: no BEST_SEEDS checkpoint for (%s, %s) — skipping', data_id, family, size
+            '%s: no BEST_SEEDS checkpoint for (%s, %s) - skipping', data_id, family, size
         )
         return None
     ckpt_dir = _ckpt_dir(FAMILY_NAMES[family], size, seed)
     data_path = DATA_DIR / data_id / 'test.npz'
     if not data_path.exists() or not ckpt_dir.exists():
-        logger.warning('%s: data or checkpoint missing — skipping', data_id)
+        logger.warning('%s: data or checkpoint missing - skipping', data_id)
         return None
 
     model, model_cfg = loadModel(ckpt_dir, cfg.prefix, device)
@@ -461,7 +461,7 @@ def collectCell(
         col = Collection(data_path, permute=False, max_d=model_cfg.max_d, max_q=model_cfg.max_q)
     except ValueError as exc:
         # regimes are matched by construction; a mismatch means the checkpoint map is wrong
-        logger.warning('%s: checkpoint does not cover this regime (%s) — skipping', data_id, exc)
+        logger.warning('%s: checkpoint does not cover this regime (%s) - skipping', data_id, exc)
         return None
     lf = int(model_cfg.likelihood_family)
     method = refinementMethod(cfg, lf, data_id)
@@ -481,13 +481,13 @@ def collectCell(
     )
     if not col.has_stats:
         logger.warning(
-            '%s: no precomputed stats — the MB^0 region includes the analytical MAP fit',
+            '%s: no precomputed stats - the MB^0 region includes the analytical MAP fit',
             data_id,
         )
 
     cache_path = cachePath(data_path, ckpt_dir, cfg.prefix, cfg.n_samples, cfg.seed, device)
     # a cached timing is only as good as the machine state that produced it, and nothing in the
-    # key records that state — a contended node bakes its numbers in until asked to retime
+    # key records that state - a contended node bakes its numbers in until asked to retime
     cache = {} if cfg.refresh_cache else loadCache(cache_path, data_path, ckpt_dir, cfg.prefix)
 
     rs = 'rs1' if cfg.rescale else 'rs0'
@@ -608,7 +608,7 @@ def reliabilityRows(records: list[dict]) -> list[dict]:
 
     NUTS is the composite competitor (its wall time is the cumulative cost of escalating the
     ladder); "converged" is the ``nuts2`` reference criterion.
-    ``t/conv`` is total NUTS wall time divided by the number of converged datasets — the cost
+    ``t/conv`` is total NUTS wall time divided by the number of converged datasets - the cost
     of a *usable* posterior rather than of a run.  metabeta has no analogue because it does not
     fail, so its own median doubles as its cost per usable posterior.
 

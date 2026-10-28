@@ -1,5 +1,5 @@
 """
-experiments/evaluation/real_posterior.py — Posterior comparison on real data: MB, ADVI and PF vs NUTS.
+experiments/evaluation/real_posterior.py - Posterior comparison on real data: MB, ADVI and PF vs NUTS.
 
 Evaluates a model checkpoint on the pre-generated real-data test batch at
 outputs/data/{size}-{fam}-real/test.npz (reference and competitor fits in its siblings
@@ -18,11 +18,11 @@ metabeta/configs/presets.yaml (imhMarginal+moves for Normal); pass ``--methods``
 values for raw MB only.
 
 Metrics (median ± MAD over datasets):
-  r          — Pearson r of posterior means (method vs NUTS), pooled active params
-  σ-ratio    — per-dataset median(std_method / std_NUTS) across active params
-  rank-MAD   — per-dataset mean |empirical quantile − expected| for NUTS-in-MB rank fracs
-  ΔNLL       — LOO-NLL(method) − LOO-NLL(NUTS), per dataset
-  Δtime (s)  — tpd(method) − tpd(NUTS), seconds per dataset, timed as in the oracle runtime
+  r          - Pearson r of posterior means (method vs NUTS), pooled active params
+  σ-ratio    - per-dataset median(std_method / std_NUTS) across active params
+  rank-MAD   - per-dataset mean |empirical quantile − expected| for NUTS-in-MB rank fracs
+  ΔNLL       - LOO-NLL(method) − LOO-NLL(NUTS), per dataset
+  Δtime (s)  - tpd(method) − tpd(NUTS), seconds per dataset, timed as in the oracle runtime
                tables: NUTS is the escalating composite (``nuts``: cheapest converged level,
                wall time of every level tried), MB the batch-of-1 latency cached by
                runtimes.py (``--ds_type real``); the accuracy reference stays ``nuts2``
@@ -188,7 +188,7 @@ def _pooledMeans(
         else torch.ones(mean['sigma_rfx'].shape[-1], dtype=torch.bool)
     )
 
-    # rfx mean[b]: (max_m, max_q) — select active groups then active columns
+    # rfx mean[b]: (max_m, max_q) - select active groups then active columns
     mean_rfx = mean['rfx'][b][group_mask[b]][:, q_mask].ravel()
 
     parts = [
@@ -243,7 +243,7 @@ def _stdRatios(
     def _ratio(a: torch.Tensor, b_: torch.Tensor) -> torch.Tensor:
         return a / b_.clamp(min=1e-8)
 
-    # rfx std[b]: (max_m, max_q) — select active groups then active columns
+    # rfx std[b]: (max_m, max_q) - select active groups then active columns
     rfx_std_m = std_m['rfx'][b][group_mask[b]][:, q_mask]
     rfx_std_n = std_n['rfx'][b][group_mask[b]][:, q_mask]
 
@@ -277,7 +277,7 @@ def computeSigmaRatio(
 def _rankFracs(mb: np.ndarray, nuts: np.ndarray, w: np.ndarray | None = None) -> np.ndarray:
     """Weighted rank of each NUTS sample within the MB marginal (weighted ECDF at nuts points).
 
-    mb, nuts: (N, S) — N active entries, S samples each. w: (N, S) MB sample weights (rows
+    mb, nuts: (N, S) - N active entries, S samples each. w: (N, S) MB sample weights (rows
     sum to 1) or None for uniform. The unweighted path (w=None) is exactly searchsorted / S;
     the weighted path replaces the sample count with the cumulative weight below each value.
     Returns all fracs flattened.
@@ -486,7 +486,7 @@ def evaluateReal(
     # the MAP statistics instead of recomputing glmm() live (matching evaluate.py)
     if 'stats' not in batch:
         logger.warning(
-            'No precomputed stats for %s — MB sampling recomputes glmm() live (slower). '
+            'No precomputed stats for %s - MB sampling recomputes glmm() live (slower). '
             'Run metabeta/analytical/precompute.py for this data_id/partition.',
             data_path.parent.name,
         )
@@ -824,7 +824,7 @@ def main() -> None:
     logger.info('Checkpoint: %s  (prefix=%s)', ckpt_dir.name, cfg.prefix)
     logger.info('max_d=%d  max_q=%d  family=%d', model_cfg.max_d, model_cfg.max_q, lf)
     logger.info('Evaluating: %s', data_ids)
-    logger.info('Refinement methods: %s', methods or '(none — raw MB only)')
+    logger.info('Refinement methods: %s', methods or '(none - raw MB only)')
 
     rows_by_regime: dict[str, list[dict]] = {}
     for data_id in data_ids:
@@ -856,7 +856,7 @@ def main() -> None:
             rows_by_regime[regime] = rows
 
     if not rows_by_regime:
-        logger.error('No regimes evaluated — check data_ids and checkpoint.')
+        logger.error('No regimes evaluated - check data_ids and checkpoint.')
         return
 
     # Console summary

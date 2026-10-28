@@ -501,7 +501,7 @@ batch size: {self.cfg.bs}{f' × {self.cfg.accum_steps} = {self.cfg.bs * self.cfg
         # backward KL loss (globals-only for Normal; joint for other families)
         # TODO: runs trained with this loss before the 2026-07-28 CouplingFlow.sample()
         # log-det sign fix consumed a corrupted lq (proposal log-prob off by -2*log|det|),
-        # i.e. a biased objective — re-evaluate any pre-fix conclusions about this mode.
+        # i.e. a biased objective - re-evaluate any pre-fix conclusions about this mode.
         elif mode == 'backward':
             proposal = self.model.backward(
                 batch, summaries, n_samples=getattr(self.cfg, 'n_loss_samples', 64)

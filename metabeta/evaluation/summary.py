@@ -85,7 +85,7 @@ def getSummary(
     t0 = _t('coverage errors', t0)
     out['rfx_joint_ece'], out['rfx_joint_eace'] = _rfxJointCalibration(proposal, data)
 
-    # prior predictive fit (optional — costs two (b,m,n,s) materializations)
+    # prior predictive fit (optional - costs two (b,m,n,s) materializations)
     if compute_prior:
         prior_samples = getPriorSamples(data, proposal.n_samples, likelihood_family)
         pp_0 = getPosteriorPredictive(prior_samples, data, likelihood_family)
@@ -96,7 +96,7 @@ def getSummary(
     # (b, m, n, s) tensors can be several GB for MCMC (s≈4000); process chunk datasets at a time.
     # m and n are padded to the split-wide max (huge splits: 200 × 150 padded slots vs
     # ≤ 3000 real observations per dataset), so the chunk is additionally capped to keep
-    # one padded (chunk, m, n, s) tensor at ~1 GB float32 — each iteration materializes
+    # one padded (chunk, m, n, s) tensor at ~1 GB float32 - each iteration materializes
     # about three of them (predictive params, log_p, log_w).
     b = proposal.samples_g.shape[0]
     m_pad, n_pad = data['y'].shape[1], data['y'].shape[2]
@@ -150,7 +150,7 @@ def getSummary(
             pp_widths.append(wid_c)
             t_cov += time.perf_counter() - tc
 
-    tqdm.write(f'  predictive checks: {b}/{b} datasets — done')
+    tqdm.write(f'  predictive checks: {b}/{b} datasets - done')
     logger.debug('  %-30s %.2fs', 'linear predictor (eta)', t_pp)
     logger.debug('  %-30s %.2fs', 'log_prob', t_logp)
     logger.debug('  %-30s %.2fs', 'posterior NLL', t_nll)

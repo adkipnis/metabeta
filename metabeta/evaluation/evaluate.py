@@ -451,7 +451,7 @@ class Evaluator:
         ``np.load(...)[key]`` decompresses the full stored array (float64 for the fit samples)
         before any downcast or mask, which for ``*_rfx`` is several GB of pure transient. Here
         the zip entry is consumed sequentially along axis 0 (datasets), each block is cast to
-        ``dtype`` and, when ``axes`` is given, transposed straight into its final layout — so
+        ``dtype`` and, when ``axes`` is given, transposed straight into its final layout - so
         peak usage is the result plus one block rather than result + source + permute copy.
 
         ``axes`` is the permutation of the *stored* axes, as passed to ``np.transpose``; axis 0
@@ -1269,7 +1269,7 @@ class Evaluator:
     def _getProposalAndMask(
         self, model: str, partition: str, full_batch: dict, dl: Dataloader
     ) -> tuple[Proposal, np.ndarray | None]:
-        """Return (proposal, full-batch mask) — mask is None when model covers all datasets."""
+        """Return (proposal, full-batch mask) - mask is None when model covers all datasets."""
         if model == 'MB':
             return self._loadOrSampleMb(partition, dl), None
         elif model == _MB_IMH:

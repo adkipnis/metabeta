@@ -238,7 +238,7 @@ def test_sample_logprob_consistency(batch, context, subnet_kwargs, transform_cfg
 
     Regression test for the log-det sign bug fixed 2026-07-28: sample() assembled the
     density with the inverse-direction log-det un-negated, so its log-prob differed from
-    the true (forward-pass) density by -2*log|det dz/dx| — the older tests validated the
+    the true (forward-pass) density by -2*log|det dz/dx| - the older tests validated the
     forward log-det numerically and inverse() only via reconstruction, so this path was
     uncovered.
     """

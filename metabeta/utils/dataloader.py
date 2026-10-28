@@ -422,7 +422,7 @@ def trimBatchPadding(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     """Drop all-padding trailing groups / observations from a collated (sub-)batch.
 
     A batch sliced out of a larger collation keeps the parent's padding in the group (m) and
-    observation (n) axes, and every (b, m, n, s) tensor built on it pays for that — on the
+    observation (n) axes, and every (b, m, n, s) tensor built on it pays for that - on the
     test splits the split-wide padding is 3–4x the sub-batch's own. This shrinks both axes
     to the sub-batch maxima (from mask_n), touching only per-group / per-observation keys,
     so the result equals what collateGrouped would produce for these datasets alone. Raises
@@ -500,7 +500,7 @@ class SortishBatchSampler(torch.utils.data.Sampler[list[int]]):
         ordered: list[int] = []
         for start in range(0, self.n, bucket_size):
             chunk = idx[start : start + bucket_size]
-            # sort by m first (primary), then n_i_max (secondary) — this minimises
+            # sort by m first (primary), then n_i_max (secondary) - this minimises
             # the padded tensor area because m varies more widely than n_i_max and
             # area-based sorting groups datasets with the same product but different
             # shapes, causing cross-axis waste.

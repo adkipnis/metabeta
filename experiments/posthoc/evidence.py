@@ -6,7 +6,7 @@ pool is an unbiased estimate of the marginal likelihood (Gaussian outcomes), so 
 factors cost a single batched forward pass. This script tests that claim on the Gaussian
 oracle sets against a bridge-sampling reference.
 
-Per dataset (standardized space — the space the flow density lives in):
+Per dataset (standardized space - the space the flow density lives in):
   IS         : log p(D) ≈ logsumexp(log_w) - log S from ImportanceSampler(marginal=True),
                for pool prefixes S in --pool-sizes (flow draws are i.i.d.).
   bridgeNuts : Meng-Wong iterative bridge sampling on the NUTS reference draws (level 2 of
@@ -17,7 +17,7 @@ Per dataset (standardized space — the space the flow density lives in):
                The unnormalized target reuses ImportanceSampler.unnormalizedPosterior
                (marginal likelihood + priors) in unconstrained coordinates.
   bridgeImh  : the same bridge on MB-IMH draws (flow + independence MH, exact marginal
-               target) — validates the IMH-bridge that served as the reference for the
+               target) - validates the IMH-bridge that served as the reference for the
                reduced model in the nested comparison until --ref-only added NUTS draws.
   nested     : for datasets with q >= 2, the same data is also fit without the random
                slope (random intercept only, slope kept as a fixed effect). ln BF from IS
@@ -33,7 +33,7 @@ GLMMs (--family bernoulli/poisson): no closed-form marginal exists, so
                deterministic reference independent of the IS² draws;
   IMH        : pseudo-marginal IMH (IS² weights) for bridgeImh and the reduced model;
   fidelity   : posterior means/sds of β and σ_rfx under raw flow, Laplace-IMH and
-               pseudo-marginal IMH vs NUTS — does the pseudo-marginal chain target the
+               pseudo-marginal IMH vs NUTS - does the pseudo-marginal chain target the
                exact posterior where the Laplace chain does not?
 
 --t-only adds the estimator of Api.sample(evidence=True) to an existing CSV without NUTS or
@@ -454,7 +454,7 @@ def isEvidence(
     """IS log-evidence, PSIS k and efficiency per pool prefix; 'weights' = PSIS weights at S_max.
 
     GLMMs use the unbiased IS² weights and add, at S_max, the (biased) Laplace evidence and
-    sd_loglik = sd(log p̂(y | θ)) under the PSIS weights, from two independent IS² passes —
+    sd_loglik = sd(log p̂(y | θ)) under the PSIS weights, from two independent IS² passes -
     the IS² noise Tran et al. (arXiv:1309.3339) tune K by.
     """
     if lf == 0:

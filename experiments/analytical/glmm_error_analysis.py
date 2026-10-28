@@ -37,7 +37,7 @@ from metabeta.utils.experiments import dataFilePath
 
 
 def _nrmse(err: np.ndarray, truth: np.ndarray) -> float:
-    """sqrt(MSE(err)) / std(truth) — matches evaluation/point.py getRMSE."""
+    """sqrt(MSE(err)) / std(truth) - matches evaluation/point.py getRMSE."""
     denom = float(np.std(truth))
     return float(np.sqrt(np.mean(err**2))) / max(denom, 1e-8)
 
@@ -309,7 +309,7 @@ def run_diagnostic(
     srfx_err_d = col('srfx_err_mean')
     srfx_clip = np.array([r['srfx_clipped'] for r in ds])
     beta_err_ds = np.array([np.sqrt(np.mean(np.array(r['_beta_err']) ** 2)) for r in ds])
-    # Use the global std(beta_true) as scale — consistent with _nrmse and robust to
+    # Use the global std(beta_true) as scale - consistent with _nrmse and robust to
     # near-zero per-dataset beta values (which occur when the Emulator draws real datasets
     # with small coefficients on the training partition).
     beta_scale_global = max(float(np.std(beta_true_flat)), 1e-8)
@@ -435,7 +435,7 @@ def run_diagnostic(
     )
 
     # ===========================================================================
-    # 5c. FFX (beta) breakdown by n/d — checks if poor NRMSE is unavoidable
+    # 5c. FFX (beta) breakdown by n/d - checks if poor NRMSE is unavoidable
     # ===========================================================================
     print('\n=== FFX (β) RMSE breakdown by n_total/d (effective obs per param) ===')
     print(_breakdown(beta_err_ds / beta_scale_global, n_over_d_arr, 'n/d'))

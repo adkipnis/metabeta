@@ -120,7 +120,7 @@ def mapZScores(
 
     The MAP estimates come from the (flow-independent) analytical GLMM fit that already
     conditions the summarizer, so a large max-z means the flow posterior drifted away
-    from a likelihood-based anchor on this dataset — a symptom of data outside the
+    from a likelihood-based anchor on this dataset - a symptom of data outside the
     training distribution.  Proposal and stats must live in the same (standardized)
     outcome scale.
     """
@@ -202,7 +202,7 @@ class Api:
         Parameters
         ----------
         family:
-            Likelihood family — ``"gaussian"`` (or ``"normal"``), ``"bernoulli"``, or
+            Likelihood family - ``"gaussian"`` (or ``"normal"``), ``"bernoulli"``, or
             ``"poisson"``, in any case.
         cache_dir:
             Override the default HF Hub cache (``~/.cache/huggingface/hub``).
@@ -2032,7 +2032,7 @@ class Api:
         # posterior mean σ_rfx per component, used for z-scores
         sigma_rfx_mean = sigma_rfx.mean(dim=0)  # (q,)
 
-        # posterior means per group per component — used for SD ratio
+        # posterior means per group per component - used for SD ratio
         rfx_means = rfx.mean(dim=1)  # (m, q)
 
         headers = ['Group']
@@ -2490,10 +2490,10 @@ def posteriorTable(
         note = ' (random-walk moves ran)' if random_walk else ''
         footer_parts.append(f'min ESS = {ess_min:.0f}{note}')
     if psis_k is not None:
-        note = '' if psis_k <= psis_k_threshold else ' (⚠ unreliable — consider MCMC)'
+        note = '' if psis_k <= psis_k_threshold else ' (⚠ unreliable - consider MCMC)'
         footer_parts.append(f'PSIS k̂ = {psis_k:.3f}{note}')
     if map_z is not None:
-        note = '' if map_z <= map_z_threshold else ' (⚠ disagrees with MAP — consider MCMC)'
+        note = '' if map_z <= map_z_threshold else ' (⚠ disagrees with MAP - consider MCMC)'
         footer_parts.append(f'MAP z = {map_z:.1f}{note}')
     if fit is not None:
         footer_parts.append(f'{fit_label} = {fit:.3f}')

@@ -1,5 +1,5 @@
 """
-posthoc/svgd.py — Stein Variational Gradient Descent for flow posteriors.
+posthoc/svgd.py - Stein Variational Gradient Descent for flow posteriors.
 
 Design
 ------
@@ -16,10 +16,10 @@ Parameterisation
 Global params are packed into unconstrained (b, s, D_g):
     [ffx (d) | log_σ_rfx (q) | log_σ_eps (1, Normal only) | z_corr (d_corr)]
 
-Normal likelihood (lf=0) — Rao-Blackwellised
+Normal likelihood (lf=0) - Rao-Blackwellised
     SVGD operates only on global params using the marginal log-likelihood
     (rfx integrated out analytically).  After convergence, rfx is drawn once
-    from the exact conditional p(rfx | θ_g, y) — the same strategy as
+    from the exact conditional p(rfx | θ_g, y) - the same strategy as
     coordinate.py's final u-step.  This avoids the high-dimensional u space
     and the σ_rfx/u coupling funnel.
 
@@ -113,7 +113,7 @@ class SVGDRefiner:
         X          : (b, s, D)
         Returns
         K          : (b, s, s)
-        repulsion  : (b, s, D) — (1/s) Σ_j ∇_{X_i} k(X_i, X_j)
+        repulsion  : (b, s, D) - (1/s) Σ_j ∇_{X_i} k(X_i, X_j)
                                 = (2/h_d) * (1/s) Σ_j K_ij (X_i - X_j)_d
         """
         b, s, D = X.shape
@@ -349,7 +349,7 @@ class SVGDRefiner:
         proposal_out : Proposal
             Refined particles (same n_samples).
         diagnostics : dict
-            'log_p_history' : list[float] — mean log p per step
+            'log_p_history' : list[float] - mean log p per step
         """
         ncp = self.model.initFromProposal(proposal)
 
@@ -366,7 +366,7 @@ class SVGDRefiner:
             parts.append(ncp.z_corr)
         g = torch.cat(parts, dim=-1).detach()  # (b, s, D_g)
 
-        u = ncp.u.detach()   # (b, m, s, q) — only used for GLMM
+        u = ncp.u.detach()   # (b, m, s, q) - only used for GLMM
 
         log_p_history: list[float] = []
         denom = max(self.n_steps - 1, 1)
@@ -417,11 +417,11 @@ def runSVGD(
 
     cfg fields
     ----------
-    n_samples         : int   — flow samples (= n_particles)
-    svgd_n_steps      : int   — SVGD steps (default 100)
-    svgd_lr           : float — initial step size (default 0.01)
-    svgd_grad_clip    : float — element-wise gradient clamp (default 10.0)
-    svgd_lr_decay     : float — final lr fraction for cosine schedule (default 1.0)
+    n_samples         : int   - flow samples (= n_particles)
+    svgd_n_steps      : int   - SVGD steps (default 100)
+    svgd_lr           : float - initial step size (default 0.01)
+    svgd_grad_clip    : float - element-wise gradient clamp (default 10.0)
+    svgd_lr_decay     : float - final lr fraction for cosine schedule (default 1.0)
     rescale           : bool
     likelihood_family : int
     """

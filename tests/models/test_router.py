@@ -1050,7 +1050,7 @@ def _exact_batch(
     family: int = 1,
     with_params: bool = False,
 ):
-    """Create a batch padded to exactly (d, q) — for tiny-model inference tests."""
+    """Create a batch padded to exactly (d, q) - for tiny-model inference tests."""
     ns = torch.full((1, m), n_i, dtype=torch.int64)
     mask_d = torch.ones(1, d, dtype=torch.bool)
     mask_q = torch.ones(1, q, dtype=torch.bool)

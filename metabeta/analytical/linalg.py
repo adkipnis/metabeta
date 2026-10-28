@@ -234,7 +234,7 @@ def _ridgeInv(M: torch.Tensor, floor: torch.Tensor) -> torch.Tensor:
     """Ridge-regularized inverse of a PSD (B, q, q) matrix.
 
     floor: (B,) per-batch scalar added to all eigenvalues before inversion.
-    Unlike pseudoinverse, never zeros any eigenvalue — ensures strong shrinkage
+    Unlike pseudoinverse, never zeros any eigenvalue - ensures strong shrinkage
     when M eigenvalues are near or below floor.
     """
     vals, vecs = _eighWithJitter(M)

@@ -129,7 +129,7 @@ def _run_batch(
     CUDA operations are asynchronous: without synchronize() the clock would
     only capture kernel dispatch time, not actual execution time.
 
-    glmm_on_cpu: move inputs to CPU, run glmm, move stats back to device —
+    glmm_on_cpu: move inputs to CPU, run glmm, move stats back to device -
     mirrors the approximator.py fix so the transfer overhead is included.
     """
     Zm = batch['Z'][..., :max_q]
@@ -158,7 +158,7 @@ def _run_batch(
     stats = glmm(X, y, Zm, mn, mm, ns, n,
                  likelihood_family=likelihood_family, **common, **variant_kwargs)
     if glmm_on_cpu:
-        # move outputs back — this is part of the cost paid during training
+        # move outputs back - this is part of the cost paid during training
         _ = {k: v.to(device) if torch.is_tensor(v) else v for k, v in stats.items()}
     _sync(device)
     return time.perf_counter() - t0

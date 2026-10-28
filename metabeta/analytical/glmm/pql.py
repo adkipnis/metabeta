@@ -492,7 +492,7 @@ def _pqlPass(
         blup_kh_var = torch.zeros_like(blup_kh_var)
 
     # Return Kg_inv for blup_var: (ZWZ + Psi_lap^{-1})^{-1} is the posterior covariance
-    # of b_g under the final Psi_lap estimate — consistent with the Normal path's se²·W_g.
+    # of b_g under the final Psi_lap estimate - consistent with the Normal path's se²·W_g.
     return _PqlPassResult(
         beta_gls=beta_gls,
         Psi_lap=Psi_lap,
@@ -514,10 +514,10 @@ def _lmmGlmm(
     n_total: torch.Tensor,  # (B,)       total active observations
     likelihood_family: int,
     n_newton: int = 3,
-    uncorr: torch.Tensor | None = None,  # (B,) bool — force Ψ diagonal for these datasets
+    uncorr: torch.Tensor | None = None,  # (B,) bool - force Ψ diagonal for these datasets
     nu_ffx: torch.Tensor | None = None,  # (B, d) prior mean for fixed effects
     tau_ffx: torch.Tensor | None = None,  # (B, d) prior std for fixed effects
-    family_ffx: torch.Tensor | None = None,  # (B,) int — 0=Normal, 1=Student-t
+    family_ffx: torch.Tensor | None = None,  # (B,) int - 0=Normal, 1=Student-t
     tau_rfx: torch.Tensor | None = None,  # (B, q+) prior scale for σ_rfx (sets Ψ floor)
 ) -> dict[str, torch.Tensor]:
     """PQL-based GLMM variance-component estimator (private).
@@ -581,7 +581,7 @@ def _lmmGlmm(
 
     # Passes 2–max_passes: warm start, ridge-regularized Ψ̂_Lap, until convergence.
     # Each pass refines (β, b̂_g, Ψ̂_Lap) jointly. Early exit when the 95th-percentile
-    # change across the batch is below tolerance — avoids running all max_passes when a
+    # change across the batch is below tolerance - avoids running all max_passes when a
     # few pathological datasets (small m) never satisfy the strict amax criterion.
     for _ in range(max_passes - 1):
         beta_prev = beta_gls

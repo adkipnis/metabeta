@@ -177,7 +177,7 @@ class Approximator(nn.Module):
             if self.d_rfx == 1:  # handle 1D local params for flow
                 targets = F.pad(targets, (0, 1))
             return targets
-        # Slice to model dims before joining — data may carry max-dim columns.
+        # Slice to model dims before joining - data may carry max-dim columns.
         sliced = {
             **data,
             'ffx': data['ffx'][..., : self.d_ffx],
@@ -186,7 +186,7 @@ class Approximator(nn.Module):
         targets = joinGlobals(sliced)
         if self.d_corr > 0:
             corr = data['corr_rfx'][..., : self.d_rfx, : self.d_rfx]  # (B, q, q)
-            r_corr = corrToLower(corr)  # (B, d_corr) — constrained lower triangle
+            r_corr = corrToLower(corr)  # (B, d_corr) - constrained lower triangle
             targets = torch.cat([targets, r_corr], dim=-1)
         return targets
 
@@ -266,7 +266,7 @@ class Approximator(nn.Module):
           • Global posterior context (local=False, stats=stats):
               n_total, n_groups, prior params + families + [beta_est, sigma_rfx, sigma_eps/phi, psi_corr if stats]
           • Local posterior context (local=True, stats=None):
-              n_obs, eta_rfx only — REML BLUPs intentionally omitted; _localContext injects
+              n_obs, eta_rfx only - REML BLUPs intentionally omitted; _localContext injects
               analytically exact BLUPs conditioned on the current global-param sample instead.
         """
         out = [summary]
@@ -367,7 +367,7 @@ class Approximator(nn.Module):
     ) -> torch.Tensor:
         """Gaussian BLUP context given global parameter samples.
 
-        global_params: (B, d_g) ground-truth or (B, s, d_g) samples — sigma in softplus space.
+        global_params: (B, d_g) ground-truth or (B, s, d_g) samples - sigma in softplus space.
         Returns mean, marginal std, and contraction: (B,m,[S], 3*q).
         """
         has_s = global_params.dim() == 3
@@ -515,7 +515,7 @@ class Approximator(nn.Module):
             targets_g, context=summary_g, mask=mask_g
         )
 
-        # local posterior — with curriculum, sometimes condition on sampled globals
+        # local posterior - with curriculum, sometimes condition on sampled globals
         targets_l = self._targets(data, local=True)
         targets_l = self._preprocess(targets_l, local=True)
         mask_l = self._masks(data, local=True)

@@ -197,7 +197,7 @@ class FixedPriorStudy:
             tau_ffx, tau_rfx = torch.full((d,), t_ffx), torch.full((q,), t_rfx)
             fams = (int(np.argmax(FFX_FAMILY_PROBS)), int(np.argmax(SIGMA_RFX_FAMILY_PROBS)))
             fam_eps = int(np.argmax(SIGMA_EPS_FAMILY_PROBS))
-            scale = 1.0 / batch['sd_y'].float()   # (B,) — the simulator's standardisation
+            scale = 1.0 / batch['sd_y'].float()   # (B,) - the simulator's standardisation
         else:
             raise KeyError(f'no fixed prior for tag {tag!r}')
         out = {
@@ -375,7 +375,7 @@ class FixedPriorStudy:
         out of time still leaves a table of the conditions it finished."""
         seed = BEST_SEEDS.get((FAMILY_NAMES[self.family], size))
         if seed is None:
-            logger.warning('%s-%s: no BEST_SEEDS checkpoint — skipping', size, self.family)
+            logger.warning('%s-%s: no BEST_SEEDS checkpoint - skipping', size, self.family)
             return
         ckpt_dir = _ckpt_dir(FAMILY_NAMES[self.family], size, seed)
         model, model_cfg = loadModel(ckpt_dir, self.cfg.prefix, self.device)

@@ -157,7 +157,7 @@ def test_is2_rfx_weighted_by_estimate_recover_conditional_mean(likelihood_family
 def test_rfx_refresh_leaves_exact_conditional_invariant(supply_laplace):
     """Conditional-IS refresh (keep the current draw, add K − 1 fresh ones, select ∝ weight):
     exact conditional draws of an all-success group stay exact in mean and sd, although the
-    Laplace Gaussian the fresh draws come from is visibly off there — whether the Laplace
+    Laplace Gaussian the fresh draws come from is visibly off there - whether the Laplace
     factors are recomputed or supplied (as the IMH does, from its pool pass)."""
     torch.manual_seed(7)
     problem = _problem(1)

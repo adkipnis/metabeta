@@ -7,8 +7,8 @@ and regenerates y under a misspecified conditional outcome distribution with a s
     Poisson   → Negative Binomial       μ = exp(η), Var = μ(1+μ/φ), φ ∈ {10, 3, 1}
     Bernoulli → latent logit noise      y ~ Bern(expit(η + σ_c·ε)), σ_c ∈ {0.5, 1, 2}
 
-(Beta-Binomial with a single trial is exactly Bernoulli — mean-matched overdispersion is
-undetectable in binary data — hence the latent-noise contamination, the binary analog of
+(Beta-Binomial with a single trial is exactly Bernoulli - mean-matched overdispersion is
+undetectable in binary data - hence the latent-noise contamination, the binary analog of
 overdispersion.)  The stored ``likelihood_family`` and prior hyperparameters are left
 unchanged: they define the (now misspecified) model that both metabeta and NUTS fit.
 Normal outcomes are re-standardized to unit SD exactly as in ``Simulator.sample``, keeping
@@ -17,9 +17,9 @@ parameters and prior context coherent, so the stressor is tail shape rather than
 Each (size, family) source produces standard-format data dirs under outputs/data/:
 
     {size}-{fam}-misbase        severity-0 baseline: slice of the original test.npz AND its
-                                test.nuts.npz (existing NUTS fits reused — zero refits)
+                                test.nuts.npz (existing NUTS fits reused - zero refits)
     {size}-{fam}-{tag}          one dir per condition (student3, negbin1, latent20, ...),
-                                test.npz only — NUTS fits to be produced with fit.py
+                                test.npz only - NUTS fits to be produced with fit.py
 
 The three-token data_id keeps the whole toolchain working unmodified (fit-ref.sh, fit.py,
 precompute.py).  Selected source indices are shared across conditions within a (size, family)
@@ -67,7 +67,7 @@ CONDITIONS: dict[str, tuple[str, list[tuple[str, float]]]] = {
     'b': ('latent', [('latent05', 0.5), ('latent10', 1.0), ('latent20', 2.0)]),
 }
 
-# y-dependent analytical stats — stale after regeneration, recompute with precompute.py.
+# y-dependent analytical stats - stale after regeneration, recompute with precompute.py.
 STAT_KEYS = (
     'beta_est',
     'sigma_rfx_est',
@@ -241,7 +241,7 @@ def copyReferenceFit(src_path: Path, dst_path: Path, idx: np.ndarray) -> None:
 
 
 def selectIndices(B: int, n_datasets: int, seed: int) -> np.ndarray:
-    """First ``n_datasets`` of a fixed permutation — deliberately NOT sorted, so smaller
+    """First ``n_datasets`` of a fixed permutation - deliberately NOT sorted, so smaller
     selections are prefixes of larger ones and their per-index NUTS fits stay valid."""
     if n_datasets > B:
         raise ValueError(f'n_datasets={n_datasets} exceeds test-set size {B}')
@@ -255,7 +255,7 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
     src_dir = DATA_DIR / src_id
     test_path = src_dir / 'test.npz'
     if not test_path.exists() or not fitPath(test_path, REFERENCE_TAG).exists():
-        logger.warning('%s: test.npz or its %s fit missing — skipping', src_id, REFERENCE_TAG)
+        logger.warning('%s: test.npz or its %s fit missing - skipping', src_id, REFERENCE_TAG)
         return []
 
     with np.load(test_path, allow_pickle=True) as z:
@@ -269,7 +269,7 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
     base_id = f'{size}-{family}-{BASE_TAG}'
     base_dir = DATA_DIR / base_id
     if base_dir.exists() and not cfg.overwrite:
-        logger.info('%s: exists — skipping (use --overwrite)', base_id)
+        logger.info('%s: exists - skipping (use --overwrite)', base_id)
     else:
         base_dir.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(base_dir / 'test.npz', **{k: v[idx] for k, v in source.items()})
@@ -285,10 +285,10 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
         out_dir = DATA_DIR / data_id
         created.append(data_id)
         if out_dir.exists() and not cfg.overwrite:
-            logger.info('%s: exists — skipping (use --overwrite)', data_id)
+            logger.info('%s: exists - skipping (use --overwrite)', data_id)
             continue
         if out_dir.exists():
-            # regenerated y invalidates any fits of the previous data — remove them so
+            # regenerated y invalidates any fits of the previous data - remove them so
             # stale per-index fit files cannot be reintegrated against the new datasets
             stale = [fitPath(out_dir / 'test.npz', t) for t in availableFits(out_dir / 'test.npz')]
             stale += sorted((out_dir / 'fits').glob('*.npz'))

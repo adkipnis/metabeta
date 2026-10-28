@@ -487,7 +487,7 @@ class DataPreprocessor:
     (deployment path) to replay the same pipeline on new data without re-fitting.
 
     Missing values are handled consistently in both paths via group-aware
-    median/mode imputation — there is no listwise deletion.  Extreme numeric
+    median/mode imputation - there is no listwise deletion.  Extreme numeric
     values are winsorized (not deleted) so that no rows are ever removed after
     the initial heavy-column drop and non-finite-y filter.
 
@@ -959,7 +959,7 @@ class DataPreprocessor:
                 groups = groups[keep]
 
         # --- consistent group-aware imputation ---
-        # Fit on training data; apply in transform() too — no listwise deletion.
+        # Fit on training data; apply in transform() too - no listwise deletion.
         # Within-group median/mode is used when grouping is available; falls back
         # to the global statistic for groups where the column is entirely missing.
         num_cols_for_imp = numerical(df).tolist()

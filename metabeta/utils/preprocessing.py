@@ -136,7 +136,7 @@ class NumericTransformer:
 
         # apply log1p to the selected subset of count-like columns;
         # clip to [0, inf) first as a safeguard even though checkCountLike already
-        # enforces non-negativity — log1p is undefined for negative inputs.
+        # enforces non-negativity - log1p is undefined for negative inputs.
         x_work = x.copy()
         if self.is_log1p_.any():
             x_work[:, self.is_log1p_] = np.clip(x_work[:, self.is_log1p_], 0, None)

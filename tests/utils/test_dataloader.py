@@ -220,7 +220,7 @@ def test_mask_dq_are_rowwise_permuted(dataset_path: Path):
     # This checks that mask_d/mask_q correspond to 'd'/'q' sizes *after* applying dperm/qperm.
     col = Collection(dataset_path, permute=True)
 
-    # build a small batch deterministically — sortish=False keeps items in index order
+    # build a small batch deterministically - sortish=False keeps items in index order
     # so col[i] and dl's iteration agree on which item occupies position i
     batch_np = [col[i] for i in range(min(4, len(col)))]
 
@@ -314,7 +314,7 @@ def test_collection_rejects_too_small_overrides(dataset_path: Path):
 
 def _paddedBatch():
     """Two datasets (m=2/ns=[3,2] and m=3/ns=[4,1,2]) collated with split-wide padding
-    (m_pad=6, n_pad=9) — i.e. what slicing a larger collation leaves behind."""
+    (m_pad=6, n_pad=9) - i.e. what slicing a larger collation leaves behind."""
     import torch
 
     B, m_pad, n_pad, d, q, S = 2, 6, 9, 3, 2, 5
@@ -398,7 +398,7 @@ def test_proposal_resize_groups_round_trip():
     padded = trimmed.resizeGroups(m)
     assert torch.equal(padded.samples_l, samples_l)
     assert p.resizeGroups(m) is p
-    # trailing groups are padding for the target batch by construction — dropped even when
+    # trailing groups are padding for the target batch by construction - dropped even when
     # they hold draws (legacy hybrid caches); the source proposal is untouched
     dropped = p.resizeGroups(2)
     assert dropped.samples_l.shape == (b, 2, s, q)

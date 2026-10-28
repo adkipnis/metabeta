@@ -29,14 +29,14 @@ import sys
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# Configuration — edit before running
+# Configuration - edit before running
 # ---------------------------------------------------------------------------
 
 CKPT_BASE = Path(__file__).parent.parent / 'metabeta' / 'outputs' / 'checkpoints'
 OUTPUT_DIR = Path(__file__).parent.parent / 'metabeta' / 'outputs' / 'joint'
 
 HF_REPO_ID = 'adkipnis/metabeta'
-CHECKPOINT_VERSION = 'v1'  # HF Hub git tag — bump only on architecture changes
+CHECKPOINT_VERSION = 'v1'  # HF Hub git tag - bump only on architecture changes
 
 # Map (family, size) → best seed.  Set to None to skip that combo.
 BEST_SEEDS: dict[tuple[str, str], int | None] = {
@@ -87,7 +87,7 @@ def build(dry_run: bool = False) -> list[Path]:
             checkpoints[f'{family}-{size}'] = path
 
         if not checkpoints:
-            print(f'[SKIP]  {family} — no seeds configured')
+            print(f'[SKIP]  {family} - no seeds configured')
             continue
 
         output_path = OUTPUT_DIR / f'metabeta-{family}.pt'
@@ -119,7 +119,7 @@ def upload(dry_run: bool = False) -> None:
     for family in FAMILIES:
         path = OUTPUT_DIR / f'metabeta-{family}.pt'
         if not path.exists():
-            print(f'[SKIP]  {path.name} not found — run --build first')
+            print(f'[SKIP]  {path.name} not found - run --build first')
             continue
         size_mb = path.stat().st_size / 1e6
         print(f'[UPLOAD] {path.name}  ({size_mb:.0f} MB)  → {HF_REPO_ID}')
@@ -150,7 +150,7 @@ def tag(dry_run: bool = False) -> None:
             revision='main',
             repo_type='model',
         )
-    print(f'[TAG]   done — {CHECKPOINT_VERSION} points to HEAD')
+    print(f'[TAG]   done - {CHECKPOINT_VERSION} points to HEAD')
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +173,7 @@ def main() -> None:
     args = setup()
 
     if not (args.build or args.upload or args.tag):
-        print('nothing to do — pass --build, --upload, and/or --tag', file=sys.stderr)
+        print('nothing to do - pass --build, --upload, and/or --tag', file=sys.stderr)
         sys.exit(1)
 
     if args.build:

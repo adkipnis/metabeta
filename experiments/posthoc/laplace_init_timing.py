@@ -12,8 +12,8 @@ Stage-by-stage wall time of the MB pipeline on a trained GLMM model, split by re
   MB_full = summarize + g + A + B     proposal: model.estimate(...)               (flow rfx)
   MB_skip = summarize + g +     B     proposal: model.estimate(..., local=False)  (analytical rfx)
 
-Cache-free by construction: both proposals are drawn live, so — unlike the ablation harness,
-which caches the neural-posterior draw and times only the Laplace refinement — the local-flow
+Cache-free by construction: both proposals are drawn live, so - unlike the ablation harness,
+which caches the neural-posterior draw and times only the Laplace refinement - the local-flow
 stage is actually measured. Accuracy parity is laplace_init_parity.py's job.
 
 Run from repo root:
@@ -40,7 +40,7 @@ DATA_ROOT = REPO_ROOT / 'metabeta' / 'outputs' / 'data'
 
 
 def loadModel(ckpt_dir, prefix, device):
-    """Lean model load (config + weights) — avoids posterior_eval, which pulls the eval/
+    """Lean model load (config + weights) - avoids posterior_eval, which pulls the eval/
     plotting stack (arviz/matplotlib). Mirrors posterior_eval.loadModel."""
     cfg = argparse.Namespace(**loadConfigFromCheckpoint(ckpt_dir))
     return loadApproximator(cfg, device, ckpt_dir, prefix), cfg
@@ -106,7 +106,7 @@ def run(family: str, size: str, k: int, s: int, seed: int, prefix: str):
     lf = cfg.likelihood_family
 
     # scan batches (padded per-batch, so memory stays bounded) and keep the batch with the
-    # smallest median m (deep) and the largest (wide) — the valid split spans m ~ 13..198
+    # smallest median m (deep) and the largest (wide) - the valid split spans m ~ 13..198
     dl = Dataloader(data_path, batch_size=k)
     deep_b = wide_b = None
     deep_med, wide_med = 1e9, -1.0

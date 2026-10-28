@@ -379,7 +379,7 @@ class RationalQuadratic(CouplingTransform):
         # bump the upper knot by eps to make the boundary inclusive, without in-place ops
         bumped = torch.cat([reference[..., :-1], reference[..., -1:] + self.eps], dim=-1)
         idx = torch.searchsorted(bumped, target.unsqueeze(-1).contiguous(), right=True) - 1
-        # clamp to valid bin range — guards gather for out-of-domain inputs
+        # clamp to valid bin range - guards gather for out-of-domain inputs
         return idx.clamp(0, reference.shape[-1] - 2)
 
 

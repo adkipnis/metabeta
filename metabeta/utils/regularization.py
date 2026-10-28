@@ -117,7 +117,7 @@ def unconstrainedToCholesky(z: torch.Tensor, q: int) -> torch.Tensor:
     Built with stack/cat only (no indexed in-place writes): writing rows into a
     shared `zeros` tensor via `L[..., i, j] = ...` bumps that tensor's autograd
     version counter on every write, which invalidates the saved view from an
-    earlier read (`L[..., i, j].pow(2)`) in the same row once q >= 2 — safe for
+    earlier read (`L[..., i, j].pow(2)`) in the same row once q >= 2 - safe for
     plain forward evaluation, but it breaks `.backward()` through this function
     (e.g. gradient-based posthoc refinement like SVGD).
     """
@@ -175,12 +175,12 @@ def logDetJacobianCorr(z: torch.Tensor, q: int) -> torch.Tensor:
                    = 0.5 · Σ_k (q - j_k) · log(1 - tanh²(z_k))
 
     NB: for a dataset with q_i < q (padded z entries at 0) this is the determinant of the
-    padded q-dimensional map, not of the active q_i×q_i block — the padded rows' diagonal
+    padded q-dimensional map, not of the active q_i×q_i block - the padded rows' diagonal
     entries still depend on the active z (e.g. an extra 0.5·log(1 - ρ²) for q_i=2 in
     q=3). Approximator._postprocess subtracts exactly this quantity from log q_g, so a
     consumer that re-expresses a prior in the same coordinates must subtract it too.
 
-    Returns shape (...) — one scalar per batch element.
+    Returns shape (...) - one scalar per batch element.
     """
     if q <= 1:
         return z.new_zeros(z.shape[:-1])

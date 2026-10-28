@@ -129,7 +129,7 @@ class EvaluationSummary:
         """Return a new summary with per-dataset fields filtered by a boolean mask.
 
         Aggregated fields (coverage, corr, nrmse, ece, …) are carried over unchanged
-        — they reflect the original population and are not re-aggregated.
+        - they reflect the original population and are not re-aggregated.
         """
         return EvaluationSummary(
             per_dataset=self.per_dataset.subset(mask),

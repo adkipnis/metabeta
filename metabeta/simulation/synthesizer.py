@@ -156,7 +156,7 @@ class Synthesizer:
             x[..., 1:] = self.rng.normal(size=(n, d - 1))
             return x
 
-        # intercept-only model — nothing more to sample
+        # intercept-only model - nothing more to sample
         if d == 1:
             return x
 

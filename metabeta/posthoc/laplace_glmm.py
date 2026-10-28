@@ -1,32 +1,32 @@
 """
-posthoc/laplace_glmm.py — Laplace-approximated Rao-Blackwellisation for non-Normal GLMMs.
+posthoc/laplace_glmm.py - Laplace-approximated Rao-Blackwellisation for non-Normal GLMMs.
 
 Non-Normal likelihoods have no conjugate rfx conditional and no closed-form marginal
 likelihood, so the exact Rao-Blackwellised SNIS of posthoc/importance.py (marginal=True)
 does not apply. This module provides the Laplace analog, fully vectorized over
 (datasets b, groups m, posterior samples s):
 
-1. `laplaceRfxModes` — damped-Newton per-group conditional modes b*_j and Hessians
+1. `laplaceRfxModes` - damped-Newton per-group conditional modes b*_j and Hessians
    H_j = ZᵀWZ + Σ⁻¹ of p(rfx_j | θ_g, y_j), started from the proposal's rfx: the flow's
    draws, or the analytical rfx estimate when the local flow was skipped at inference
    (Approximator.estimate(local=False)). The log-concave target converges from either;
    the start affects only speed and, at the finite budget, the guard-pinned tail.
-2. `sampleRfxLaplace` — rfx ~ N(b*_j, H_j⁻¹): the Laplace conditional redraw, the
+2. `sampleRfxLaplace` - rfx ~ N(b*_j, H_j⁻¹): the Laplace conditional redraw, the
    non-conjugate analog of families.sampleRfxConditionalNormal.
-3. `logMarginalLikelihoodLaplace` — log p̂(y_j | θ_g) = ℓ_j(b*) + log N(b*; 0, Σ_rfx)
+3. `logMarginalLikelihoodLaplace` - log p̂(y_j | θ_g) = ℓ_j(b*) + log N(b*; 0, Σ_rfx)
    + (q/2)·log 2π − ½·log det H_j, the Laplace-approximated integrated likelihood
    (the same approximation lme4 uses at nAGQ=1). The two (q/2)·log 2π terms cancel,
    and padded rfx dims cancel between log det Σ and log det H exactly as in
    families.logMarginalLikelihoodNormal.
-4. `LaplaceImportanceSampler` — SNIS with Laplace marginal weights + Laplace
+4. `LaplaceImportanceSampler` - SNIS with Laplace marginal weights + Laplace
    conditional rfx redraw. With attach_only=True the weights stay uniform and only
    the flow's rfx are replaced by conditional draws: zero weight bias (cannot fix
-   global-parameter miscalibration, but directly targets local calibration — the
+   global-parameter miscalibration, but directly targets local calibration - the
    biggest regression of the 'global'/'joint' IMH modes, see metropolis.py Findings).
 
 The Laplace weights target the Laplace-approximated marginal posterior, not the exact
-one: the bias is O(per-group Laplace error) — small for moderate group sizes, worst for
-tiny Bernoulli groups — but crucially independent of flow quality, unlike the IMH
+one: the bias is O(per-group Laplace error) - small for moderate group sizes, worst for
+tiny Bernoulli groups - but crucially independent of flow quality, unlike the IMH
 failure modes documented in metropolis.py.
 
 For likelihood_family=0 (Normal) the Laplace approximation is exact; that path exists
@@ -36,7 +36,7 @@ Findings (2026-07 posthoc ablation, 128 validation datasets, small models)
 --------------------------------------------------------------------------
 Weight health is excellent (PSIS k ≈ 0.03 Bernoulli / 0.18 Poisson, 2–3% guardrail
 fallback, ~69% sample efficiency), i.e. the flow is a good proposal for the Laplace
-target — but the Laplace target itself is measurably biased: σ_rfx ECE shifts from
+target - but the Laplace target itself is measurably biased: σ_rfx ECE shifts from
 ≈ +0.03/−0.01 (raw) to ≈ −0.10 on both families, the classic downward Laplace/PQL
 bias for binary/count data with small groups tilting the σ_rfx posterior low. Net,
 isLaplace is *not* better-calibrated than raw flow samples on these families;
@@ -165,7 +165,7 @@ def laplaceRfxModes(
     init: Tensor | None = None,  # (b, m, s, q) warm start (e.g. flow rfx)
     n_newton: int = 3,  # standard damped-Newton steps; stragglers go to the compacted extra
     # phase, so 3 matches 5 to <=0.002 on every recovery/calibration metric (512-dataset check,
-    # bernoulli/poisson x 4 sizes, 2026-09-23) at ~15-35% less CPU — the mode search is ~95%
+    # bernoulli/poisson x 4 sizes, 2026-09-23) at ~15-35% less CPU - the mode search is ~95%
     # of the imhLaplace refinement. Purely post-hoc: does NOT touch the analytical context stats.
     damping: float = 1.0,
     n_backtrack: int = 3,  # do not lower: bt<=1 diverges on deep/extreme entries (guard-pins)
@@ -180,10 +180,10 @@ def laplaceRfxModes(
     extreme Poisson proposals and made the weight warm-start-dependent.
 
     Returns (modes, chol_H, Sigma_inv, L_rfx, decrement):
-        modes    (b, m, s, q)     — Newton solution b*_j
-        chol_H   (b, m, s, q, q)  — Cholesky of H_j = ZᵀW(b*)Z + Σ⁻¹
-        Sigma_inv (b, s, q, q), L_rfx (b, s, q, q) — reusable Σ_rfx factors
-        decrement (b, m, s)       — final Newton decrement λ²/2, the unresolved objective
+        modes    (b, m, s, q)     - Newton solution b*_j
+        chol_H   (b, m, s, q, q)  - Cholesky of H_j = ZᵀW(b*)Z + Σ⁻¹
+        Sigma_inv (b, s, q, q), L_rfx (b, s, q, q) - reusable Σ_rfx factors
+        decrement (b, m, s)       - final Newton decrement λ²/2, the unresolved objective
             error in nats; large values mark entries whose Laplace weight is meaningless.
     ``tol`` is the per-entry resolution threshold on that decrement (nats).
     """
@@ -221,7 +221,7 @@ def laplaceRfxModes(
     # score/Hessian evaluation at the modes we return (chol_H/decrement always belong to
     # them). The Newton decrement λ²/2 comes for free from (score, delta).
     # tol [nats]: an entry counts as resolved once its Newton decrement λ²/2 (the
-    # remaining objective error) is below it — well under the 1-nat pinning guard downstream
+    # remaining objective error) is below it - well under the 1-nat pinning guard downstream
     for t in range(n_newton + 1):
         eta = mu_ffx + torch.einsum('bmnq,bmsq->bmns', Z_m, modes)
         ll0, score_res, w = _llScoreWeight(eta, y, sigma_eps, mask_n, likelihood_family)
@@ -298,8 +298,8 @@ def _refineUnresolved(
 ) -> tuple[Tensor, Tensor, Tensor]:
     """Continue the damped Newton search of laplaceRfxModes on the unresolved entries only.
 
-    The K unresolved (b, m, s) entries are gathered into (K, n, ·) tensors — each entry's
-    group data, fixed-effect offset and Σ⁻¹ — and iterated with the same step, backtracking
+    The K unresolved (b, m, s) entries are gathered into (K, n, ·) tensors - each entry's
+    group data, fixed-effect offset and Σ⁻¹ - and iterated with the same step, backtracking
     and clamping as the standard phase. Entries that resolve are frozen (zero step); the loop
     ends when all are resolved or the extra budget is spent. Results are scattered back, so
     (modes, chol_H, decrement) stay consistent at the returned modes.
@@ -401,7 +401,7 @@ def logMarginalLikelihoodLaplace(
     an unresolved mode search makes the weight meaningless, and such samples otherwise
     become init-dependent absorbing states in IMH. guard_nats=None disables the guard.
 
-    Returns (ll (b, s), modes, chol_H) — modes/chol_H reusable for the
+    Returns (ll (b, s), modes, chol_H) - modes/chol_H reusable for the
     conditional redraw so the weights and rfx draws share one target.
     """
     modes, chol_H, Sigma_inv, L_rfx, decrement = laplaceRfxModes(
@@ -748,7 +748,7 @@ class LaplaceImportanceSampler(ImportanceSampler):
     weights use the Laplace-approximated integrated likelihood, and rfx are
     redrawn from the Gaussian Laplace conditional N(b*, H⁻¹) at each global
     sample. With attach_only=True the weights are discarded (uniform) and only
-    the rfx replacement is kept — zero weight bias at the cost of leaving global
+    the rfx replacement is kept - zero weight bias at the cost of leaving global
     parameters uncorrected.
 
     n_inner=K > 0 swaps the Laplace marginal for its unbiased IS² estimate

@@ -157,7 +157,7 @@ def _warmupModel(
     first analytical fit) before timing begins, mirroring evaluate.py.
 
     The CPU/CUDA RNG state is saved and restored around the pass, so the subsequent real draws
-    are identical whether or not warm-up ran — keeping posterior-sample caches reproducible.
+    are identical whether or not warm-up ran - keeping posterior-sample caches reproducible.
     """
     cpu_rng = torch.random.get_rng_state()
     cuda_rng = torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None
@@ -219,11 +219,11 @@ def sampleMB(
 
 
 # ---------------------------------------------------------------------------
-# Caching (posterior samples, refinements, summaries) — siblings of test.npz.
+# Caching (posterior samples, refinements, summaries) - siblings of test.npz.
 
 
 def _forceRefresh(method: str) -> bool:
-    """True when METABETA_REFRESH_METHODS lists ``method`` (or 'all') — see module docstring."""
+    """True when METABETA_REFRESH_METHODS lists ``method`` (or 'all') - see module docstring."""
     raw = os.environ.get('METABETA_REFRESH_METHODS', '')
     listed = {m.strip() for m in raw.split(',') if m.strip()}
     return bool(listed) and ('all' in listed or method in listed)

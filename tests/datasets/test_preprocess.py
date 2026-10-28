@@ -161,7 +161,7 @@ def test_drop_heavy_column():
 
 
 def test_drop_heavy_column_below_threshold_kept():
-    # 25% missing is exactly at threshold (not above) — column is retained
+    # 25% missing is exactly at threshold (not above) - column is retained
     df = pd.DataFrame({'a': [1.0, np.nan, 1.0, 1.0], 'b': np.ones(4)})
     result = _dropHeavyColumns(df, col_miss_threshold=0.25)
     assert 'a' in result.columns
@@ -169,7 +169,7 @@ def test_drop_heavy_column_below_threshold_kept():
 
 
 # ---------------------------------------------------------------------------
-# NumericTransformer — conditional log1p
+# NumericTransformer - conditional log1p
 # ---------------------------------------------------------------------------
 
 
@@ -270,7 +270,7 @@ def test_detect_group_candidates_ignores_blacklist():
 
 
 # ---------------------------------------------------------------------------
-# Imputation — group-aware
+# Imputation - group-aware
 # ---------------------------------------------------------------------------
 
 
@@ -290,7 +290,7 @@ def test_imputation_group_aware():
     rng = np.random.default_rng(0)
     n, m = 100, 5
     groups = np.repeat(np.arange(m), n // m)
-    # group 0 has x values ~10, group 1 has x ~0 — within-group imputation
+    # group 0 has x values ~10, group 1 has x ~0 - within-group imputation
     # should fill group-0 missing values near 10, not the global mean
     x = np.where(groups == 0, 10.0, 0.0) + rng.normal(scale=0.1, size=n)
     x[0] = np.nan  # missing in group 0
@@ -329,7 +329,7 @@ def test_hi_card_cat_routed_as_random_effect():
 
 
 # ---------------------------------------------------------------------------
-# DataPreprocessor — round-trip
+# DataPreprocessor - round-trip
 # ---------------------------------------------------------------------------
 
 
@@ -457,7 +457,7 @@ def test_preprocessor_dry_run_alias():
 
 
 # ---------------------------------------------------------------------------
-# DataPreprocessor — statefulness
+# DataPreprocessor - statefulness
 # ---------------------------------------------------------------------------
 
 
@@ -489,13 +489,13 @@ def test_preprocessor_transform_handle_unknown_category():
 
     prep = DataPreprocessor()
     prep.fit(df_train)
-    # 'z' is unseen — handle_unknown='ignore' should zero it out, not raise
+    # 'z' is unseen - handle_unknown='ignore' should zero it out, not raise
     out = prep.transform(df_test)
     assert out['X'].shape[0] == 2
 
 
 # ---------------------------------------------------------------------------
-# DataPreprocessor — save / load
+# DataPreprocessor - save / load
 # ---------------------------------------------------------------------------
 
 

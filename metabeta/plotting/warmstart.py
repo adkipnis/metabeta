@@ -1,7 +1,7 @@
 """
 Warm-start efficiency figure.
 
-Panel B: ESS/s vs n_params — NUTS (cold_std) vs MB-NUTS (warm_2000)
+Panel B: ESS/s vs n_params - NUTS (cold_std) vs MB-NUTS (warm_2000)
 
 X-axis: n_params = d + q + m*q (effective model parameters per dataset)
 Line + band: equal-count bins in n_params space → median + 5th/95th percentile
@@ -38,12 +38,12 @@ def plotWarmStart(
     records: list[dict] = []
     for d in dirs:
         if not (d / fits_tag).exists():
-            print(f'[warn] fits dir not found: {d / fits_tag} — skipping')
+            print(f'[warn] fits dir not found: {d / fits_tag} - skipping')
             continue
         records.extend(collectWarmRecords(d, fits_tag, conds))
 
     if not records:
-        raise ValueError('No records collected — check dirs and fits_tag.')
+        raise ValueError('No records collected - check dirs and fits_tag.')
 
     fig, ax = plt.subplots(1, 1, figsize=(6, 5), dpi=DPI)
     plotWarmPanel(

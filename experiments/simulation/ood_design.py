@@ -4,8 +4,8 @@ Companion to likelihood_misspec.py, moving the contamination from the conditiona
 distribution to the design distribution.  Takes existing sampled test datasets, keeps the
 grouping structure and all generating parameters, replaces the predictors X wholesale with
 draws from sources outside the training simulator, and regenerates y under the ORIGINAL
-likelihood.  The fitted model therefore stays correctly specified — y | X, θ follows the
-stored family and priors exactly — so NUTS remains an exact reference and any metabeta↔NUTS
+likelihood.  The fitted model therefore stays correctly specified - y | X, θ follows the
+stored family and priors exactly - so NUTS remains an exact reference and any metabeta↔NUTS
 divergence isolates the amortization gap on out-of-distribution designs.
 
 Conditions (family-independent, with a severity dial where applicable):
@@ -32,9 +32,9 @@ original design, so heavy-tailed replacements can push the linear predictor into
 saturated regimes; start with --families n (default) and treat b/p runs as exploratory.
 
 The severity-0 baseline is the shared {size}-{fam}-misbase dir from likelihood_misspec.py
-(same unsorted index prefix, existing NUTS fits reused — zero refits); it is created here
+(same unsorted index prefix, existing NUTS fits reused - zero refits); it is created here
 when missing.  Each condition produces a standard-format dir {size}-{fam}-{tag} with
-test.npz only — NUTS fits to be produced with fit.py.
+test.npz only - NUTS fits to be produced with fit.py.
 
 Usage (from repo root):
     uv run python experiments/simulation/ood_design.py --families n --sizes small --n_datasets 4
@@ -254,14 +254,14 @@ def ensureBaseline(
         stored = base_cfg.get('misspec_orig_indices', [])
         has_reference = fitPath(base_dir / 'test.npz', REFERENCE_TAG).exists()
         if has_reference and len(stored) >= len(ours) and stored[: len(ours)] == ours:
-            logger.info('%s: exists with compatible indices — reusing', base_id)
+            logger.info('%s: exists with compatible indices - reusing', base_id)
             return base_id
         if stored[: min(len(stored), len(ours))] != ours[: min(len(stored), len(ours))]:
             raise ValueError(
                 f'{base_id}: existing baseline indices do not match (seed mismatch?); '
                 'rerun with the same --seed as likelihood_misspec.py or pass --overwrite'
             )
-        logger.info('%s: exists with %d < %d datasets — extending', base_id, len(stored), len(ours))
+        logger.info('%s: exists with %d < %d datasets - extending', base_id, len(stored), len(ours))
 
     kind = LIK_CONDITIONS[family][0]  # keep the sibling's family-specific baseline kind
     base_dir.mkdir(parents=True, exist_ok=True)
@@ -278,7 +278,7 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
     src_dir = DATA_DIR / src_id
     test_path = src_dir / 'test.npz'
     if not test_path.exists() or not fitPath(test_path, REFERENCE_TAG).exists():
-        logger.warning('%s: test.npz or its %s fit missing — skipping', src_id, REFERENCE_TAG)
+        logger.warning('%s: test.npz or its %s fit missing - skipping', src_id, REFERENCE_TAG)
         return []
 
     with np.load(test_path, allow_pickle=True) as z:
@@ -293,10 +293,10 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
         out_dir = DATA_DIR / data_id
         created.append(data_id)
         if out_dir.exists() and not cfg.overwrite:
-            logger.info('%s: exists — skipping (use --overwrite)', data_id)
+            logger.info('%s: exists - skipping (use --overwrite)', data_id)
             continue
         if out_dir.exists():
-            # regenerated X/y invalidates any fits of the previous data — remove them so
+            # regenerated X/y invalidates any fits of the previous data - remove them so
             # stale per-index fit files cannot be reintegrated against the new datasets
             stale = [fitPath(out_dir / 'test.npz', t) for t in availableFits(out_dir / 'test.npz')]
             stale += sorted((out_dir / 'fits').glob('*.npz'))

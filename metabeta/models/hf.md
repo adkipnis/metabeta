@@ -15,7 +15,7 @@ plus format metadata:
 
 ```python
 {
-    "_version": 1,           # JOINT_CHECKPOINT_VERSION — architecture format version
+    "_version": 1,           # JOINT_CHECKPOINT_VERSION - architecture format version
     "submodels": [...],      # same structure as the local joint checkpoint produced by pack.py
 }
 ```
@@ -26,7 +26,7 @@ unpacking step is needed.
 ## Versioning
 
 The HF repo (`adkipnis/metabeta`) uses **git tags** to version checkpoints.
-The tag represents the **architecture version** — it changes only when model
+The tag represents the **architecture version** - it changes only when model
 architecture changes make old weights incompatible with the current code.
 
 `CHECKPOINT_VERSION` in `metabeta/utils/hub.py` holds the current tag (e.g. `"v1"`).
@@ -51,7 +51,7 @@ re-download.
 ### Architecture change (requires package release)
 
 1. Push new checkpoints (new `JOINT_CHECKPOINT_VERSION` value inside the files).
-2. Create a new tag (`v2`) — do **not** move the old one, so old package versions
+2. Create a new tag (`v2`) - do **not** move the old one, so old package versions
    still resolve correctly.
 3. Bump `CHECKPOINT_VERSION = "v2"` in `metabeta/utils/hub.py`.
 4. Release a new package version.
@@ -64,5 +64,5 @@ re-download.
 `download_checkpoint(family)` from `metabeta/utils/hub.py`, then forwards the
 local path to `Api.__init__`.
 
-`huggingface_hub` is an optional dependency — it is only imported inside
+`huggingface_hub` is an optional dependency - it is only imported inside
 `download_checkpoint`, with a clear `ImportError` if missing.

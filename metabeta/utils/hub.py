@@ -29,7 +29,7 @@ def download_checkpoint(
     Parameters
     ----------
     family:
-        Likelihood family — one of ``"gaussian"`` (or ``"normal"``), ``"bernoulli"``,
+        Likelihood family - one of ``"gaussian"`` (or ``"normal"``), ``"bernoulli"``,
         ``"poisson"``, in any case.
     cache_dir:
         Override the default HF Hub cache (``~/.cache/huggingface/hub``).

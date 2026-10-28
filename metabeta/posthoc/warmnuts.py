@@ -1,16 +1,16 @@
 """
-posthoc/warmnuts.py — Warm-started NUTS correction for flow posteriors.
+posthoc/warmnuts.py - Warm-started NUTS correction for flow posteriors.
 
 Design
 ------
-A proposal — preferably the MB-IMH posterior (flow draws refined by Independence
-MH, posthoc/metropolis.py), otherwise raw flow draws — provides three warm-start
+A proposal - preferably the MB-IMH posterior (flow draws refined by Independence
+MH, posthoc/metropolis.py), otherwise raw flow draws - provides three warm-start
 ingredients for PyMC's NUTS sampler:
 
 1. Chain start points (initvals), back-transformed to the non-centred
    parameterisation.
 2. The initial diagonal mass matrix: per-coordinate mean/variance of the
-   proposal draws mapped to PyMC's unconstrained space — the same estimator
+   proposal draws mapped to PyMC's unconstrained space - the same estimator
    PyMC's 'adapt_diag' init builds from early tuning, but available at step 0.
    Adaptation stays on, so an off proposal variance is corrected during tune.
 3. For correlated rfx, the LKJCholeskyCov start value itself (see below).
@@ -21,7 +21,7 @@ set with an adapted metric.
 
 Warm-start mechanics
 --------------------
-For each dataset at batch index b, n_chains diverse samples are selected — at
+For each dataset at batch index b, n_chains diverse samples are selected - at
 interior quantiles of the global log density when the proposal carries one, and
 evenly spaced along the sample dimension otherwise (IMH output stores no log
 density and repeats states on rejection; even spacing lands in distinct chain
@@ -38,14 +38,14 @@ back-transformed:
       z     = rfx @ chol⁻ᵀ                    →  '_rfx_offset'
       packed lower triangle of chol            →  '_lkj_rfx'
       (previously the LKJCholeskyCov was left at PyMC defaults, so the offsets
-      z — computed from the proposal's chol — were inconsistent with the chol
+      z - computed from the proposal's chol - were inconsistent with the chol
       the chain actually started at)
 
 The resulting dict list is passed as `initvals` to pm.sample.
 
 NB: pm.sample(nuts_kwargs={'max_treedepth': ...}) is *silently ignored* by
 PyMC ≥ 5 (**kwargs there are step_kwargs keyed by stepper name, and unknown
-keys inside the NUTS constructor vanish into its **kwargs chain) — the runs
+keys inside the NUTS constructor vanish into its **kwargs chain) - the runs
 before 2026-08 therefore all used the default tree depth 10.  max_treedepth is
 now passed to the NUTS constructor directly.
 
@@ -173,7 +173,7 @@ class WarmNuts:
 
         # Build PyMC model once; reused across __call__ invocations.
         self.model = buildPymc(ds)
-        # Transformed (unconstrained) defaults: template for mass-matrix points —
+        # Transformed (unconstrained) defaults: template for mass-matrix points -
         # fixes coordinate order, shapes, and dtypes.
         self._ip = self.model.initial_point(random_seed=seed)
         self._value_names = {
@@ -188,7 +188,7 @@ class WarmNuts:
         """Slice per-dataset tensors once.
 
         proposal.corr_rfx is recomputed from the constrained corr dims on every
-        property access when no cache is attached (e.g. IMH output) — hoist it
+        property access when no cache is attached (e.g. IMH output) - hoist it
         here instead of touching the property per draw.
         """
         # full flow layout of this proposal, used by _ivFromSample to locate
@@ -347,7 +347,7 @@ class WarmNuts:
         # Shapes from extractAll:
         #   wn_ffx:       (d, n_s)
         #   wn_sigma_rfx: (q, n_s)
-        #   wn_sigma_eps: (1, n_s)   — if Normal
+        #   wn_sigma_eps: (1, n_s)   - if Normal
         #   wn_rfx:       (q, m, n_s)
         #   wn_corr_rfx:  (1, n_s, q, q)
 
@@ -395,7 +395,7 @@ class WarmNuts:
         Parameters
         ----------
         proposal : Proposal
-            Proposal used to seed chains and mass matrix (samples at b_idx) —
+            Proposal used to seed chains and mass matrix (samples at b_idx) -
             MB-IMH output preferred, raw flow draws also work.  Must be in the
             *standardized* space that buildPymc models.
         b_idx : int
@@ -607,7 +607,7 @@ def _stackProposals(
     # Propagate reff: use the mean across per-dataset proposals.
     merged.reff = float(np.mean([p.reff for p in proposals]))
 
-    # Stack corr_rfx — all WarmNuts proposals always have it (identity for non-correlated)
+    # Stack corr_rfx - all WarmNuts proposals always have it (identity for non-correlated)
     corr_rfx_list = [p.corr_rfx for p in proposals]
     if all(c is not None for c in corr_rfx_list):
         stacked = []
@@ -644,16 +644,16 @@ def runWarmNuts(
 
     cfg fields
     ----------
-    n_chains       : int   — IMH chains (default 4)
-    n_steps        : int   — IMH steps per chain (default 250)
-    imh_burnin     : int   — IMH burnin steps (default 25)
-    wn_chains      : int   — NUTS chains per dataset (default 4)
-    wn_tune        : int   — NUTS tuning steps (default 500)
-    wn_draws       : int   — NUTS draws per chain (default 500)
-    wn_target_accept : float — target acceptance rate (default 0.8)
-    wn_max_treedepth : int   — NUTS max tree depth (default 12)
-    wn_warm_mass   : bool  — mass-matrix warm start (default True)
-    wn_escalate    : bool  — cold re-run rescue on poor diagnostics (default True)
+    n_chains       : int   - IMH chains (default 4)
+    n_steps        : int   - IMH steps per chain (default 250)
+    imh_burnin     : int   - IMH burnin steps (default 25)
+    wn_chains      : int   - NUTS chains per dataset (default 4)
+    wn_tune        : int   - NUTS tuning steps (default 500)
+    wn_draws       : int   - NUTS draws per chain (default 500)
+    wn_target_accept : float - target acceptance rate (default 0.8)
+    wn_max_treedepth : int   - NUTS max tree depth (default 12)
+    wn_warm_mass   : bool  - mass-matrix warm start (default True)
+    wn_escalate    : bool  - cold re-run rescue on poor diagnostics (default True)
     likelihood_family : int
     rescale        : bool
     seed           : int
@@ -673,7 +673,7 @@ def runWarmNuts(
     warm_mass = getattr(cfg, 'wn_warm_mass', True)
     escalate = getattr(cfg, 'wn_escalate', True)
 
-    # Everything up to the stacked output stays in standardized space —
+    # Everything up to the stacked output stays in standardized space -
     # buildPymc (via WarmNuts) models standardized ds['y']/ds['X'] (from
     # col.raw / Fitter._getSingle), and the IMH weights must be computed on the
     # same data the chain start points describe.  Rescale afterward if set.

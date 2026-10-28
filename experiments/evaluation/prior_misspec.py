@@ -3,7 +3,7 @@
 Companion to experiments/simulation/prior_misspec.py, which rewrites the stored prior of the
 sampled test sets (τ×c, ν+kτ, family rotation) while leaving the data and the generating
 parameters untouched.  Both metabeta and NUTS read that prior from the data dir, so both fit
-the same misspecified model — the same arrangement as the likelihood-misspecification study,
+the same misspecified model - the same arrangement as the likelihood-misspecification study,
 and the reason the perturbation happens at generation time rather than in memory.
 
 Two dose–response tables, sharing their whole collection and table layer with
@@ -15,7 +15,7 @@ experiments/evaluation/likelihood_misspec.py:
      than to the amortization.
   2. Quality vs the generating parameters per condition (NRMSE / EACE for global and
      local parameters, plus LOO-NLL) for MB, MB+IMH and NUTS.  The generating parameters came
-     from the correct prior, so absolute degradation is expected by design — the question is
+     from the correct prior, so absolute degradation is expected by design - the question is
      whether MB degrades in step with NUTS.
 
 Sizes are pooled per condition; ``--per_size`` adds per-size agreement breakdowns.  Each size
@@ -51,7 +51,7 @@ from condition_number import LF_FROM_FAM
 
 # Collection and the table layer are shared verbatim with the likelihood-misspecification
 # study: once the perturbed prior lives in the data dir, a prior condition and a likelihood
-# condition are the same object — a data dir with its own NUTS fits.
+# condition are the same object - a data dir with its own NUTS fits.
 from likelihood_misspec import (
     FAMILY_NAMES,
     agreementRows,
@@ -151,10 +151,10 @@ def main() -> None:
         )
         return
     # the baseline reuses existing fits and so covers every size immediately, while a perturbed
-    # condition only appears once its own NUTS campaign lands — pool like against like
+    # condition only appears once its own NUTS campaign lands - pool like against like
     per_cond, sizes = alignSizes(per_cond)
     if not per_cond:
-        logger.error('No size was collected under every condition — nothing comparable to pool.')
+        logger.error('No size was collected under every condition - nothing comparable to pool.')
         return
 
     pooled_agree = {tag: _poolAgree(per) for tag, per in per_cond.items()}
@@ -187,7 +187,7 @@ def main() -> None:
         'Global (ffx, σ_rfx' + (', σ_ε' if lf == 0 else '') + ') and local (rfx) parameters; '
         'NRMSE→0 recovery, EACE→0 calibrated, LOO-NLL median per dataset. The generating '
         'parameters come from the correct prior, so a perturbed prior is a genuine modelling '
-        'error and absolute degradation is expected — the comparison is MB vs NUTS.\n',
+        'error and absolute degradation is expected - the comparison is MB vs NUTS.\n',
         quality_md,
         '',
     ]

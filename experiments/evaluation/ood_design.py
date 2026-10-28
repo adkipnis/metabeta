@@ -1,9 +1,9 @@
 """MB↔NUTS agreement and posterior quality under predictor (design) misspecification.
 
 Companion to experiments/simulation/ood_design.py, which replaces test designs with
-draws from sources outside the training simulator — heavy-tailed marginals (Student-t,
+draws from sources outside the training simulator - heavy-tailed marginals (Student-t,
 ν ∈ {2, 1}), Clayton tail dependence (Kendall τ ∈ {0.5, 0.9}), and longitudinal
-growth-curve designs — and regenerates y under the ORIGINAL likelihood.  Unlike likelihood
+growth-curve designs - and regenerates y under the ORIGINAL likelihood.  Unlike likelihood
 misspecification, the fitted model remains correctly specified, so NUTS is an exact
 reference and the generating parameters are the true ones: any metabeta↔NUTS divergence or
 calibration loss isolates the amortization gap on out-of-distribution designs.
@@ -13,7 +13,7 @@ Tables mirror experiments/evaluation/likelihood_misspec.py:
   1. MB↔NUTS agreement per condition (r, σ-ratio, rank-MAD, ΔLOO-NLL; median ± MAD over
      the NUTS-converged subset, paired).
   2. Quality vs the generating parameters per condition (NRMSE / EACE, global and
-     local, plus LOO-NLL) for MB, refinements, and NUTS — here directly interpretable
+     local, plus LOO-NLL) for MB, refinements, and NUTS - here directly interpretable
      because the model is correctly specified.
 
 Usage (from repo root):

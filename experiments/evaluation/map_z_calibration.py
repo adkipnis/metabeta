@@ -2,8 +2,8 @@
 
 The API safeguard (metabeta/models/api.py: mapZScores) flags datasets whose posterior
 mean drifts too far from the analytical MAP anchor, in posterior-SD units.  This script
-computes the per-dataset max-z statistic on held-out data — where the posterior is known
-to be well calibrated — and reports its distribution, so the warning threshold
+computes the per-dataset max-z statistic on held-out data - where the posterior is known
+to be well calibrated - and reports its distribution, so the warning threshold
 (api.MAP_Z_THRESHOLD) can be set to a high in-distribution quantile (e.g. 99%) instead
 of a guess.
 
@@ -11,7 +11,7 @@ Optionally pass misspecified condition dirs (e.g. --ds_types sampled student3 xt
 check that the flag rate rises under distribution shift; condition dirs need analytical
 stats precomputed (metabeta/analytical/precompute.py) and MB sample caches are created
 on first run.  Cached samples and stats live in standardized outcome space, matching the
-space in which the API computes the check — nothing is rescaled here.
+space in which the API computes the check - nothing is rescaled here.
 
 Usage (from repo root):
     uv run python experiments/evaluation/map_z_calibration.py --families n --sizes small
@@ -77,12 +77,12 @@ def collectZ(
     data_id = f'{size}-{family}-{ds_type}'
     seed = BEST_SEEDS.get((FAMILY_NAMES[family], size))
     if seed is None:
-        logger.warning('%s: no BEST_SEEDS checkpoint — skipping', data_id)
+        logger.warning('%s: no BEST_SEEDS checkpoint - skipping', data_id)
         return None
     ckpt_dir = _ckpt_dir(FAMILY_NAMES[family], size, seed)
     data_path = DATA_DIR / data_id / f'{cfg.partition}.npz'
     if not data_path.exists() or not ckpt_dir.exists():
-        logger.warning('%s: data or checkpoint missing — skipping', data_id)
+        logger.warning('%s: data or checkpoint missing - skipping', data_id)
         return None
 
     model, model_cfg = loadModel(ckpt_dir, cfg.prefix, device)
@@ -90,7 +90,7 @@ def collectZ(
     batch = collateGrouped([col[i] for i in range(len(col))])
     if 'stats' not in batch:
         logger.warning(
-            '%s: no analytical stats in %s — run metabeta/analytical/precompute.py first',
+            '%s: no analytical stats in %s - run metabeta/analytical/precompute.py first',
             data_id,
             data_path.name,
         )

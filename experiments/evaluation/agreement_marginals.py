@@ -1,5 +1,5 @@
 """
-experiments/evaluation/agreement_marginals.py — Marginal posterior overlays: MB (IMH-refined) vs NUTS.
+experiments/evaluation/agreement_marginals.py - Marginal posterior overlays: MB (IMH-refined) vs NUTS.
 
 For chosen datasets from the pre-generated real-data test batches (outputs/data/
 {size}-{fam}-real/test.npz with the NUTS reference fits in test.nuts2.npz), overlays the marginal posterior
@@ -64,8 +64,8 @@ CKPTS = {
 
 FAMILY = {'n': 'normal', 'b': 'bernoulli', 'p': 'poisson'}
 
-COL_MB = '#663399'    # rebeccapurple — metabeta
-COL_NUTS = '#B8860B'  # darkgoldenrod — NUTS
+COL_MB = '#663399'    # rebeccapurple - metabeta
+COL_NUTS = '#B8860B'  # darkgoldenrod - NUTS
 
 LW = 3.0
 FS_ROW = 26

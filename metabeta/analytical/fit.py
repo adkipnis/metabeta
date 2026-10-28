@@ -349,7 +349,7 @@ def glmm(
     """Dispatch to lmmNormal / lmmBernoulli / lmmPoisson by likelihood_family.
 
     When eta_rfx is provided, datasets with eta_rfx == 0 (uncorrelated rfx) have
-    Ψ constrained to diagonal throughout estimation — BLUPs and Ψ outputs are
+    Ψ constrained to diagonal throughout estimation - BLUPs and Ψ outputs are
     consistent with the diagonal constraint.
     """
     map_priors = {key: kwargs.pop(key, None) for key in _MAP_PRIOR_KEYS}

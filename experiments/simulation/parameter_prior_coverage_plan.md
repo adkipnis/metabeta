@@ -89,7 +89,7 @@ reveal a cumulative linear-predictor variance problem for large d:
 
 - `hypersample()` draws `tau_ffx ~ skewedBeta(0.01, 3.0, mode=0.8)` per predictor.
 - For d=13–16 (huge), `SD(eta_FFX) = sqrt(sum tau_j^2)` has mean ≈ 4.5 and reaches 6.6.
-- P(|eta| > 10) at SD=6.6 is ≈ 13% per observation — irrecoverable by 20 rerolls.
+- P(|eta| > 10) at SD=6.6 is ≈ 13% per observation - irrecoverable by 20 rerolls.
 - Generation logs show 26 "remained high after rerolls" warnings across all sizes,
   concentrated in large/huge batches.
 
@@ -98,7 +98,7 @@ From the real-b-reference NUTS posteriors:
 - Even for d=16 (guimmun) and d=22 (guprenat), sd(eta_hat) ≤ 3.3 because real
   high-d datasets tend to have many small, sparse effects.
 
-Unlike Normal, there is no `sigma_eps` to act as a lever — the entire signal amplitude
+Unlike Normal, there is no `sigma_eps` to act as a lever - the entire signal amplitude
 is the LP variance. Raising or lowering `tau_ffx` shifts the mode but does not prevent
 tail draws from producing extreme cumulative LP variance at high d.
 

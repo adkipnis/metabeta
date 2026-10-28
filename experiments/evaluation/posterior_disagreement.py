@@ -301,7 +301,7 @@ def printCorrelations(rows: list[dict]) -> None:
             tbl.append(
                 {'Predictor': key, 'Description': desc, 'Spearman r': f'{_spearman(x, y):+.3f}'}
             )
-        print(f'\n=== Spearman r with mean_diff_g — {label} (n={len(subset)}) ===')
+        print(f'\n=== Spearman r with mean_diff_g - {label} (n={len(subset)}) ===')
         print(tabulate(tbl, headers='keys', tablefmt='simple'))
 
     _table(rows, 'all datasets')
@@ -379,7 +379,7 @@ def main() -> None:
     dl = _loadTestData(data_path, cfg.batch_size)
     model = _loadModel(cfg, device)
 
-    # Extra fields not loaded by Dataloader — read directly in npz order (sortish=False)
+    # Extra fields not loaded by Dataloader - read directly in npz order (sortish=False)
     raw = np.load(data_path, allow_pickle=True)
     d_arr = raw['d'].astype(int)
     q_arr = raw['q'].astype(int)

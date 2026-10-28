@@ -220,7 +220,7 @@ def printModeComparison(
     all_mask = np.ones(len(mb_loo), dtype=bool)
     conv_mask = nutsConverged(batch, 'nuts2')
     # Filter only on NUTS k: ensures the reference (NUTS LOO) is reliable.
-    # MB k is intentionally NOT used as a filter — filtering on MB k would discard
+    # MB k is intentionally NOT used as a filter - filtering on MB k would discard
     # datasets where MB's LOO estimate is unreliable, hiding potential MB failures.
     nuts_k_mask = nuts_k < k_thr
 
@@ -237,7 +237,7 @@ def printModeComparison(
     print(
         f'  k > {k_thr} fraction (converged): MB {np.mean(mb_k[conv_mask] > k_thr):.2f}, NUTS {np.mean(nuts_k[conv_mask] > k_thr):.2f}'
     )
-    print(f'  (NUTS k filter only — MB k retained to avoid cherry-picking)\n')
+    print(f'  (NUTS k filter only - MB k retained to avoid cherry-picking)\n')
 
 
 def printDivRateBins(

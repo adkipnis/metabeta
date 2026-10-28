@@ -1,5 +1,5 @@
 """
-analytical/lmm/gaussian_local.py — Analytical Gaussian local posterior for LMMs (family == 0).
+analytical/lmm/gaussian_local.py - Analytical Gaussian local posterior for LMMs (family == 0).
 
 For y_i | β, b_i, σ_ε ~ N(X_i β + Z_i b_i, σ_ε² I) and
 b_i | σ_rfx, R ~ N(0, D R D), where D = diag(σ_rfx):
@@ -9,9 +9,9 @@ b_i | σ_rfx, R ~ N(0, D R D), where D = diag(σ_rfx):
 
 Public API
 ----------
-analyticalRFX   — sample from the exact local posterior, vectorised over B, m, S
-gaussianCeiling — Proposal with analytical local | true globals (noise ceiling)
-gaussianHybrid  — replace local samples of any Proposal with analytical ones
+analyticalRFX   - sample from the exact local posterior, vectorised over B, m, S
+gaussianCeiling - Proposal with analytical local | true globals (noise ceiling)
+gaussianHybrid  - replace local samples of any Proposal with analytical ones
 """
 
 import math

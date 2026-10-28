@@ -205,7 +205,7 @@ def run(args: argparse.Namespace) -> None:
 
     fit_pathfinder = _load_pathfinder()
     if fit_pathfinder is None:
-        print('WARNING: Pathfinder not available — skipping.')
+        print('WARNING: Pathfinder not available - skipping.')
 
     batch = dict(np.load(BATCH_PATH, allow_pickle=True))
     n_batch = len(batch['y'])

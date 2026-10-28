@@ -104,7 +104,7 @@ def test_laplace_marginal_bernoulli_vs_quadrature():
         ffx, sigma_rfx, sigma_eps, y, X, Z, mask_n, mask_m, likelihood_family=1, n_newton=8
     )
     want = _bruteForceMarginalGlmm(X, Z, y, ffx, sigma_rfx, likelihood_family=1)
-    # Laplace is approximate for Bernoulli — n=30 per group keeps the error small
+    # Laplace is approximate for Bernoulli - n=30 per group keeps the error small
     assert torch.allclose(got, want, atol=0.15 * m)
 
 

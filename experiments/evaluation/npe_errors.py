@@ -102,9 +102,9 @@ def perDatasetNRMSE(
     separately.  Avoids division-by-zero for scalar parameters (q=1, d=1)
     because the std is across datasets, not within a single dataset.
 
-    Note: evaluate.py reports mean_d(sqrt(mean_B(err²)) / std_d) — aggregate
+    Note: evaluate.py reports mean_d(sqrt(mean_B(err²)) / std_d) - aggregate
     over B first, then dims.  This benchmark reports
-    median_B(sqrt(mean_d(err²/std_d²))) — aggregate over dims first, then
+    median_B(sqrt(mean_d(err²/std_d²))) - aggregate over dims first, then
     datasets.  Because sqrt(mean(x²)) ≥ mean(sqrt(x²)) and median ≤ mean for
     right-skewed distributions, the benchmark median will always be lower than
     evaluate.py's figure even with identical normalization.
@@ -130,7 +130,7 @@ def perDatasetNRMSE(
 
         if key == 'rfx':
             mask_mq = masks['rfx']  # (B, m, q)
-            # per-q std across (B, m) — same as getRMSE's maskedStd with dims=(0,1)
+            # per-q std across (B, m) - same as getRMSE's maskedStd with dims=(0,1)
             std_per_q = _maskedStd(gt, mask_mq).clamp_min(1e-8)     # (q,)
             mask_f = mask_mq.float()
             n_act = mask_f.sum(dim=(1, 2)).clamp_min(1.0)            # (B,)
@@ -140,7 +140,7 @@ def perDatasetNRMSE(
 
         elif mask is not None:
             mask_f = mask.float()
-            # per-dim std across B — same as getRMSE's maskedStd with dims=(0,)
+            # per-dim std across B - same as getRMSE's maskedStd with dims=(0,)
             std_per_dim = _maskedStd(gt, mask_f).clamp_min(1e-8)    # (d,) or (q,)
             n_act = mask_f.sum(-1).clamp_min(1.0)                    # (B,)
             se_normed = se / std_per_dim.square()                     # (B, d)
@@ -148,7 +148,7 @@ def perDatasetNRMSE(
             out[key] = mse_normed_b.sqrt().numpy()
 
         else:
-            # sigma_eps — std across B, same as getRMSE's gt.std(0, unbiased=False)
+            # sigma_eps - std across B, same as getRMSE's gt.std(0, unbiased=False)
             mse_b = se.squeeze(-1)                                    # (B,)
             norm = float(gt.squeeze(-1).std(unbiased=False).clamp_min(1e-8))
             out[key] = (mse_b.sqrt() / norm).numpy()
@@ -289,18 +289,18 @@ def runGLMMDiagnostics(
     Returns a dict of per-dataset (B,) arrays, or None if tensors are missing.
 
     Per-dataset NRMSE metrics (same normalisation as perDatasetNRMSE):
-      glmm_ffx_nrmse      — GLMM beta vs true ffx
-      glmm_sigma_nrmse    — GLMM sigma_rfx vs true
-      glmm_blup_nrmse     — BLUPs vs true rfx
-      glmm_seps_nrmse     — sigma_eps vs true  (Normal only)
-      glmm_combined_nrmse — mean(ffx, sigma[, seps]) — for ranking/correlation
+      glmm_ffx_nrmse      - GLMM beta vs true ffx
+      glmm_sigma_nrmse    - GLMM sigma_rfx vs true
+      glmm_blup_nrmse     - BLUPs vs true rfx
+      glmm_seps_nrmse     - sigma_eps vs true  (Normal only)
+      glmm_combined_nrmse - mean(ffx, sigma[, seps]) - for ranking/correlation
     BLUP calibration:
-      glmm_blup_var_ratio — mean(err²) / mean(blup_var) per dataset;
+      glmm_blup_var_ratio - mean(err²) / mean(blup_var) per dataset;
                             > 1 → GLMM overconfident (BLUPs too shrunk)
                             < 1 → GLMM underconfident
     Family-specific diagnostics (GLMM only):
-      phi_pearson         — overdispersion estimate
-      psi_0               — initial variance-component estimate
+      phi_pearson         - overdispersion estimate
+      psi_0               - initial variance-component estimate
     """
     required = ['X', 'y', 'Z', 'mask_n', 'mask_m', 'ns', 'n']
     missing = [k for k in required if k not in data]

@@ -6,20 +6,20 @@ scale τ.  A model that ignored that feature would still look calibrated on aver
 script tests it directly: hold the data and every other hyperparameter fixed, overwrite one
 family index across the whole test set, resample, and compare the posterior spread.
 
-The families are ordered by their prior SD in units of τ — the no-data limit of the effect:
+The families are ordered by their prior SD in units of τ - the no-data limit of the effect:
 
     β         Normal 1.000  <  Student-t(ν=5) 1.291
     σ         Half-Normal 0.603  <  Half-Student-t(ν=5) 0.875  <  Exponential 1.000
 
 so a responsive model should widen monotonically along each ordering, by a factor between 1
 (data-dominated) and the prior ratio (prior-dominated).  Reported per group as median ± MAD
-over active parameter entries, in the model's standardized space (τ's own units — the
+over active parameter entries, in the model's standardized space (τ's own units - the
 posterior is deliberately *not* rescaled by sd_y, so SDs are directly comparable to τ).
 
 Where in that interval the ratio lands is itself the prediction: the prior's pull decays as
 the data become informative, so the pooled ratio averages over regimes that should differ.
 The second table splits entries into quantile bins of the information available per parameter
-— n/d for β, m/q for σ_rfx, n for σ_ε — where a correctly Bayesian model tracks the prior
+- n/d for β, m/q for σ_rfx, n for σ_ε - where a correctly Bayesian model tracks the prior
 ratio in the lowest bin and 1.0 in the highest.  Note this axis is *not* ``--sizes``: the size
 regimes set effect-size capacity (max_d/max_q) and all share one dataset-shape profile, so m
 and n vary within every size rather than between them.
@@ -88,15 +88,15 @@ GROUPS = [
 PARAM_LABELS = {'ffx': 'β', 'sigma_rfx': 'σ_rfx', 'sigma_eps': 'σ_ε'}
 
 # Per group, what carries the information that pulls the posterior off its prior.  ``size`` is
-# the effect-size regime (max_d/max_q), *not* the data volume — m and n come from a shape
-# profile that is shared by every size — so the axis has to be built per dataset, and it is
+# the effect-size regime (max_d/max_q), *not* the data volume - m and n come from a shape
+# profile that is shared by every size - so the axis has to be built per dataset, and it is
 # group-specific: β is informed by observations per fixed effect, σ_rfx by groups per random
 # effect, σ_ε by the observations themselves.
 INFO_LABELS = {'ffx': 'n/d', 'sigma_rfx': 'm/q', 'sigma_eps': 'n'}
 
 
 # ---------------------------------------------------------------------------
-# Prior SD in units of τ — the no-data ceiling on the family effect
+# Prior SD in units of τ - the no-data ceiling on the family effect
 
 
 def _halfStudentSd(df: float) -> float:
@@ -187,13 +187,13 @@ def collectSize(
     seed = BEST_SEEDS.get((FAMILY_NAMES[family], size))
     if seed is None:
         logger.warning(
-            '%s: no BEST_SEEDS checkpoint for (%s, %s) — skipping', data_id, family, size
+            '%s: no BEST_SEEDS checkpoint for (%s, %s) - skipping', data_id, family, size
         )
         return None
     ckpt_dir = _ckpt_dir(FAMILY_NAMES[family], size, seed)
     data_path = DATA_DIR / data_id / 'test.npz'
     if not data_path.exists() or not ckpt_dir.exists():
-        logger.warning('%s: data or checkpoint missing — skipping', data_id)
+        logger.warning('%s: data or checkpoint missing - skipping', data_id)
         return None
 
     model, model_cfg = loadModel(ckpt_dir, cfg.prefix, device)
@@ -344,7 +344,7 @@ def binnedRows(pooled: dict, lf: int, n_bins: int) -> list[dict]:
     The prior's pull on the posterior should fall off as the data become informative, so the
     pooled ratio is an average over regimes where the effect is expected to differ.  Binning
     separates them: a responsive model should approach the prior ratio in the lowest bin and
-    1.0 in the highest.  Quantile edges rather than fixed ones — the proxy spans orders of
+    1.0 in the highest.  Quantile edges rather than fixed ones - the proxy spans orders of
     magnitude and its distribution differs per group, so equal-count bins keep each cell's
     median well determined.
     """
@@ -440,7 +440,7 @@ def renderBinnedTex(rows: list[dict], dp: int = 3) -> str:
 def trendReport(rows: list[dict]) -> list[str]:
     """Lowest- vs highest-information bin per (group, family): does the prior effect decay?
 
-    This is the actual prediction under correct Bayesian behaviour — not merely that the
+    This is the actual prediction under correct Bayesian behaviour - not merely that the
     posterior widens with the prior, but that it stops doing so once the data dominate.
     """
     out = []
@@ -467,8 +467,8 @@ def trendReport(rows: list[dict]) -> list[str]:
 def monotonicityReport(pooled: dict, lf: int) -> list[str]:
     """PASS/FAIL per consecutive family pair: does the wider prior widen the posterior?
 
-    Uses the same statistic as the table's SD-ratio column — the median over entries of the
-    *paired* ratio sd_b/sd_a — rather than a ratio of medians.  Each entry is the same
+    Uses the same statistic as the table's SD-ratio column - the median over entries of the
+    *paired* ratio sd_b/sd_a - rather than a ratio of medians.  Each entry is the same
     parameter of the same dataset under two priors, so pairing is exact and the two readings
     must not be allowed to disagree in sign on near-tied families.
     """
@@ -497,7 +497,7 @@ SIZE_RANGE = (15.0, 120.0)
 
 
 def _panels(lf: int) -> list[tuple[str, str, list[str]]]:
-    """(narrower family, wider family, overlaid parameter groups) — consecutive pairs."""
+    """(narrower family, wider family, overlaid parameter groups) - consecutive pairs."""
     panels = [(a, b, ['ffx']) for a, b in zip(FFX_FAMILIES, FFX_FAMILIES[1:])]
     keys = ['sigma_rfx'] + (['sigma_eps'] if hasSigmaEps(lf) else [])
     panels += [(a, b, keys) for a, b in zip(SIGMA_FAMILIES, SIGMA_FAMILIES[1:])]
@@ -514,7 +514,7 @@ def _pointSizes(n: np.ndarray) -> np.ndarray:
 def plotBinned(rows: list[dict], out_path: Path) -> None:
     """SD-ratio against the info axis, one panel per parameter group.
 
-    The dashed line is the prior ratio — the no-data ceiling for that family pair.  Correct
+    The dashed line is the prior ratio - the no-data ceiling for that family pair.  Correct
     Bayesian behaviour is a curve that starts near the ceiling and decays toward 1.0.
     """
     from matplotlib import pyplot as plt
@@ -750,7 +750,7 @@ def main() -> None:
     if rows_binned:
         md += [
             '## Effect by data information\n',
-            'Entries split into quantile bins of the information available per parameter — '
+            'Entries split into quantile bins of the information available per parameter - '
             'n/d for β, m/q for σ_rfx, n for σ_ε. The size regimes set effect-size capacity '
             '(max_d/max_q) and share one dataset-shape profile, so this axis varies within '
             'every size rather than between them. A correctly Bayesian model tracks the prior '

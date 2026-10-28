@@ -1,14 +1,14 @@
 """
-experiments/evaluation/agreement_scatter.py — Posterior means and spread: MB (IMH-refined) vs NUTS.
+experiments/evaluation/agreement_scatter.py - Posterior means and spread: MB (IMH-refined) vs NUTS.
 
 Pools all active parameters of the strictly NUTS-converged datasets in the requested real-data
 test sets (default: small-*-real and medium-*-real) and compares the IMH-refined MB posterior
 against NUTS in two panels:
 
-  1. Posterior means — scatter of MB vs NUTS per parameter (identity line = agreement),
+  1. Posterior means - scatter of MB vs NUTS per parameter (identity line = agreement),
      colored by parameter type (beta, sigma, rho; random effects only with --rfx, as they
      outnumber the global parameters ~10:1), rasterized.
-  2. Posterior SDs — the same scatter for the marginal posterior sds, on log-log axes so the
+  2. Posterior SDs - the same scatter for the marginal posterior sds, on log-log axes so the
      sd ratio reads as vertical distance from the identity line; the median ratio is annotated
      (1 = matched spread, < 1 = MB underdispersed).
 

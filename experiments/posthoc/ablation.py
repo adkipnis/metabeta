@@ -4,34 +4,34 @@ Conditions (Normal)
 -------------------
 raw          : raw flow samples
 is           : global IS with PSIS
-isFull       : joint IS with PSIS — full=True adds the rfx prior and local log q to the
+isFull       : joint IS with PSIS - full=True adds the rfx prior and local log q to the
                weight, so it targets the exact joint posterior; expected to degenerate as
                the rfx dimension (m × q) grows, but is a valid candidate now that the
                2026-07-28 log-det fix makes log q_l trustworthy
-isMarginal   : Rao-Blackwellised marginal SNIS (Normal only) — exact marginal weights with
+isMarginal   : Rao-Blackwellised marginal SNIS (Normal only) - exact marginal weights with
                correlated Σ_rfx + LKJ prior, rfx redrawn from the exact conditional
-isLaplace    : Laplace analog of isMarginal (Bernoulli/Poisson only) — nAGQ=1-style
+isLaplace    : Laplace analog of isMarginal (Bernoulli/Poisson only) - nAGQ=1-style
                approximate marginal weights + Laplace-Gaussian conditional rfx redraw
-rbAttach     : rfx attachment only (Bernoulli/Poisson only) — uniform weights, flow rfx
+rbAttach     : rfx attachment only (Bernoulli/Poisson only) - uniform weights, flow rfx
                replaced by Laplace conditional draws (zero weight bias)
 imhMarginal  : IMH mode='marginal' (Normal, Rao-Blackwellised) or 'global' (other). Note:
                'global' still degrades calibration vs raw/is on non-Normal likelihoods (it
-               never MH-corrects rfx — see metabeta/posthoc/metropolis.py's TODO); 'joint'
+               never MH-corrects rfx - see metabeta/posthoc/metropolis.py's TODO); 'joint'
                was tried too and was worse (acceptance collapses with many groups). Neither
-               is a real fix — see metropolis.py's "Findings" docstring section for the
+               is a real fix - see metropolis.py's "Findings" docstring section for the
                root-cause analysis (argmax chain init, inconsistent marginal target).
                NB: those findings predate the 2026-07-28 log-det fix (log q entered every
                IMH weight), so IMH is being re-evaluated in the post-fix ablation.
 imhGlobal    : IMH mode='global' on Normal (same biased pseudo-target as 'is'); for
                non-Normal families this is already what imhMarginal falls back to, so the
                condition is Normal-only.
-imhLaplace   : IMH mode='laplace' (Bernoulli/Poisson only) — Laplace-marginal weights
+imhLaplace   : IMH mode='laplace' (Bernoulli/Poisson only) - Laplace-marginal weights
                (same pseudo-target as isLaplace) with a Laplace conditional rfx redraw
                after acceptance; the GLMM analog of Normal's imhMarginal. Added
                2026-07-29 for the large/huge regimes where isLaplace's PSIS guardrail
                falls back on 13-50% of datasets (rejection has no fallback mode).
 imhPM        : pseudo-marginal IMH (Bernoulli/Poisson only; the GLMM default since
-               2026-09-26) — imhLaplace with the Laplace marginal replaced by its unbiased IS²
+               2026-09-26) - imhLaplace with the Laplace marginal replaced by its unbiased IS²
                estimate (IS2_N_INNER draws per group, posthoc/laplace_glmm.py), so the chain
                targets the exact posterior; each kept state's rfx get one iterated-SIR move,
                so rejected steps do not repeat the rfx vector (without it the rfx were
@@ -40,16 +40,16 @@ imhMarginal+moves, imhPM+moves : imhMarginal (Normal) / imhPM (Bernoulli/Poisson
                pseudo-marginal random-walk moves on the datasets whose IMH min bulk ESS is below
                150 (posthoc/metropolis.py, LocalMoves; utils/posterior_eval.py, MOVES_RW), for flow
                under-coverage the IMH cannot fix (it only revisits pool members).
-svgd         : SVGD with per-dim bandwidth + cosine LR decay — opt in with --include-svgd,
+svgd         : SVGD with per-dim bandwidth + cosine LR decay - opt in with --include-svgd,
                off by default (too slow to be practically useful: ~40s/dataset, and gives
                a fraction of a nat of marginal-log-p improvement over the flow samples it starts
-               from — see metabeta/outputs/results/ablation/*.md for reference numbers)
-coldNuts     : NUTS results extracted from test.nuts.npz (pre-computed, no rerun) — only
+               from - see metabeta/outputs/results/ablation/*.md for reference numbers)
+coldNuts     : NUTS results extracted from test.nuts.npz (pre-computed, no rerun) - only
                available with --split=test
 warmNuts     : warm-started NUTS seeded by the MB-IMH posterior (imhMarginal for Normal,
                imhLaplace for GLMMs): the IMH draws provide chain start points and the
-               initial mass matrix (see posthoc/warmnuts.py). Runs live per dataset —
-               no precomputed fits needed — and caches each fit in
+               initial mass matrix (see posthoc/warmnuts.py). Runs live per dataset -
+               no precomputed fits needed - and caches each fit in
                {data_dir}/fits_warm_{run}/warm_imh_{split}__{idx}.npz, so reruns are
                free. Opt in with --include-warmnuts (slow on the first pass);
                --wn-refit ignores the cache.
@@ -241,7 +241,7 @@ def collectProposals(
     with torch.no_grad():
         for i in range(0, len(items), batch_size):
             batch = collateGrouped(items[i : i + batch_size])
-            # toDevice mutates its dict in place — pass a shallow copy so `batch`
+            # toDevice mutates its dict in place - pass a shallow copy so `batch`
             # keeps its cpu tensors for rescale() and the posthoc methods
             proposal = model.estimate(toDevice(dict(batch), device), n_samples=n_samples)
             proposal.to('cpu')
@@ -376,7 +376,7 @@ def loadOrSampleProposals(
 # ---------------------------------------------------------------------------
 # Each condition's EvaluationSummary (and the diagnostic lines printed above its
 # table) is cached in the data dir, keyed by condition/checkpoint/split/sample
-# count — the predictive checks (PSIS-LOO over every observation) dominate a
+# count - the predictive checks (PSIS-LOO over every observation) dominate a
 # rerun otherwise. Freshness follows _cacheFresh (data file + checkpoint mtime);
 # --refresh-summaries forces recomputation after code changes.
 
@@ -649,7 +649,7 @@ def runWarmNutsLive(refined, tensor_batch, score, ds_list, lf, fits_dir, label, 
             elif needsEscalation(diag['max_rhat'], diag['min_ess']) and not diag.get(
                 'escalated', False
             ):
-                # pre-escalation fit with poor diagnostics — refit with rescue
+                # pre-escalation fit with poor diagnostics - refit with rescue
                 samples = diag = None
             else:
                 n_cached += 1
@@ -768,7 +768,7 @@ def _mbSummaryCache(
     """Cached MB (raw-flow) summary written by evaluate.py, if fresh and matching n_ds.
 
     The raw condition is just the MB checkpoint's flow samples, which evaluate.py already
-    summarised — so reuse that summary instead of recomputing getSummary. Matched by
+    summarised - so reuse that summary instead of recomputing getSummary. Matched by
     checkpoint/prefix/n_samples (seed, k, and pred-coverage flag are globbed since ablation
     does not fix them); only returned for the full uncapped split (n_ds match).
     """
@@ -922,7 +922,7 @@ def main() -> None:
     args = setup()
     models = buildModels(args.families, args.sizes, args.prefix)
 
-    # benchmarks/ is gitignored (absent on cluster clones) — only require it for
+    # benchmarks/ is gitignored (absent on cluster clones) - only require it for
     # the opt-in condition that lives there
     if args.include_svgd:
         from eval_svgd import runSVGD
@@ -972,7 +972,7 @@ def main() -> None:
             score = keptScorer(full_batch, keep, lf)
 
             run_name = cfg['ckpt'].parent.name
-            # IMH requires exactly N_CHAINS × N_STEPS samples — draw a dedicated set.
+            # IMH requires exactly N_CHAINS × N_STEPS samples - draw a dedicated set.
             imh_n_steps, imh_n_samples = imhSampleCount(args.n_samples)
             # every condition but coldNuts (the NUTS fit alone) needs the flow draws; at huge each
             # set holds ~10 GB, so a coldNuts-only run skips them
@@ -1014,7 +1014,7 @@ def main() -> None:
                     continue  # exact marginal requires the Normal likelihood
                 laplace_conds = ('isLaplace', 'rbAttach', 'imhLaplace', 'imhPM', 'imhPM+moves')
                 if cond in laplace_conds and lf == 0:
-                    continue  # Normal has the exact marginal — Laplace is for GLMMs
+                    continue  # Normal has the exact marginal - Laplace is for GLMMs
                 if cond == 'imhGlobal' and lf != 0:
                     continue  # non-Normal imhMarginal already runs mode='global'
                 if cond == 'imhMarginal+moves' and lf != 0:

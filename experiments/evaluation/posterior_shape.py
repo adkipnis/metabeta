@@ -1,12 +1,12 @@
 """
-experiments/evaluation/posterior_shape.py — Posterior shape diagnostics: MB vs NUTS.
+experiments/evaluation/posterior_shape.py - Posterior shape diagnostics: MB vs NUTS.
 
 Four diagnostics on the NUTS-converged subset of test datasets:
 
-  1. Width    — std(MB) / std(NUTS) per parameter type
-  2. Rank     — rank of each NUTS sample in the MB marginal (uniform = shapes match)
-  3. Corr     — mean |Corr_MB − Corr_NUTS| for global parameters
-  4. LocalUnc — cond_std_Gauss / marginal_std per rfx dim  [family == 0 only]
+  1. Width    - std(MB) / std(NUTS) per parameter type
+  2. Rank     - rank of each NUTS sample in the MB marginal (uniform = shapes match)
+  3. Corr     - mean |Corr_MB − Corr_NUTS| for global parameters
+  4. LocalUnc - cond_std_Gauss / marginal_std per rfx dim  [family == 0 only]
 
 Usage (from repo root):
   uv run python experiments/evaluation/posterior_shape.py --checkpoint metabeta/outputs/checkpoints/<run>
@@ -117,7 +117,7 @@ def _sampleMB(model, dl: Dataloader, n_samples: int, device, rescale: bool) -> P
 
 
 # ---------------------------------------------------------------------------
-# Diagnostic 1 — posterior width (std ratios)
+# Diagnostic 1 - posterior width (std ratios)
 # ---------------------------------------------------------------------------
 
 
@@ -146,7 +146,7 @@ def _widthDiagnostic(p_mb: Proposal, p_nuts: Proposal, batch: dict) -> list[dict
     )
     mask_mq = group_mask.unsqueeze(-1) & mask_q.unsqueeze(1)
 
-    # rfx: (B, m, S, q) — std over sample dim=2
+    # rfx: (B, m, S, q) - std over sample dim=2
     std_mb_l = p_mb.rfx.std(dim=2)
     std_nu_l = p_nuts.rfx.std(dim=2)
     ratio_l = std_mb_l / std_nu_l.clamp(min=1e-8)
@@ -168,7 +168,7 @@ def _widthDiagnostic(p_mb: Proposal, p_nuts: Proposal, batch: dict) -> list[dict
 
 
 # ---------------------------------------------------------------------------
-# Diagnostic 2 — marginal rank calibration
+# Diagnostic 2 - marginal rank calibration
 # ---------------------------------------------------------------------------
 
 
@@ -221,7 +221,7 @@ def _rankDiagnostic(p_mb: Proposal, p_nuts: Proposal, batch: dict) -> list[dict]
         if fracs.size:
             rows.append(_quantile_row(name, fracs))
 
-    # rfx: (B, m, S, q) — pool over active (b, group, dim) triples
+    # rfx: (B, m, S, q) - pool over active (b, group, dim) triples
     mb_rfx, nu_rfx = p_mb.rfx.numpy(), p_nuts.rfx.numpy()
     rows_mb, rows_nu = [], []
     for k in range(q):
@@ -236,7 +236,7 @@ def _rankDiagnostic(p_mb: Proposal, p_nuts: Proposal, batch: dict) -> list[dict]
 
 
 # ---------------------------------------------------------------------------
-# Diagnostic 3 — global correlation structure
+# Diagnostic 3 - global correlation structure
 # ---------------------------------------------------------------------------
 
 
@@ -280,7 +280,7 @@ def _corrDiagnostic(p_mb: Proposal, p_nuts: Proposal, batch: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Diagnostic 4 — local uncertainty decomposition (family == 0 only)
+# Diagnostic 4 - local uncertainty decomposition (family == 0 only)
 # ---------------------------------------------------------------------------
 
 
@@ -290,8 +290,8 @@ def _localUncertaintyDecomp(
 ) -> list[dict]:
     """Decompose rfx marginal std into conditional (local) vs global contributions.
 
-    marginal_std  = std_S(b_i) / sd_y          — total, includes global uncertainty
-    cond_std_Gauss = E_S[diag(Λ_i^{-1})^½] / sd_y — given globals (local only)
+    marginal_std  = std_S(b_i) / sd_y          - total, includes global uncertainty
+    cond_std_Gauss = E_S[diag(Λ_i^{-1})^½] / sd_y - given globals (local only)
     ratio = cond / marginal:  near 0 = global dominates, near 1 = local dominates
     """
     group_mask = batch['mask_n'].any(-1)

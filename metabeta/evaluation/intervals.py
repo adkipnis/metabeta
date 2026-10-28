@@ -54,7 +54,7 @@ def getCredibleIntervals(
             return torch.quantile(x, root_t, dim=-2)
         return weightedQuantile(x, w, root_t).movedim(-1, 0)
 
-    # One quantile call per tensor — (n_roots, b, ...) output
+    # One quantile call per tensor - (n_roots, b, ...) output
     q_g = quant(proposal.samples_g)    # (n_roots, b, d_global)
     q_l = quant(proposal.samples_l)    # (n_roots, b, m, d_local)
     q_corr = None
@@ -112,7 +112,7 @@ def getCoveragePerParameter(
             mask_corr = torch.stack(
                 [data['mask_q'][:, i] & data['mask_q'][:, j] for i in range(q) for j in range(i)],
                 dim=-1,
-            )  # (B, d_corr) — False for q<2 datasets
+            )  # (B, d_corr) - False for q<2 datasets
             out[key] = getAtomicCoverage(ci, corrToLower(data['corr_rfx']), mask=mask_corr)
             continue
         gt = data[key]

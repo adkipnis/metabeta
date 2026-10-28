@@ -1,5 +1,5 @@
 """
-posthoc/evidence.py — log p(y) by importance sampling (IS) from a Student-t importance function.
+posthoc/evidence.py - log p(y) by importance sampling (IS) from a Student-t importance function.
 
 The flow-pool IS evidence (posthoc/importance.py) errs where the flow under-covers the
 posterior; a multivariate t fitted per dataset to the refined draws covers it with heavier tails

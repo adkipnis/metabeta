@@ -228,7 +228,7 @@ def main() -> None:
     else:
         print(
             f'FAIL: {excess_clip:.1%} of datasets have >5% observations clipped'
-            ' — LP scale may need calibration'
+            ' - LP scale may need calibration'
         )
 
 

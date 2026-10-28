@@ -94,7 +94,7 @@ def main() -> None:
     if ks_p > 0.05:
         print('  => distributions not significantly different (p > 0.05)')
     else:
-        print('  => distributions differ significantly (p <= 0.05) — expected given broader prior')
+        print('  => distributions differ significantly (p <= 0.05) - expected given broader prior')
 
     # Check: no sd(eta) exceeds 4.0 + some tolerance
     excess = float(np.mean(all_sds_flat > 4.05))
@@ -102,7 +102,7 @@ def main() -> None:
     if excess < 0.01:
         print(f'PASS: <1% of datasets have sd(eta) > 4.05  ({excess:.1%})')
     else:
-        print(f'FAIL: {excess:.1%} of datasets have sd(eta) > 4.05 — calibration may not be working')
+        print(f'FAIL: {excess:.1%} of datasets have sd(eta) > 4.05 - calibration may not be working')
 
 
 if __name__ == '__main__':

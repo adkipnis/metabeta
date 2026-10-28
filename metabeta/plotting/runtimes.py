@@ -50,7 +50,7 @@ _WARM_CONDS = frozenset(COND_STYLE) - _NON_WARM_CONDS
 _DEFAULT_CONDS = ['mb', 'warm_2000', 'cold_std', 'advi']
 # experiments/evaluation/runtimes.py records: 'MB0' is the raw flow and 'MB' the default
 # pipeline (flow + IMH).  'MB_batched' / 'MB_e2e' are the rows of the pre-IMH records files,
-# where 'MB' meant the raw flow — replot those with care.
+# where 'MB' meant the raw flow - replot those with care.
 _METHOD_TO_COND = {
     'MB0': 'mb',
     'MB': 'mb_imh',
@@ -167,12 +167,12 @@ def plotRuntimes(
         has_fits = (d / fits_tag).exists()
         has_test_fit = bool(availableFits(d / 'test.npz'))
         if not has_fits and not has_test_fit:
-            print(f'[warn] no data found for {d} — skipping')
+            print(f'[warn] no data found for {d} - skipping')
             continue
         records.extend(_collectRuntimeRecords(d, fits_tag, conds))
 
     if not records:
-        raise ValueError('No records collected — check dirs and fits_tag.')
+        raise ValueError('No records collected - check dirs and fits_tag.')
 
     fig, ax = plt.subplots(1, 1, figsize=(6, 5), dpi=DPI)
     plotWarmPanel(

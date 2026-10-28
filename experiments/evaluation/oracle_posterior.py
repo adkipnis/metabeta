@@ -200,7 +200,7 @@ def loadRegimeBatch(
     filters datasets by capacity, and trims to max_d/max_q.
 
     Returns (batch, n_total, n_kept, cap_mask) where cap_mask is a full-test-file boolean
-    (length n_total) marking which datasets survive the capacity filter — folded into the
+    (length n_total) marking which datasets survive the capacity filter - folded into the
     posterior-sample / summary cache keys so subsets get distinct caches.
     """
     d_file, q_file, n_total = _probeShapes(data_path)
@@ -343,7 +343,7 @@ def _summaryRow(
     seed: int,
     summary_chunk_size: int,
 ) -> dict:
-    """Summarize one (proposal, batch) — cached per method/mask — and build its metric row.
+    """Summarize one (proposal, batch) - cached per method/mask - and build its metric row.
 
     ``proposal``/``batch`` are assumed already rescaled. Fit methods (model_derived=False)
     cache without the checkpoint in the key; mb/refined key on checkpoint/n_samples/seed.
@@ -416,7 +416,7 @@ def evaluateRegime(
     summary_chunk_size: int = 1,
     warmup: bool = True,
 ) -> tuple[list[dict], list[dict] | None]:
-    """Returns (rows_full, rows_conv) — rows_conv is None if no convergence data.
+    """Returns (rows_full, rows_conv) - rows_conv is None if no convergence data.
 
     ``data_path`` is the ``{partition}.npz`` (data + precomputed analytical ``stats``); the
     NUTS/ADVI/Laplace fits + diagnostics live in its sibling ``{partition}.{tag}.npz`` files.
@@ -430,18 +430,18 @@ def evaluateRegime(
     """
     logger.info('\n--- Regime: %s ---', regime)
 
-    # Data batch from {partition}.npz — carries precomputed analytical stats (beta_est,
+    # Data batch from {partition}.npz - carries precomputed analytical stats (beta_est,
     # BLUPs), so collateGrouped populates data['stats'] and the model skips the live MAP fit.
     data_batch, n_total, n_kept, cap_mask = loadRegimeBatch(data_path, max_d, max_q)
     if 'stats' not in data_batch:
         logger.warning(
-            '  No precomputed stats in %s — MB sampling will recompute glmm() live (slow). '
+            '  No precomputed stats in %s - MB sampling will recompute glmm() live (slow). '
             'Run metabeta/analytical/precompute.py for this data_id/partition.',
             data_path.name,
         )
     logger.info('  Capacity filter: %d / %d (d≤%d, q≤%d)', n_kept, n_total, max_d, max_q)
     if n_kept == 0:
-        logger.warning('  No datasets pass capacity filter — skipping.')
+        logger.warning('  No datasets pass capacity filter - skipping.')
         return [], None
 
     # NUTS reference convergence from the small diagnostic arrays (no fit samples materialized),
@@ -548,7 +548,7 @@ def evaluateRegime(
     # ---- Reference methods, STREAMED one at a time (only one fit-tensor set resident) ----
     for label, tag in REFERENCE_METHODS:
         if not fitPath(data_path, tag).exists():         # method absent from this test set
-            logger.info('  %s: no fit file — skipping.', label)
+            logger.info('  %s: no fit file - skipping.', label)
             continue
         fit_batch, _, _, _ = loadRegimeBatch(data_path, max_d, max_q, fits=(tag,))
         success = fitBatchMask(fit_batch, tag)           # (n_kept,)
@@ -769,7 +769,7 @@ def main() -> None:
 
     logger.info('Model: %s  max_d=%d  max_q=%d  likelihood=%d', ckpt_dir.name, max_d, max_q, lf)
     logger.info('Evaluating: %s', data_id)
-    logger.info('Refinement methods: %s', methods or '(none — raw MB only)')
+    logger.info('Refinement methods: %s', methods or '(none - raw MB only)')
 
     data_path = DATA_DIR / data_id / 'test.npz'
     if not data_path.exists():
@@ -795,7 +795,7 @@ def main() -> None:
         warmup=getattr(cfg, 'warmup', True),
     )
     if not rows:
-        logger.error('No datasets evaluated — check that %s fits the checkpoint capacity.', data_id)
+        logger.error('No datasets evaluated - check that %s fits the checkpoint capacity.', data_id)
         return
 
     dp = getattr(cfg, 'decimals', 2)

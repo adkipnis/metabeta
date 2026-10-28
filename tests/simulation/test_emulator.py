@@ -1,4 +1,4 @@
-"""Tests for metabeta/simulation/emulator.py — lazy metadata loading."""
+"""Tests for metabeta/simulation/emulator.py - lazy metadata loading."""
 
 import numpy as np
 import pytest
@@ -85,7 +85,7 @@ def test_loadMeta_validation_no_groups():
 
 
 # ---------------------------------------------------------------------------
-# getDatabase / getTestDatabase — metadata only until dataset selected
+# getDatabase / getTestDatabase - metadata only until dataset selected
 # ---------------------------------------------------------------------------
 
 
@@ -112,7 +112,7 @@ def test_getDatabase_cache_is_populated_but_data_cache_empty():
 
 
 # ---------------------------------------------------------------------------
-# loadDataset — on-demand, cached
+# loadDataset - on-demand, cached
 # ---------------------------------------------------------------------------
 
 
@@ -144,7 +144,7 @@ def test_loadDataset_cache_returns_same_object():
 
 
 # ---------------------------------------------------------------------------
-# Emulator.sample — correct output, no full-DB load
+# Emulator.sample - correct output, no full-DB load
 # ---------------------------------------------------------------------------
 
 

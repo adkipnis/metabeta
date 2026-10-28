@@ -1,5 +1,5 @@
 """
-experiments/evaluation/prior_sensitivity.py — E2: zero-shot prior sensitivity analysis on real data.
+experiments/evaluation/prior_sensitivity.py - E2: zero-shot prior sensitivity analysis on real data.
 
 Three held-out real datasets (one per likelihood family: sleepstudy, cbpp, salamanders) are
 analysed under a grid of analyst priors with the released checkpoints (eval only).  Each

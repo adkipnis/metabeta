@@ -45,7 +45,7 @@ def irlsBernoulli(
         active_mask = tau_ffx > 0  # (B, d)
         zeros = tau_ffx.new_zeros(tau_ffx.shape)
         normal_prec = torch.where(active_mask, 1.0 / tau_ffx.clamp(min=1e-4).square(), zeros)
-        # (B, 1) bool — True for datasets with Student-t FFX prior (df=5)
+        # (B, 1) bool - True for datasets with Student-t FFX prior (df=5)
         is_student = (family_ffx == 1).unsqueeze(-1) if family_ffx is not None else None
     else:
         normal_prec = None

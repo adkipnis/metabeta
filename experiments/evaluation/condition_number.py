@@ -188,7 +188,7 @@ def collectSizeRecords(
     ckpt_dir = CHECKPOINT_DIR / SIZE_MODELS[family][size]
     data_path = DATA_DIR / data_id / 'test.npz'
     if not fitPath(data_path, 'nuts2').exists() or not ckpt_dir.exists():
-        logger.warning('%s: data, NUTS fit or checkpoint missing — skipping', data_id)
+        logger.warning('%s: data, NUTS fit or checkpoint missing - skipping', data_id)
         return None
 
     model, model_cfg = loadModel(ckpt_dir, prefix, device)
@@ -484,7 +484,7 @@ def _distributionOnly(size: str, family: str, standardize: bool) -> dict[str, np
     """Phase-1-only: κ per dataset, no model / fit proposal loaded."""
     data_path = DATA_DIR / f'{size}-{family}-real' / 'test.npz'
     if not data_path.exists():
-        logger.warning('%s: test.npz not found — skipping', size)
+        logger.warning('%s: test.npz not found - skipping', size)
         return None
     col = Collection(data_path, permute=False)
     B = len(col)

@@ -1,5 +1,5 @@
 """
-posthoc/importance.py — self-normalized importance sampling (SNIS) correction for flow posteriors.
+posthoc/importance.py - self-normalized importance sampling (SNIS) correction for flow posteriors.
 
 `getImportanceWeights` already implements standard SNIS: log_w = log_likelihood + log_prior -
 log_q, softmax-normalized (optionally PSIS-smoothed via `pareto`, dampened, temperature-scaled).
@@ -15,9 +15,9 @@ barely changed any metric relative to raw flow samples. Two compounding causes:
    ll(y | θ_g, rfx_flow) + lp(θ_g) − log q_g: the flow's rfx draws are plugged into the
    likelihood without either subtracting their proposal density (full=True) or integrating
    them out (marginal=True). The resulting "correction" does not target the posterior of
-   the global parameters — it reweights toward datasets' flow-conditional rfx fit instead.
-2. Dampening before PSIS. constrain=True applied dampen(log_w, p=0.5) — a signed sqrt of
-   the log-weights — *before* psislw, flattening the weights toward uniform, so PSIS
+   the global parameters - it reweights toward datasets' flow-conditional rfx fit instead.
+2. Dampening before PSIS. constrain=True applied dampen(log_w, p=0.5) - a signed sqrt of
+   the log-weights - *before* psislw, flattening the weights toward uniform, so PSIS
    then smoothed already-neutered weights. PSIS is itself the principled regularizer;
    dampening on top mostly cancels whatever signal the weights carried.
 
@@ -39,7 +39,7 @@ against bridge sampling in experiments/posthoc/evidence.py.
 
 Resample-move (ResampleMoveSampler, added for the 2026-07 post-log-det-fix ablation):
 systematic resampling on the PSIS-smoothed marginal weights followed by K vectorized
-independence-MH rejuvenation sweeps with fresh flow proposals — converts weight
+independence-MH rejuvenation sweeps with fresh flow proposals - converts weight
 degeneracy into actual correction instead of a uniform-weight fallback. Implemented
 because the huge model keeps tripping the pareto_k guardrail on ~42% of test datasets
 (and IMH's duplicate-heavy chains under-disperse the globals there).
@@ -48,7 +48,7 @@ TODO
 ----
 - Target energy gap diagnostic: mean weighted `-log p̃(theta)` under the corrected samples
   minus the same quantity under a reference (e.g. NUTS) sample, when a reference is
-  available — flags whether corrected samples land in the right density region, not just
+  available - flags whether corrected samples land in the right density region, not just
   whether weights are stable (see Ko & Domke, arXiv:2605.26419, Section D.3/D.6).
 """
 
@@ -107,7 +107,7 @@ class ImportanceSampler:
         data: dict[str, torch.Tensor],
         constrain: bool = True,  # dampen log-weights (non-pareto branch only)
         full: bool = False,  # incorporate RFX priors and local log-prob in IS weight
-        corr_prior: bool = True,  # include LKJ prior on z_corr in IS weight (global param — should be True)
+        corr_prior: bool = True,  # include LKJ prior on z_corr in IS weight (global param - should be True)
         marginal: bool = False,  # use marginal likelihood (Normal only); integrates rfx out
         rb_redraw: bool = False,  # redraw rfx from the exact conditional (requires marginal)
         temperature: float = 1.0,  # softmax temperature
@@ -174,7 +174,7 @@ class ImportanceSampler:
         """Log prior of the global parameters (ffx, sigmas, z_corr).
 
         Returns (lp, ffx, sigma_eps) with ffx zero-padded to the data's d and
-        sigma_eps zeros when the likelihood has none — shared by the exact and
+        sigma_eps zeros when the likelihood has none - shared by the exact and
         Laplace (posthoc/laplace_glmm.py) marginal samplers.
         """
         ffx = proposal.ffx
@@ -212,7 +212,7 @@ class ImportanceSampler:
         sigma_rfx = proposal.sigma_rfx
 
         if self.marginal:
-            # integrate rfx out analytically — weight is a function of global params only;
+            # integrate rfx out analytically - weight is a function of global params only;
             # pass L_corr so correlated-rfx samples target the correct marginal
             ll = logMarginalLikelihoodNormal(
                 ffx,
@@ -367,8 +367,8 @@ class ResampleMoveSampler:
     PSIS-smoothed weights and rejuvenates every particle with fresh flow
     proposals: weight degeneracy becomes particle duplication, and the MH sweeps
     (which leave the marginal posterior invariant) restore diversity. Unlike
-    IMH — whose low-acceptance chains duplicate samples and under-disperse the
-    globals — every rejuvenation proposal here is fresh, so K sweeps at
+    IMH - whose low-acceptance chains duplicate samples and under-disperse the
+    globals - every rejuvenation proposal here is fresh, so K sweeps at
     acceptance rate a leave only ≈ (1 − a)^K of particles unmoved.
 
     Normal likelihood only (exact marginal weights); rfx are drawn from the
@@ -397,7 +397,7 @@ class ResampleMoveSampler:
         )
 
     def _logWeights(self, proposal: Proposal) -> torch.Tensor:
-        """Raw (unsmoothed) marginal log IS weights (b, s) — the MH target ratio."""
+        """Raw (unsmoothed) marginal log IS weights (b, s) - the MH target ratio."""
         ll, lp = self._is.unnormalizedPosterior(proposal)
         return ll + lp - proposal.log_prob_g
 

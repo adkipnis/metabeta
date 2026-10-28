@@ -9,12 +9,12 @@ is ambiguous, so we report it under the full range of defensible parameter count
                              *local* parameters (the random effects).
   global γ = N / p           per dataset, with p_all = d + m·q + q(q+1)/2 + 1(σ_ε): every
                              random effect counted as a free parameter (most adversarial).
-                             Even so γ almost never drops below 1 — a structural property of
+                             Even so γ almost never drops below 1 - a structural property of
                              GLMMs (identifying the q×q RE covariance needs m ≳ q(q+1)/2
-                             groups) — so the honest n<p question is per-group (local ρ).
+                             groups) - so the honest n<p question is per-group (local ρ).
 
-On sampled data we have ground-truth θ, so per ρ / γ bin we score three posteriors — raw
-amortized (MB), MB refined by independent Metropolis–Hastings (MB+IMH), and NUTS — against
+On sampled data we have ground-truth θ, so per ρ / γ bin we score three posteriors - raw
+amortized (MB), MB refined by independent Metropolis–Hastings (MB+IMH), and NUTS - against
 the same ground truth, on complementary quality dimensions:
 
   EACE ↓    expected absolute calibration error: mean over credible levels of
@@ -250,9 +250,9 @@ def _nutsSummary(data_path: Path, prop, batch, lf: int, chunk: int):
             if s.per_dataset.loo_nll.shape[0] == batch['X'].shape[0]:
                 logger.info('Loaded cached full-set NUTS summary %s', p)
                 return s
-            logger.warning('%s: NUTS summary length mismatch — recomputing', p)
+            logger.warning('%s: NUTS summary length mismatch - recomputing', p)
         except (KeyError, ValueError, RuntimeError) as exc:
-            logger.warning('%s: NUTS summary load failed (%s) — recomputing', p, exc)
+            logger.warning('%s: NUTS summary load failed (%s) - recomputing', p, exc)
     return loadOrComputeSummary(
         prop, batch, data_path, 'nuts2', None, lf, True, summary_chunk_size=chunk
     )
@@ -305,7 +305,7 @@ def binnedRows(
     """One row per (ratio bin × method).  NUTS rows use its converged subset.
 
     Metrics aggregate over active parameter entries (methods[*]['ratio']); the reported
-    counts are over *units* — groups (local) or datasets (global) — via unit_ratio/unit_conv,
+    counts are over *units* - groups (local) or datasets (global) - via unit_ratio/unit_conv,
     so the count column is unambiguous and never collides with the paper's n / n_i.
     """
     ref = methods[MB_LABEL]
@@ -444,12 +444,12 @@ def collectSize(cfg, size: str, device: torch.device) -> dict | None:
     family = cfg.family
     data_id = f'{size}-{family}-sampled'
     if family not in SIZE_MODELS or size not in SIZE_MODELS[family]:
-        logger.warning('%s: no regime-matched checkpoint — skipping', data_id)
+        logger.warning('%s: no regime-matched checkpoint - skipping', data_id)
         return None
     ckpt_dir = CHECKPOINT_DIR / SIZE_MODELS[family][size]
     data_path = DATA_DIR / data_id / 'test.npz'
     if not data_path.exists() or not ckpt_dir.exists():
-        logger.warning('%s: data or checkpoint missing — skipping', data_id)
+        logger.warning('%s: data or checkpoint missing - skipping', data_id)
         return None
 
     lf = LF_FROM_FAM[family]

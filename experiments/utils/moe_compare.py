@@ -192,7 +192,7 @@ def evaluateComparison(
 ) -> list[dict]:
     """Head-to-head: pseudo-MoE (k=1) vs true MoE (2 experts, k=0) at equal sample counts.
 
-    For each (eval_run, mix_run) pair, runs three conditions — all on the
+    For each (eval_run, mix_run) pair, runs three conditions - all on the
     eval run's test data:
       baseline   : eval model, k=0, n_samples       → n_samples total
       pseudo-MoE : eval model, k=1, n_samples       → 2*n_samples total
@@ -498,7 +498,7 @@ def deltaTable(rows: list[dict]) -> str:
                 b_val = baseline[metric]
                 val = r[metric]
                 if b_val is None or val is None:
-                    table_row.append('—')
+                    table_row.append('-')
                 else:
                     delta = val - b_val
                     table_row.append(f'{delta:+.4f}')
@@ -519,7 +519,7 @@ def formatTable(rows: list[dict], fmt: str = 'pipe') -> str:
         for metric in metric_names:
             val = r[metric]
             if val is None:
-                cell = '—'
+                cell = '-'
             else:
                 cell = f'{val:.4f}'
                 if i in best.get(metric, set()):

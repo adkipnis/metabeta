@@ -8,7 +8,7 @@ case "$FAMILY_NAME" in
     n) FAMILY=0 ;;
     b) FAMILY=1 ;;
     p) FAMILY=2 ;;
-    *) echo "Unknown family '$FAMILY_NAME' — use n, b, or p"; exit 1 ;;
+    *) echo "Unknown family '$FAMILY_NAME' - use n, b, or p"; exit 1 ;;
 esac
 
 for SIZE in small medium large huge; do

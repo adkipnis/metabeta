@@ -125,8 +125,8 @@ class ScaleInfo:
 
     y_mean: float
     y_std: float
-    x_means: np.ndarray  # shape (d,) — 0.0 for intercept column
-    x_stds: np.ndarray  # shape (d,) — 1.0 for intercept and dummy columns
+    x_means: np.ndarray  # shape (d,) - 0.0 for intercept column
+    x_stds: np.ndarray  # shape (d,) - 1.0 for intercept and dummy columns
     param_names: list[str]
     random_names: list[str]  # 'Intercept' or a name in param_names, in the random-effect order
     has_intercept: bool = True

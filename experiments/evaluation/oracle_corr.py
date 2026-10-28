@@ -5,8 +5,8 @@ The oracle tables (experiments/evaluation/oracle_posterior.py) average recovery 
 over fixed effects, scales, random effects and the residual scale, and exempt the correlation
 parameters. This script reports those exempted parameters on their own:
 r / NRMSE / ECE / EACE over the lower-triangle correlation pairs, restricted to the datasets
-whose ground-truth correlation matrix is not the identity (q >= 2 and eta_rfx > 0) and — as
-in the oracle tables — to the datasets on which the NUTS reference (``nuts2``) converged and the
+whose ground-truth correlation matrix is not the identity (q >= 2 and eta_rfx > 0) and - as
+in the oracle tables - to the datasets on which the NUTS reference (``nuts2``) converged and the
 simulator did not clip.
 
 Efficiency: reuses the cached MB samples and post-hoc refinements written by oracle_posterior.py
@@ -197,7 +197,7 @@ def evaluateRegime(
     data_batch, n_total, n_kept, cap_mask = loadRegimeBatch(data_path, max_d, max_q)
     logger.info('  Capacity filter: %d / %d (d≤%d, q≤%d)', n_kept, n_total, max_d, max_q)
     if n_kept == 0 or max_q < 2:
-        logger.warning('  No correlation parameters to evaluate — skipping.')
+        logger.warning('  No correlation parameters to evaluate - skipping.')
         return [], {}
 
     # Selection: non-identity correlation matrix, and NUTS-converged where diagnostics exist.
@@ -214,7 +214,7 @@ def evaluateRegime(
         logger.info('  Correlated: %d / %d (no NUTS diagnostics)', n_corr, n_kept)
     n_sel = int(sel.sum())
     if n_sel == 0:
-        logger.warning('  Empty selection — skipping.')
+        logger.warning('  Empty selection - skipping.')
         return [], {}
     counts = {'total': n_total, 'kept': n_kept, 'correlated': n_corr, 'selected': n_sel}
     if conv_mask is not None:  # convergence rate on correlated vs. independent datasets (prose)
@@ -269,11 +269,11 @@ def evaluateRegime(
     # Reference methods, streamed one at a time (only one fit-tensor set resident).
     for label, tag in REFERENCE_METHODS:
         if not fitPath(data_path, tag).exists():
-            logger.info('  %s: no fit file — skipping.', label)
+            logger.info('  %s: no fit file - skipping.', label)
             continue
         fit_batch, _, _, _ = loadRegimeBatch(data_path, max_d, max_q, fits=(tag,))
         if f'{tag}_corr_rfx' not in fit_batch:
-            logger.info('  %s: no correlation fits in file — skipping.', label)
+            logger.info('  %s: no correlation fits in file - skipping.', label)
             del fit_batch
             gc.collect()
             continue
@@ -362,7 +362,7 @@ def resolvePlotRows(rows: list[dict], wanted: list[str]) -> list[tuple[str, dict
         if key in by_label:
             out.append((title, by_label[key]))
         else:
-            logger.warning('  plot: no row for %s — skipped', w)
+            logger.warning('  plot: no row for %s - skipped', w)
     return out
 
 

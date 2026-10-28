@@ -193,7 +193,7 @@ def logProbSigma(
 
 
 # ---------------------------------------------------------------------------
-# Torch sampling (prior predictive) — select approach
+# Torch sampling (prior predictive) - select approach
 # ---------------------------------------------------------------------------
 
 
@@ -356,7 +356,7 @@ def logProbRfxCorrelated(
     dist = D.MultivariateNormal(loc=loc, scale_tril=L_cov)  # batch (b, 1, s), event (q,)
     lp = dist.log_prob(rfx)  # rfx (b, m, s, q) → lp (b, m, s)
     if mask is not None:
-        # mask shape (b, m, 1, q) — reduce to (b, m, s) by checking any active q dim
+        # mask shape (b, m, 1, q) - reduce to (b, m, s) by checking any active q dim
         active = mask[..., 0].expand_as(lp)  # (b, m, s)
         lp = lp * active
     return lp.sum(dim=1)  # (b, s)
@@ -371,7 +371,7 @@ def _logJacobianZtoL(z: torch.Tensor, L: torch.Tensor, q: int) -> torch.Tensor:
         # log(sech²(z)) = log(1 - tanh²(z))
         log_jac = log_jac + torch.log1p(-(w**2) + 1e-12).sum(-1)
         # remaining_{i,j} = 1 - sum_{k<j} L_{ik}^2; stored on L diagonal would need
-        # recomputation — reconstruct from L off-diagonal entries for this row
+        # recomputation - reconstruct from L off-diagonal entries for this row
         L_row = L[..., i, :i]  # (..., i)
         cum_sq = torch.nn.functional.pad(L_row.pow(2).cumsum(-1)[..., :-1], (1, 0))
         remaining = (1.0 - cum_sq).clamp(min=1e-8)  # (..., i)
@@ -388,18 +388,18 @@ def logProbCorrRfx(
 ) -> torch.Tensor:
     """Log prior for z_corr in unconstrained space. Returns (b, s).
 
-    Datasets with eta=0 (q<2, no correlation) get zero contribution — their z_corr
+    Datasets with eta=0 (q<2, no correlation) get zero contribution - their z_corr
     dimensions are masked in the flow and carry no prior information.
 
     With ``q_active`` the LKJ density is evaluated in each dataset's own dimension q_i
     (the leading q_i(q_i-1)/2 entries of z_corr are its active ones). Evaluating a
     q_i < q dataset in the padded q×q space is not equivalent: the LKJCholesky exponent
     of L_ii is 2(eta-1) + q - i, so padding adds (q - q_i) log L_ii per active row plus
-    a different normalizer — a sample-dependent tilt of the prior toward zero correlation.
+    a different normalizer - a sample-dependent tilt of the prior toward zero correlation.
     """
     b, s = z_corr.shape[:2]
     lp = torch.zeros(b, s, dtype=z_corr.dtype, device=z_corr.device)
-    active = eta > 0  # (b,) — datasets with an LKJ prior (q >= 2)
+    active = eta > 0  # (b,) - datasets with an LKJ prior (q >= 2)
     if not active.any():
         return lp
     q_active = torch.full_like(eta, q, dtype=torch.long) if q_active is None else q_active.long()
@@ -485,7 +485,7 @@ def logMarginalLikelihoodNormal(
     Σ_rfx is diag(σ_rfx²) by default; pass L_corr (from unconstrainedToCholesky)
     for the correlated case Σ_rfx = D L_corr L_corrᵀ D with D = diag(σ_rfx).
     Omitting L_corr for correlated-rfx samples silently targets the wrong
-    (independent-rfx) marginal — the cause of the Corr(RFX) degradation seen in
+    (independent-rfx) marginal - the cause of the Corr(RFX) degradation seen in
     the 2026-07 posthoc ablation.
 
     Padded q-dimensions (inactive rfx) contribute zero net log-det because the
@@ -496,7 +496,7 @@ def logMarginalLikelihoodNormal(
 
     Returns (b, s).
     """
-    # precompute ZtZ — independent of samples (b, m, q, q)
+    # precompute ZtZ - independent of samples (b, m, q, q)
     Z_m = Z * mask_n  # zero out padded observations
     ZtZ = torch.einsum('bmnq,bmnr->bmqr', Z_m, Z_m)
 
@@ -530,7 +530,7 @@ def logMarginalLikelihoodNormal(
     # M_i = Σ_rfx^{-1} + Z_i^T Z_i / σ²_eps  →  (b, m, s, q, q)
     M = Sigma_inv.unsqueeze(1) + ZtZ.unsqueeze(2) / s2e[:, None, :, None, None]
 
-    # Cholesky factorisation of M — jitter diagonal for numerical stability.
+    # Cholesky factorisation of M - jitter diagonal for numerical stability.
     # Use cholesky_ex to avoid hard failures; bad elements get -inf log-likelihood.
     jitter = 1e-6 * torch.eye(M.shape[-1], dtype=M.dtype, device=M.device)
     chol_M, info = torch.linalg.cholesky_ex(M + jitter)            # (b, m, s, q, q)
@@ -570,7 +570,7 @@ def safeCholesky(
 
     Symmetrize, retry with scale-aware jitter (×10 per round), eigenvalue-floor
     repair via eigh, and as a last resort the identity. Non-finite or identity-fallback
-    elements are flagged in the returned ``degenerate`` mask (..., ) — callers
+    elements are flagged in the returned ``degenerate`` mask (..., ) - callers
     must treat their factors as placeholders, not approximations of M.
     """
     q = M.shape[-1]
@@ -626,7 +626,7 @@ def sampleRfxConditionalNormal(
         rfx_j ~ N(μ_j, V_j)
 
     Σ_rfx = diag(σ_rfx²) by default, or D L_corr L_corrᵀ D when L_corr is given.
-    This is the exact conditional dual to logMarginalLikelihoodNormal — pass the
+    This is the exact conditional dual to logMarginalLikelihoodNormal - pass the
     same L_corr to both so weights and rfx draws share one target (the mismatch
     documented in posthoc/metropolis.py's Findings section).
 
@@ -653,7 +653,7 @@ def sampleRfxConditionalNormal(
     eye = torch.eye(q, device=L_rfx.device, dtype=L_rfx.dtype)
     Sigma_inv = choleskySolve(eye.expand_as(L_rfx), L_rfx)  # (b, s, q, q)
 
-    # M = Σ_rfx⁻¹ + ZᵀZ / σ²_eps  (b, m, s, q, q) — posterior precision
+    # M = Σ_rfx⁻¹ + ZᵀZ / σ²_eps  (b, m, s, q, q) - posterior precision
     s2e = sigma_eps.pow(2)  # (b, s)
     M = Sigma_inv.unsqueeze(1) + ZtZ.unsqueeze(2) / s2e[:, None, :, None, None]
     # extreme flow samples (σ_eps ≈ 0 / huge σ_rfx) can make M numerically non-PD

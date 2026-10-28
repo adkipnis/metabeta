@@ -6,7 +6,7 @@ nonlinear term (a scaled squared predictor) to y, varying the scale of the
 nonlinearity.  Both metabeta and NUTS fit the *incorrectly specified* linear
 model.  The key question is not parameter recovery (ground truth is no longer
 well-defined) but whether metabeta faithfully approximates the posterior of the
-misspecified linear model — the same model NUTS fits.  Agreement between the two
+misspecified linear model - the same model NUTS fits.  Agreement between the two
 methods demonstrates that metabeta's errors are due to model choice, not the
 inference procedure.
 
@@ -163,7 +163,7 @@ def perturbDataset(ds: dict[str, np.ndarray], scale: float) -> dict[str, np.ndar
     if scale == 0.0:
         return ds
     out = {k: v.copy() if isinstance(v, np.ndarray) else v for k, v in ds.items()}
-    X = ds['X']  # (n, d) — column 0 is intercept
+    X = ds['X']  # (n, d) - column 0 is intercept
     d = int(ds['d'])
     if d <= 1:
         return out  # intercept-only model, nothing to perturb
@@ -381,7 +381,7 @@ def sampleMetabeta(
     """Run metabeta on a single (padded) dataset and return posterior means.
 
     Applies importance sampling when ``cfg.importance`` is true.
-    Does NOT rescale — both metabeta and NUTS operate in standardized space.
+    Does NOT rescale - both metabeta and NUTS operate in standardized space.
     """
     d_actual, q_actual, m_actual = int(ds['d']), int(ds['q']), int(ds['m'])
     lf = getattr(cfg, 'likelihood_family', 0)
@@ -394,7 +394,7 @@ def sampleMetabeta(
 
     proposal = model.estimate(batch, n_samples=cfg.n_samples)
 
-    # importance sampling (in standardized space — no rescale needed)
+    # importance sampling (in standardized space - no rescale needed)
     if getattr(cfg, 'importance', False):
         imp = ImportanceSampler(batch, sir=False, likelihood_family=lf)
         proposal = imp(proposal)
@@ -611,7 +611,7 @@ def formatTable(rows: list[dict], fmt: str = 'pipe') -> str:
             except (KeyError, TypeError):
                 val = None
             if val is None or np.isnan(val):
-                cell = '—'
+                cell = '-'
             else:
                 cell = f'{val:.4f}'
                 if i in best.get(metric, set()):

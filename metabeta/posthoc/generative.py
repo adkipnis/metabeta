@@ -1,5 +1,5 @@
 """
-posthoc/generative.py — Differentiable PyTorch generative model for hierarchical regression.
+posthoc/generative.py - Differentiable PyTorch generative model for hierarchical regression.
 
 Exposes the full joint log p(y, θ_g, u) in non-centered parameterization (NCP):
 
@@ -57,9 +57,9 @@ _LOG_2PI = math.log(2 * math.pi)
 class NCPParams(NamedTuple):
     ffx: Tensor                # (b, s, d)
     sigma_rfx: Tensor          # (b, s, q)
-    sigma_eps: Tensor | None   # (b, s) — None for non-Normal
+    sigma_eps: Tensor | None   # (b, s) - None for non-Normal
     u: Tensor                  # (b, m, s, q)
-    z_corr: Tensor | None      # (b, s, d_corr) — None if independent rfx
+    z_corr: Tensor | None      # (b, s, d_corr) - None if independent rfx
 
 
 class HierarchicalModel:
@@ -92,7 +92,7 @@ class HierarchicalModel:
         self.y = data['y'].unsqueeze(-1)           # (b, m, n, 1)
         self.mask_n = data['mask_n'].unsqueeze(-1)   # (b, m, n, 1)
 
-        # Raw masks — reshaped as needed per operation
+        # Raw masks - reshaped as needed per operation
         self._mask_m = data['mask_m']              # (b, m)
         self._mask_q = data['mask_q']              # (b, q)
 
@@ -220,7 +220,7 @@ class HierarchicalModel:
         """
         rfx = self.rfxFromU(sigma_rfx, u, z_corr)    # (b, m, s, q)
 
-        # Likelihood — pass zero sigma_eps for families that ignore it
+        # Likelihood - pass zero sigma_eps for families that ignore it
         _sigma_eps = sigma_eps if sigma_eps is not None else ffx.new_zeros(ffx.shape[:2])
         ll = logLikelihood(
             ffx,
@@ -244,7 +244,7 @@ class HierarchicalModel:
             lp = lp + logProbCorrRfx(z_corr, self.q, self.eta_rfx)
 
         # Prior on u: N(0, I), masked over valid (group, rfx-dim) pairs
-        # u: (b, m, s, q) — sum over dims 1 (m) and 3 (q) → (b, s)
+        # u: (b, m, s, q) - sum over dims 1 (m) and 3 (q) → (b, s)
         mask_u = (
             self._mask_m[:, :, None, None]  # (b, m, 1, 1)
             * self._mask_q[:, None, None, :]  # (b, 1, 1, q)

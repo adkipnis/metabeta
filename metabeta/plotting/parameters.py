@@ -16,7 +16,7 @@ def _formatName(name: str) -> str:
     for ch, latex in _GREEK_LATEX.items():
         base = base.replace(ch, latex)
         sub = sub.replace(ch, latex)
-    if sub.startswith('\\'):  # single Greek letter — no \mathrm wrapper
+    if sub.startswith('\\'):  # single Greek letter - no \mathrm wrapper
         return rf'${base}_{sub}$'
     return rf'${base}_{{\mathrm{{{sub}}}}}$'
 
@@ -88,9 +88,9 @@ def plotParameters(
     - Lower triangle: posterior density contours.
 
     prior_xlim controls axis scaling:
-      True  — axes show the prior range, capped at posterior_mean ± 40·posterior_SD
+      True  - axes show the prior range, capped at posterior_mean ± 40·posterior_SD
               so the posterior remains clearly visible (default).
-      False — axes are set by the posterior data range (tight).
+      False - axes are set by the posterior data range (tight).
 
     d_active and q_active trim padded proposals to the active FFX and RFX dims.
     samples_g layout: ffx[0:proposal.d] | sigma_rfx[proposal.d:proposal.d+proposal.q] | sigma_eps
@@ -144,7 +144,7 @@ def plotParameters(
         if _n_corr > 0:
             _names += getCorrRfxNames(_q_c)  # already LaTeX, no _formatName needed
 
-    # marginal posterior — loop instead of map_diag to allow per-column KDE clipping
+    # marginal posterior - loop instead of map_diag to allow per-column KDE clipping
     for i in range(d):
         kw: dict = dict(color=color, common_norm=False)
         if _d_sigma <= i < _d_corr_start:
@@ -169,7 +169,7 @@ def plotParameters(
     # 2d posterior KDE contours
     g.map_lower(sns.kdeplot, color=color, alpha=alpha, fill=True, warn_singular=False)
 
-    # axis scaling — prior mode widens each parameter's axis to the prior range,
+    # axis scaling - prior mode widens each parameter's axis to the prior range,
     # capped at posterior_mean ± 6·posterior_SD so the posterior stays readable
     if prior_xlim and prior_pdfs is not None:
         n_prior = len(prior_pdfs)
@@ -186,7 +186,7 @@ def plotParameters(
             g.axes[0, i].set_xlim(lo, hi)
             g.axes[i, 0].set_ylim(lo, hi)
 
-    # marginal prior — analytical PDF line, drawn after map_upper/lower so that the
+    # marginal prior - analytical PDF line, drawn after map_upper/lower so that the
     # posterior has already set the axis limits before we save/restore them
     if prior_pdfs is not None:
         for i, (x_grid, pdf) in enumerate(prior_pdfs[:d]):
@@ -199,7 +199,7 @@ def plotParameters(
                 alpha=0.6,
             )
 
-    # 2d prior analytical contours — evaluated on the axis-range grid so that levels
+    # 2d prior analytical contours - evaluated on the axis-range grid so that levels
     # are chosen relative to the density variation *within the visible window*.
     # Skip cells where either marginal is essentially flat (e.g. uniform LKJ prior):
     # the product-of-marginals density would vary only along the other axis, producing

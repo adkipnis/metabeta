@@ -1,23 +1,23 @@
 """
-experiments/posthoc/gaussian_local.py — Gaussian local posterior ceiling experiment.
+experiments/posthoc/gaussian_local.py - Gaussian local posterior ceiling experiment.
 
 Ablation for likelihood_family == 0: replaces the learned local flow with the
 exact analytical Gaussian conditional posterior p(b_i | y_i, β, σ_rfx, σ_ε),
 then evaluates RFX recovery under three global-conditioning scenarios:
 
-  GaussLoc(true)  — condition on TRUE globals          [noise ceiling]
-  GaussLoc(NUTS)  — condition on NUTS global samples
-  GaussLoc(MB)    — condition on MB global samples
+  GaussLoc(true)  - condition on TRUE globals          [noise ceiling]
+  GaussLoc(NUTS)  - condition on NUTS global samples
+  GaussLoc(MB)    - condition on MB global samples
 
 Compared against the standard baselines:
-  MB              — full MetaBeta posterior (learned global + local flow)
-  NUTS            — NUTS reference posterior
-  ADVI, PF        — the ADVI and Pathfinder competitors
+  MB              - full MetaBeta posterior (learned global + local flow)
+  NUTS            - NUTS reference posterior
+  ADVI, PF        - the ADVI and Pathfinder competitors
 
 Key questions:
-  GaussLoc(true) vs NUTS / MB  — how much better can we do with perfect globals?
-  GaussLoc(MB)   vs MB         — is the learned local flow the bottleneck?
-  GaussLoc(NUTS) vs NUTS       — does the analytical form help given good globals?
+  GaussLoc(true) vs NUTS / MB  - how much better can we do with perfect globals?
+  GaussLoc(MB)   vs MB         - is the learned local flow the bottleneck?
+  GaussLoc(NUTS) vs NUTS       - does the analytical form help given good globals?
 
 Usage (from repo root):
   uv run python experiments/posthoc/gaussian_local.py --checkpoint metabeta/outputs/checkpoints/<run>

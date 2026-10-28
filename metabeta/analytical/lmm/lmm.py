@@ -175,7 +175,7 @@ def _initialPsiMom(
         fallback_diag,
     )
     # Gate cap signal per-component: unreliable components (< 5 valid groups) should not
-    # inflate psi_eig_cap via amax — fall back to the conservative fallback_diag signal.
+    # inflate psi_eig_cap via amax - fall back to the conservative fallback_diag signal.
     diag_cap_signal = torch.where(
         enough_diag_mom[:, None],
         psi_diag_signal,
@@ -357,14 +357,14 @@ def _emRefineNormal(
         blup_outer = torch.einsum('bmq,bmr->bmqr', blups_winsor, blups_winsor)
         post_cov = se2[:, None, None, None] * gls.W_g
         # Outlier-trimmed Ψ_em: exclude groups whose ||b̂_g||² exceeds 3× the mean
-        # among mom groups. This is adaptive — when all groups have similar norms (no
+        # among mom groups. This is adaptive - when all groups have similar norms (no
         # outliers) no groups are excluded and Ψ_em equals the original full mean.
         # Only kicks in when one or more groups are genuinely anomalous relative to the
         # rest, which is the case where Fix 9's per-BLUP cap occasionally over-clips.
         blup_norm = blups_winsor.square().sum(dim=-1)  # (B, m)
         mom_mask_1d = mom4.squeeze(-1).squeeze(-1).bool()  # (B, m)
         mom_norm_mean = (blup_norm * mom_mask_1d.float()).sum(dim=1) / G_mom  # (B,)
-        outlier_thresh = 3.0 * mom_norm_mean[:, None]  # (B, 1) — 3× mean as outlier gate
+        outlier_thresh = 3.0 * mom_norm_mean[:, None]  # (B, 1) - 3× mean as outlier gate
         trim_mask = mom_mask_1d & (blup_norm <= outlier_thresh)  # (B, m) True = included
         trim_count = trim_mask.float().sum(dim=1).clamp(min=1.0)  # (B,)
         trim_mask_4d = trim_mask[:, :, None, None]
@@ -428,8 +428,8 @@ def _lmmNormalFull(
     ns: torch.Tensor,  # (B, m)     group sizes (float, ≥ 1 for active)
     n_total: torch.Tensor,  # (B,)       total active observations
     n_em: int = 3,
-    uncorr: torch.Tensor | None = None,  # (B,) bool — force Ψ diagonal for these datasets
-    mask_q: torch.Tensor | None = None,  # (B, q) bool — active random-effect components
+    uncorr: torch.Tensor | None = None,  # (B,) bool - force Ψ diagonal for these datasets
+    mask_q: torch.Tensor | None = None,  # (B, q) bool - active random-effect components
     beta_alpha_low: float = 0.65,
     beta_alpha_high: float = 0.75,
 ) -> dict[str, torch.Tensor]:

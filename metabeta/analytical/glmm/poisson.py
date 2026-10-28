@@ -761,7 +761,7 @@ def _poissonVariationalStepAndCovDiag(
     Z_eff = Zm * active_q_f[:, None, None, :]
     prec_q = torch.where(active_q, 1.0 / sigma.clamp(min=1e-4).square(), torch.ones_like(sigma))
 
-    # Offset is constant for this step (V_g unchanged) — compute once for both eta_old and eta_new.
+    # Offset is constant for this step (V_g unchanged) - compute once for both eta_old and eta_new.
     offset = _poissonVariationalOffsetFromZeff(V_g, Z_eff, offset_clip)
     eta = torch.einsum('bmnd,bd->bmn', Xm, beta)
     eta = eta + torch.einsum('bmnq,bmq->bmn', Z_eff, means)
@@ -816,7 +816,7 @@ def _poissonVariationalStepAndCovDiag(
     means_new = means_new.clamp(-_POISSON_BLUP_CLAMP, _POISSON_BLUP_CLAMP)
     means_new = means_new * active_m[:, :, None] * active_q_f[:, None, :]
 
-    # Covariance at (beta_new, means_new) — reuse Z_eff, offset, prec_total, eye_q.
+    # Covariance at (beta_new, means_new) - reuse Z_eff, offset, prec_total, eye_q.
     eta_new = torch.einsum('bmnd,bd->bmn', Xm, beta_new)
     eta_new = eta_new + torch.einsum('bmnq,bmq->bmn', Z_eff, means_new)
     eta_new = eta_new + offset
