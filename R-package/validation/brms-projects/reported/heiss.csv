@@ -1,0 +1,5 @@
+model,parameter,estimate,error,lower,upper,level
+model_success_brms,b_Intercept,-3.09,0.349,-3.54,-2.65,0.8
+model_success_brms,b_age_c,-0.0473,0.00913,-0.0589,-0.0358,0.8
+model_success_brms,b_oxygen_usedTRUE,5.65,0.457,5.08,6.25,0.8
+model_success_brms,sd_expedition_id__Intercept,3.57,0.337,3.16,4.02,0.8

@@ -1,0 +1,17 @@
+model,parameter,estimate,error,lower,upper,level
+bayesian_mixed,sd_student__Intercept,0.21,0.02,0.18,0.25,0.95
+bayesian_mixed,sd_student__occasion,0.07,0.01,0.06,0.08,0.95
+bayesian_mixed,cor_student__Intercept__occasion,-0.09,0.11,-0.29,0.13,0.95
+bayesian_mixed,b_Intercept,2.60,0.02,2.56,2.64,0.95
+bayesian_mixed,b_occasion,0.11,0.01,0.09,0.12,0.95
+bayesian_mixed,sigma,0.21,0.01,0.20,0.22,0.95
+bayesian_mixed,"r_student[1,Intercept]",-0.203,0.117,-0.432,0.024,0.95
+bayesian_mixed,"r_student[2,Intercept]",-0.209,0.113,-0.436,0.007,0.95
+bayesian_mixed,"r_student[3,Intercept]",-0.005,0.113,-0.228,0.216,0.95
+bayesian_mixed,"r_student[4,Intercept]",-0.096,0.117,-0.329,0.137,0.95
+bayesian_mixed,"r_student[5,Intercept]",0.086,0.116,-0.134,0.319,0.95
+bayesian_mixed,"r_student[6,Intercept]",-0.205,0.111,-0.425,0.007,0.95
+bayesian_mixed,"r_student[7,Intercept]",-0.156,0.114,-0.387,0.064,0.95
+bayesian_mixed,"r_student[8,Intercept]",0.152,0.112,-0.077,0.365,0.95
+bayesian_mixed,"r_student[9,Intercept]",0.039,0.115,-0.185,0.263,0.95
+bayesian_mixed,"r_student[10,Intercept]",0.099,0.115,-0.124,0.327,0.95
