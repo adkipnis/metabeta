@@ -162,9 +162,29 @@ random-walk moves (`random_walk=True`). `02-families` compares a Poisson fit wit
 
 </details>
 
+## Use from R as a drop-in replacement for brms
 
+The [R package](https://github.com/adkipnis/metabeta/tree/main/R-package) exposes metabeta
+through the interface of [brms](https://paul-buerkner.github.io/brms/). Replace
+`library(brms)` with `library(metabeta)` and calls such as `brm()`, `summary()`, `fixef()`,
+`ranef()`, `posterior_predict()`, `loo()` or `hypothesis()` keep working, now in one to a few
+seconds per fit:
 
+```r
+install.packages("pak")
+pak::pak("adkipnis/metabeta/R-package")
+library(metabeta)
+fit <- brm(Reaction ~ Days + (Days | Subject), data = lme4::sleepstudy)
+summary(fit)
+```
 
+The first fit installs Python, the `metabeta` Python package and the network by itself (a few
+minutes, once). See the
+[R package's README](https://github.com/adkipnis/metabeta/blob/main/R-package/README.md) for the
+supported models, how they map onto brms and what to pay attention to. Its
+[validation](https://github.com/adkipnis/metabeta/tree/main/R-package/validation) folder holds a
+notebook that reruns the paper's metabeta results from R, and a comparison with the reported
+results of eleven published brms analyses run with metabeta instead.
 
 ## Contributing
 

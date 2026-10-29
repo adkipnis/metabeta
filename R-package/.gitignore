@@ -1,0 +1,11 @@
+*.Rcheck/
+*.tar.gz
+.Rhistory
+.Rproj.user/
+Rplots.pdf
+validation/reproduce-paper/cache/
+validation/reproduce-paper/*_files/
+validation/brms-projects/work/
+# the repository ignores *.csv; these are the inputs and results of the brms check
+!validation/brms-projects/reported/*.csv
+!validation/brms-projects/results/*.csv

@@ -1,0 +1,43 @@
+Package: metabeta
+Type: Package
+Title: Amortized Bayesian Mixed Models with a 'brms' Interface
+Version: 0.6.0
+Authors@R: c(
+    person("Alex", "Kipnis", email = "adkipnis@mailbox.org", role = c("aut", "cre")),
+    person("Marcel", "Binz", email = "marcel.binz@tuebingen.mpg.de", role = "aut"))
+Description: A drop-in replacement for the user interface of 'brms'
+    (brm(), summary(), fixef(), ranef(), posterior_predict(), loo(), ...)
+    that fits generalized linear mixed models with the pretrained amortized
+    posterior estimator 'metabeta' instead of Stan. Gaussian, Bernoulli and
+    Poisson models with one grouping factor are supported. Posterior draws are
+    refined by independence Metropolis-Hastings chains that use the learned
+    normalizing flow as their proposal, so the delivered posterior targets the
+    exact model while typically taking well under a second.
+License: Apache License (== 2.0)
+URL: https://github.com/adkipnis/metabeta
+BugReports: https://github.com/adkipnis/metabeta/issues
+Encoding: UTF-8
+Depends:
+    R (>= 4.1.0)
+Imports:
+    bayesplot (>= 1.10.0),
+    ggplot2 (>= 3.4.0),
+    grDevices,
+    loo (>= 2.7.0),
+    nlme,
+    posterior (>= 1.5.0),
+    reticulate (>= 1.41),
+    rstantools (>= 2.3.0),
+    stats,
+    utils
+Suggests:
+    coda,
+    emmeans,
+    lme4,
+    testthat (>= 3.0.0)
+SystemRequirements: Python (>= 3.12) with the 'metabeta' package (>= 0.6.0);
+    provisioned automatically by 'reticulate' on first use. The pretrained
+    networks it downloads are licensed CC BY-NC-SA 4.0 (non-commercial use).
+Config/testthat/edition: 3
+Roxygen: list(markdown = TRUE)
+Config/roxygen2/version: 8.1.0
