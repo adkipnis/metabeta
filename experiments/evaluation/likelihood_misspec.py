@@ -42,7 +42,11 @@ from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.sampling import setSeed
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR, REPO_ROOT
 from metabeta.utils.fits import fitPath
+from metabeta.posthoc.metropolis import bulkEss
 from metabeta.utils.posterior_eval import (
+    IMH_METHODS,
+    IMH_MOVES,
+    IMH_N_CHAINS,
     fit2proposal,
     loadModel,
     loadOrComputeSummary,
@@ -191,18 +195,11 @@ def collectCondition(
             'global': globalEntries(p, b, conv[keep], lf),
         }
 
-    out = {
-        'size': np.array([size] * B, dtype=object),
-        'conv': conv,
-        'nuts:loo': nuts_loo,
-    }
-    entries = {NUTS_LABEL: keptEntries(proposal_nuts)}
+    proposals = {'mb': proposal_mb}
     for m in methods:
-        if m == 'mb':
-            proposal = proposal_mb
-        else:
+        if m != 'mb':
             logger.info('%s: refining MB with %s', data_id, m)
-            proposal, _ = loadOrRefine(
+            proposals[m], _ = loadOrRefine(
                 m,
                 proposal_mb,
                 batch,
@@ -217,12 +214,36 @@ def collectCondition(
                 cfg.batch_size,
                 device=device,
             )
+    # a method whose draws are not finite on a dataset has failed there: leave the dataset out
+    # for every method, as the simulator-clipped ones, so the comparison stays paired
+    finite = {m: _finiteDraws(proposals[m]) for m in methods}
+    failed = ~np.logical_and.reduce(list(finite.values()))
+    if failed.any():
+        logger.warning(
+            '%s: non-finite draws (%s) on dataset(s) %s - left out',
+            data_id,
+            ', '.join(m for m in methods if not finite[m].all()),
+            np.flatnonzero(failed).tolist(),
+        )
+        keep &= ~failed
+
+    out = {
+        'size': np.array([size] * B, dtype=object),
+        'conv': conv,
+        'nuts:loo': nuts_loo,
+    }
+    entries = {NUTS_LABEL: keptEntries(proposal_nuts)}
+    for m in methods:
+        proposal = proposals[m]
+        # the summary rejects non-finite draws: compute it on the finite datasets only, under a
+        # mask-keyed cache, and leave NaN where the method failed
+        mask = None if finite[m].all() else finite[m]
         summary = loadOrComputeSummary(
-            proposal,
-            batch,
+            proposal if mask is None else subsetProposal(proposal, mask),
+            batch if mask is None else subsetBatch(batch, mask),
             data_path,
             m,
-            None,
+            mask,
             lf,
             True,
             ckpt_dir=ckpt_dir,
@@ -234,10 +255,27 @@ def collectCondition(
         out[f'{m}:r'] = computeCorr(proposal, proposal_nuts, batch)
         out[f'{m}:sigma_ratio'] = computeSigmaRatio(proposal, proposal_nuts, batch)
         out[f'{m}:rank_mad'] = computeRankMAD(proposal, proposal_nuts, batch)
-        out[f'{m}:loo'] = summary.per_dataset.loo_nll.float().numpy()
+        out[f'{m}:loo'] = np.full(B, np.nan, dtype=np.float32)
+        out[f'{m}:loo'][finite[m]] = summary.per_dataset.loo_nll.float().numpy()
         out[f'{m}:delta_nll'] = out[f'{m}:loo'] - nuts_loo
+        if m in IMH_METHODS:
+            out[f'{m}:accept'] = proposal.is_results['imh_accept_rate'].double().numpy()
+            # the RW gate's statistic, the IMH chains' min bulk ESS: the +moves draws no longer
+            # hold those chains (a moved dataset holds the RW chains instead)
+            out[f'{m}:ess_min'] = (
+                np.full(B, np.nan)
+                if m in IMH_MOVES
+                else np.nanmin(bulkEss(proposal.samples_g, IMH_N_CHAINS).numpy(), axis=1)
+            )
         entries[METHOD_LABELS.get(m, m)] = keptEntries(proposal)
     return {'agree': {k: v[keep] for k, v in out.items()}, 'entries': entries}
+
+
+def _finiteDraws(proposal) -> np.ndarray:
+    """(b,) True where every global and local draw of the dataset is finite."""
+    g = torch.isfinite(proposal.samples_g).flatten(1).all(1)
+    l = torch.isfinite(proposal.samples_l).flatten(1).all(1)
+    return (g & l).numpy()
 
 
 def alignSizes(per_cond: dict[str, list[dict]]) -> tuple[dict[str, list[dict]], list[str]]:
