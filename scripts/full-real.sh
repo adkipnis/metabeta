@@ -4,6 +4,7 @@
 # muscatine and Chem97 outgrow a GPU at 4000 draws. Partition and QOS go on the command line:
 #   sbatch -p cpu_p -q cpu_normal -c 16 --mem=300G -t 08:00:00 scripts/full-real.sh diagnostics
 #   sbatch -p cpu_p -q cpu_normal -c 16 --mem=300G -t 12:00:00 scripts/full-real.sh compare
+#   sbatch -p cpu_p -q cpu_normal -c 16 --mem=64G -t 04:00:00 scripts/full-real.sh subsamples
 # compare needs the reintegrated fits (metabeta/simulation/check.py --partition test).
 # The code of METABETA_ROOT runs (default ~/metabeta), ahead of the venv's editable install.
 
@@ -23,6 +24,16 @@ python -c 'import metabeta; print("metabeta:", metabeta.__file__)'
 
 CK=metabeta/outputs/checkpoints
 OUT=experiments/results/full-real
+if [ "$STAGE" = subsamples ]; then
+    # the same diagnostics on the subsamples of InstEval and Chem97 in the real-world test sets
+    for spec in large-n-real:insteval__grp_group:data=large-n-mixed_model=large_seed=9 \
+                small-p-real:chem97__grp_group:data=small-p-mixed_model=large_seed=4; do
+        IFS=: read -r id source ckpt <<< "$spec"
+        python experiments/evaluation/full_real_diagnostics.py --data_id "$id" --source "$source" \
+            --checkpoint "$CK/$ckpt" --n_samples 4000 --out "$OUT/$id-$source-diagnostics-s4000.jsonl"
+    done
+    exit 0
+fi
 for pair in large-n-full:data=large-n-mixed_model=large_seed=9 \
             medium-b-full:data=medium-b-mixed_model=large_seed=3 \
             small-p-full:data=small-p-mixed_model=large_seed=4; do
@@ -34,6 +45,6 @@ for pair in large-n-full:data=large-n-mixed_model=large_seed=9 \
         compare)
             python experiments/evaluation/real_posterior.py --checkpoint "$ckpt" --prefix latest \
                 --n_samples 4000 --batch_size 1 --no-latency --data_ids "$id" --outdir "$OUT" ;;
-        *) echo "Unknown stage: $STAGE (use diagnostics or compare)" >&2; exit 1 ;;
+        *) echo "Unknown stage: $STAGE (use diagnostics, compare or subsamples)" >&2; exit 1 ;;
     esac
 done
