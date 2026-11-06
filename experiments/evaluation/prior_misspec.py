@@ -81,6 +81,14 @@ CONDITIONS: list[tuple[str, str]] = [
     ('mu2', 'ν+2τ'),
     ('famrot', 'family+1'),
 ]
+# outside the trained hyperparameter range; opt-in via --conditions, since these dirs exist at
+# one size only and alignSizes would cut the default pool down to it
+OUT_OF_SUPPORT: list[tuple[str, str]] = [
+    ('oosbase', 'correct'),
+    ('oosA', 'τ=2×max'),
+    ('oosB', 'ν+5τ'),
+    ('oosC', 'τ=min/2'),
+]
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +135,7 @@ def main() -> None:
 
     conditions = CONDITIONS
     if cfg.conditions is not None:
-        known = dict(conditions)
+        known = dict(conditions + OUT_OF_SUPPORT)
         unknown = [t for t in cfg.conditions if t not in known]
         if unknown:
             raise KeyError(f'unknown condition tags: {unknown} (known: {list(known)})')

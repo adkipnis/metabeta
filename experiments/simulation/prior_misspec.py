@@ -9,6 +9,12 @@ the stored hyperparameters that define the fitted model are rewritten:
     ν+kτ        ν_ffx shifted by k prior SDs, k ∈ {1, 2} (location, not scale)
     family+1    prior families rotated (Normal<->Student-t, Half-Normal->Half-Student-t->Exp.)
 
+and, outside the trained range of the hyperparameters (opt-in via --conditions):
+
+    oosA        every scale set to twice the largest stored value of the training sets
+    oosB        ν_ffx shifted by 5 prior SDs
+    oosC        every scale set to half the smallest stored value of the training sets
+
 Because metabeta reads those fields as posterior context and ``utils/pymc.buildPymc`` reads
 them to construct the PyMC model, writing them into a data dir is enough to make *both*
 inference paths fit the same misspecified prior - no changes to fit.py or fit-ref.sh.  That
@@ -34,6 +40,8 @@ Usage (from repo root):
     uv run python experiments/simulation/prior_misspec.py --families n --sizes small --n_datasets 4
     uv run python experiments/simulation/prior_misspec.py --n_datasets 32
     uv run python experiments/simulation/prior_misspec.py --print_commands
+    uv run python experiments/simulation/prior_misspec.py --sizes medium --n_datasets 128 \
+        --conditions oosA oosB --base_tag oosbase
 
 After generation, produce NUTS fits per condition dir (cluster):
     scripts/fit-ref.sh --method nuts --level 2 --n_datasets 32 --data_id small-n-tau3
@@ -45,6 +53,7 @@ and optionally precompute analytical stats (from metabeta/analytical/):
 
 import argparse
 import logging
+from typing import Literal, NamedTuple
 
 import numpy as np
 import yaml
@@ -69,15 +78,33 @@ logger = logging.getLogger(__name__)
 
 BASE_TAG = 'priorbase'
 
-# ds_type tag -> (τ multiplier, ν_ffx shift in units of τ_ffx, rotate prior families).
-# Kept in step with the display labels in experiments/evaluation/prior_misspec.py.
-CONDITIONS: dict[str, tuple[float, float, bool]] = {
-    'tau033': (1.0 / 3.0, 0.0, False),
-    'tau3': (3.0, 0.0, False),
-    'mu1': (1.0, 1.0, False),
-    'mu2': (1.0, 2.0, False),
-    'famrot': (1.0, 0.0, True),
+
+class Condition(NamedTuple):
+    """How one ds_type rewrites the stored prior.
+
+    Scales are multiplied by ``scale``, unless ``pin`` names an end of the trained range: then
+    every scale is set to ``scale`` times that end (see trainedRange), the same for all datasets.
+    """
+
+    scale: float = 1.0
+    shift: float = 0.0  # ν_ffx shift in units of τ_ffx
+    rotate: bool = False  # rotate the prior families
+    pin: Literal['min', 'max'] | None = None
+
+
+# ds_type tag -> condition; kept in step with the display labels in
+# experiments/evaluation/prior_misspec.py.
+CONDITIONS: dict[str, Condition] = {
+    'tau033': Condition(scale=1.0 / 3.0),
+    'tau3': Condition(scale=3.0),
+    'mu1': Condition(shift=1.0),
+    'mu2': Condition(shift=2.0),
+    'famrot': Condition(rotate=True),
+    'oosA': Condition(scale=2.0, pin='max'),
+    'oosB': Condition(shift=5.0),
+    'oosC': Condition(scale=0.5, pin='min'),
 }
+DEFAULT_CONDITIONS = ['tau033', 'tau3', 'mu1', 'mu2', 'famrot']
 
 # hyperparameters that define the fitted prior; everything else is copied verbatim
 SCALE_KEYS = ('tau_ffx', 'tau_rfx', 'tau_eps')
@@ -93,7 +120,8 @@ def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='Generate prior-misspecified test sets from sampled test data.')
     parser.add_argument('--families', nargs='+', default=DEFAULT_FAMILIES, choices=DEFAULT_FAMILIES, help='likelihood families (letters)')
     parser.add_argument('--sizes', nargs='+', default=DEFAULT_SIZES, choices=DEFAULT_SIZES, help='size regimes')
-    parser.add_argument('--conditions', nargs='+', default=None, choices=list(CONDITIONS), help='ds_type tags to generate (default: all)')
+    parser.add_argument('--conditions', nargs='+', default=DEFAULT_CONDITIONS, choices=list(CONDITIONS), help='ds_type tags to generate')
+    parser.add_argument('--base_tag', type=str, default=BASE_TAG, help='ds_type tag of the unperturbed baseline')
     parser.add_argument('--n_datasets', type=int, default=32, help='datasets per condition (subset of the 512 test datasets)')
     parser.add_argument('--seed', type=int, default=0, help='seed for index selection')
     parser.add_argument('--overwrite', action='store_true', help='regenerate dirs that already exist')
@@ -108,25 +136,59 @@ def setup() -> argparse.Namespace:
 # ---------------------------------------------------------------------------
 
 
+def trainedRange(family: str) -> dict[str, tuple[float, float]]:
+    """Smallest and largest stored value of each scale hyperparameter over the family's sampled
+    test and validation sets of every size, a proxy for the scales the network was trained on.
+
+    Stored scales are standardized (divided by sd(y) for Gaussian outcomes, shrunk by the
+    linear-predictor cap otherwise), so this range differs from the drawn ranges in
+    simulation/prior.py: for Gaussian outcomes it is much wider.
+    """
+    lo: dict[str, float] = {}
+    hi: dict[str, float] = {}
+    for size in DEFAULT_SIZES:
+        for partition in ('test', 'valid'):
+            path = DATA_DIR / f'{size}-{family}-sampled' / f'{partition}.npz'
+            if not path.exists():
+                continue
+            with np.load(path) as z:
+                for key in SCALE_KEYS:
+                    if key in z.files:
+                        v = z[key][z[key] > 0]  # padded entries are 0
+                        lo[key] = min(lo.get(key, np.inf), float(v.min()))
+                        hi[key] = max(hi.get(key, -np.inf), float(v.max()))
+    if not hi:
+        raise FileNotFoundError(f'no sampled test or validation set for family {family}')
+    return {key: (lo[key], hi[key]) for key in hi}
+
+
+def pinnedScales(cond: Condition, trained: dict[str, tuple[float, float]]) -> dict[str, float]:
+    """The value every scale hyperparameter is set to under a pinned condition."""
+    end = 1 if cond.pin == 'max' else 0
+    return {key: cond.scale * bounds[end] for key, bounds in trained.items()}
+
+
 def perturbPrior(
     batch: dict[str, np.ndarray],
-    scale: float,
-    shift: float,
-    rotate: bool,
+    cond: Condition,
+    pinned: dict[str, float] | None = None,
 ) -> None:
     """Rewrite every dataset's stored prior hyperparameters in place.
 
-    Padded columns stay zero under both operations (0·c = 0 and 0 + k·0 = 0), so the
-    active/inactive structure of the batch is preserved.  The shift is applied before the
-    rescale so that ``k`` always counts *original* prior SDs.
+    Padded columns stay zero under every operation (0·c = 0, 0 + k·0 = 0, and pinning skips
+    them), so the active/inactive structure of the batch is preserved.  The shift is applied
+    before the rescale so that ``k`` always counts *original* prior SDs.
     """
-    if shift != 0.0:
-        batch['nu_ffx'] = batch['nu_ffx'] + shift * batch['tau_ffx']
-    if scale != 1.0:
-        for key in SCALE_KEYS:
-            if key in batch:
-                batch[key] = batch[key] * scale
-    if rotate:
+    if cond.shift != 0.0:
+        batch['nu_ffx'] = batch['nu_ffx'] + cond.shift * batch['tau_ffx']
+    for key in SCALE_KEYS:
+        if key not in batch:
+            continue
+        if pinned is not None:
+            batch[key] = np.where(batch[key] > 0, pinned[key], 0.0).astype(batch[key].dtype)
+        elif cond.scale != 1.0:
+            batch[key] = batch[key] * cond.scale
+    if cond.rotate:
         for key, n_families in FAMILY_KEYS:
             if key in batch:
                 batch[key] = (batch[key] + 1) % n_families
@@ -143,9 +205,8 @@ def writeConfig(
     data_id: str,
     n_datasets: int,
     tag: str,
-    scale: float,
-    shift: float,
-    rotate: bool,
+    cond: Condition,
+    pinned: dict[str, float] | None,
     idx: np.ndarray,
     seed: int,
 ) -> None:
@@ -154,9 +215,12 @@ def writeConfig(
     cfg['data_id'] = data_id
     cfg['bs_test'] = n_datasets
     cfg['prior_misspec_tag'] = tag
-    cfg['prior_misspec_scale'] = scale
-    cfg['prior_misspec_shift'] = shift
-    cfg['prior_misspec_rotate_family'] = rotate
+    cfg['prior_misspec_scale'] = cond.scale
+    cfg['prior_misspec_shift'] = cond.shift
+    cfg['prior_misspec_rotate_family'] = cond.rotate
+    if pinned is not None:
+        cfg['prior_misspec_pin'] = cond.pin
+        cfg['prior_misspec_pinned'] = pinned
     cfg['prior_misspec_source'] = src_dir.name
     cfg['prior_orig_indices'] = [int(j) for j in idx]
     cfg['prior_misspec_seed'] = seed
@@ -173,7 +237,12 @@ def _dropStaleKeys(source: dict[str, np.ndarray], idx: np.ndarray) -> dict[str, 
     }
 
 
-def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
+def generateCombo(
+    cfg: argparse.Namespace,
+    family: str,
+    size: str,
+    trained: dict[str, tuple[float, float]] | None,
+) -> list[str]:
     """Write the baseline + condition dirs for one (family, size); returns new data_ids."""
     src_id = f'{size}-{family}-sampled'
     src_dir = DATA_DIR / src_id
@@ -186,11 +255,10 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
         source = {k: z[k] for k in z.files}
     B = source['y'].shape[0]
     idx = selectIndices(B, cfg.n_datasets, cfg.seed)
-    conditions = cfg.conditions if cfg.conditions is not None else list(CONDITIONS)
     created = []
 
     # --- baseline: correct prior, slice of the original data + its NUTS fits (no refits)
-    base_id = f'{size}-{family}-{BASE_TAG}'
+    base_id = f'{size}-{family}-{cfg.base_tag}'
     base_dir = DATA_DIR / base_id
     if base_dir.exists() and not cfg.overwrite:
         logger.info('%s: exists - skipping (use --overwrite)', base_id)
@@ -199,14 +267,23 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
         np.savez_compressed(base_dir / 'test.npz', **_dropStaleKeys(source, idx))
         copyReferenceFit(test_path, base_dir / 'test.npz', idx)
         writeConfig(
-            src_dir, base_dir, base_id, cfg.n_datasets, BASE_TAG, 1.0, 0.0, False, idx, cfg.seed
+            src_dir,
+            base_dir,
+            base_id,
+            cfg.n_datasets,
+            cfg.base_tag,
+            Condition(),
+            None,
+            idx,
+            cfg.seed,
         )
         logger.info('%s: baseline written (%d datasets)', base_id, cfg.n_datasets)
     created.append(base_id)
 
     # --- perturbed conditions: rewritten prior, fresh NUTS fits required
-    for tag in conditions:
-        scale, shift, rotate = CONDITIONS[tag]
+    for tag in cfg.conditions:
+        cond = CONDITIONS[tag]
+        pinned = pinnedScales(cond, trained) if cond.pin is not None else None
         data_id = f'{size}-{family}-{tag}'
         out_dir = DATA_DIR / data_id
         created.append(data_id)
@@ -223,19 +300,12 @@ def generateCombo(cfg: argparse.Namespace, family: str, size: str) -> list[str]:
             if stale:
                 logger.warning('%s: removed %d stale fit file(s)', data_id, len(stale))
         batch = _dropStaleKeys(source, idx)
-        perturbPrior(batch, scale, shift, rotate)
+        perturbPrior(batch, cond, pinned)
         out_dir.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(out_dir / 'test.npz', **batch)
-        writeConfig(
-            src_dir, out_dir, data_id, cfg.n_datasets, tag, scale, shift, rotate, idx, cfg.seed
-        )
+        writeConfig(src_dir, out_dir, data_id, cfg.n_datasets, tag, cond, pinned, idx, cfg.seed)
         logger.info(
-            '%s: written (τ×%g, ν+%gτ, rotate=%s, %d datasets)',
-            data_id,
-            scale,
-            shift,
-            rotate,
-            cfg.n_datasets,
+            '%s: written (%s, pinned=%s, %d datasets)', data_id, cond, pinned, cfg.n_datasets
         )
     return created
 
@@ -272,16 +342,18 @@ def printCommands(
 def main() -> None:
     cfg = setup()
     setupLogging(cfg.verbosity)
-    conditions = cfg.conditions if cfg.conditions is not None else list(CONDITIONS)
-
     if cfg.print_commands:
-        printCommands(cfg.families, cfg.sizes, conditions, cfg.n_datasets)
+        printCommands(cfg.families, cfg.sizes, cfg.conditions, cfg.n_datasets)
         return
 
     created = []
     for family in cfg.families:
+        pins = any(CONDITIONS[tag].pin is not None for tag in cfg.conditions)
+        trained = trainedRange(family) if pins else None
+        if trained is not None:
+            logger.info('%s: trained scale range %s', family, trained)
         for size in cfg.sizes:
-            created += generateCombo(cfg, family, size)
+            created += generateCombo(cfg, family, size, trained)
     if not created:
         logger.error('No data dirs generated.')
         return
@@ -290,7 +362,7 @@ def main() -> None:
     for data_id in created:
         print(f'  {data_id}')
     print('\nNUTS fit campaign (baseline dirs reuse existing fits):')
-    printCommands(cfg.families, cfg.sizes, conditions, cfg.n_datasets)
+    printCommands(cfg.families, cfg.sizes, cfg.conditions, cfg.n_datasets)
 
 
 if __name__ == '__main__':
