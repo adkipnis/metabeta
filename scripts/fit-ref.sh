@@ -4,6 +4,8 @@
 #   scripts/fit-ref.sh --method nuts --level 2 --data_id small-n-sampled
 #   scripts/fit-ref.sh --method pathfinder --level 1 --data_id small-n-sampled --idx 3 17 42
 # Levels: nuts 0|1|2, pathfinder 0|1. --qos cpu_preemptible has its own job cap (200, vs 100).
+# --time and --mem override the per-method defaults. The tasks run the code of METABETA_ROOT
+# (default ~/metabeta), so a second checkout submits with METABETA_ROOT set to itself.
 
 set -euo pipefail
 
@@ -15,6 +17,9 @@ QOS="cpu_normal"
 WARM=""
 N_DATASETS=512
 IDX_VALUES=()
+TIME_ARG=""
+MEM="16G"
+METABETA_ROOT="${METABETA_ROOT:-$HOME/metabeta}"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -25,6 +30,8 @@ while [[ $# -gt 0 ]]; do
         --qos) QOS="$2"; shift 2 ;;
         --warm) WARM="$2"; shift 2 ;;
         --n_datasets) N_DATASETS="$2"; shift 2 ;;
+        --time) TIME_ARG="$2"; shift 2 ;;
+        --mem) MEM="$2"; shift 2 ;;
         --idx)
             shift
             while [[ $# -gt 0 && "$1" != --* ]]; do
@@ -51,6 +58,7 @@ case "$METHOD" in
     advi|pathfinder|laplace) CPUS=1; TIME="06:00:00" ;;
     *) echo "Unknown method: $METHOD" >&2; exit 1 ;;
 esac
+TIME="${TIME_ARG:-$TIME}"
 for value in "${IDX_VALUES[@]}"; do
     [[ "$value" =~ ^[0-9]+$ ]] || { echo "Invalid idx value: $value" >&2; exit 1; }
 done
@@ -82,7 +90,8 @@ if [[ -z "${SLURM_ARRAY_TASK_ID:-}" ]]; then
         --qos="$QOS" \
         --nodes=1 \
         --cpus-per-task="$CPUS" \
-        --mem=16G \
+        --mem="$MEM" \
+        --export=ALL,METABETA_ROOT="$METABETA_ROOT" \
         --time="$TIME" \
         "$0" --method "$METHOD" --level "$LEVEL" --data_id "$TAG" --partition "$PARTITION" \
             ${WARM:+--warm "$WARM"} "${MAP_ARGS[@]}"
@@ -105,7 +114,7 @@ case "$FAM_NAME" in
     *) echo "Unknown family letter: $FAM_NAME (use n, b, or p)" >&2; exit 1 ;;
 esac
 
-source "$HOME/metabeta/scripts/pymc-run.sh"
+source "$METABETA_ROOT/scripts/pymc-run.sh"
 [[ -n "$WARM" ]] && tar xf "$WARM" -C "$PYTENSOR_DIR"
 echo "warm cache: ${WARM:-none}"
 runPymc python metabeta/simulation/fit.py --size "$SIZE" --family "$FAMILY" --ds_type "$DS_TYPE" \

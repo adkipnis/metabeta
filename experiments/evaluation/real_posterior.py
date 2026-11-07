@@ -27,6 +27,10 @@ Metrics (median ± MAD over datasets):
                wall time of every level tried), MB the batch-of-1 latency cached by
                runtimes.py (``--ds_type real``); the accuracy reference stays ``nuts2``
 
+r, σ-ratio and rank-MAD pool all active entries of a dataset, so with many groups the group
+effects dominate them. ``real_<run>_<data_id>_per_dataset.npz`` keeps every per-dataset value,
+pooled and per parameter block (ffx, sigma_rfx, sigma_eps, rfx), for subset analyses.
+
 Usage (from repo root):
     uv run python experiments/evaluation/real_posterior.py --checkpoint PATH
     uv run python experiments/evaluation/real_posterior.py --checkpoint PATH --prefix best --n_samples 512
@@ -171,14 +175,14 @@ def _weightedStd(p: Proposal) -> dict[str, torch.Tensor]:
     return out
 
 
-def _pooledMeans(
+def _blockMeans(
     mean: dict[str, torch.Tensor],
     b: int,
     mask_d: torch.Tensor | None,
     mask_q: torch.Tensor | None,
     group_mask: torch.Tensor,
-) -> np.ndarray:
-    """Posterior means for all active params of dataset b as a flat numpy array."""
+) -> dict[str, np.ndarray]:
+    """Posterior means of the active params of dataset b, one flat array per parameter block."""
     d_mask = (
         mask_d[b] if mask_d is not None else torch.ones(mean['ffx'].shape[-1], dtype=torch.bool)
     )
@@ -191,14 +195,25 @@ def _pooledMeans(
     # rfx mean[b]: (max_m, max_q) - select active groups then active columns
     mean_rfx = mean['rfx'][b][group_mask[b]][:, q_mask].ravel()
 
-    parts = [
-        mean['ffx'][b][d_mask].numpy(),
-        mean['sigma_rfx'][b][q_mask].numpy(),
-        mean_rfx.numpy(),
-    ]
+    parts = {
+        'ffx': mean['ffx'][b][d_mask].numpy(),
+        'sigma_rfx': mean['sigma_rfx'][b][q_mask].numpy(),
+        'rfx': mean_rfx.numpy(),
+    }
     if 'sigma_eps' in mean:
-        parts.append(mean['sigma_eps'][b].reshape(1).numpy())
-    return np.concatenate(parts)
+        parts['sigma_eps'] = mean['sigma_eps'][b].reshape(1).numpy()
+    return parts
+
+
+def _pooledMeans(
+    mean: dict[str, torch.Tensor],
+    b: int,
+    mask_d: torch.Tensor | None,
+    mask_q: torch.Tensor | None,
+    group_mask: torch.Tensor,
+) -> np.ndarray:
+    """Posterior means for all active params of dataset b as a flat numpy array."""
+    return np.concatenate(list(_blockMeans(mean, b, mask_d, mask_q, group_mask).values()))
 
 
 def computeCorr(
@@ -222,15 +237,15 @@ def computeCorr(
     return r_vals
 
 
-def _stdRatios(
+def _blockStdRatios(
     std_m: dict[str, torch.Tensor],
     std_n: dict[str, torch.Tensor],
     b: int,
     mask_d: torch.Tensor | None,
     mask_q: torch.Tensor | None,
     group_mask: torch.Tensor,
-) -> torch.Tensor:
-    """Per-active-entry std_method / std_nuts for dataset b as a flat tensor."""
+) -> dict[str, torch.Tensor]:
+    """Per-active-entry std_method / std_nuts for dataset b, one flat tensor per block."""
     d_mask = (
         mask_d[b] if mask_d is not None else torch.ones(std_m['ffx'].shape[-1], dtype=torch.bool)
     )
@@ -247,14 +262,28 @@ def _stdRatios(
     rfx_std_m = std_m['rfx'][b][group_mask[b]][:, q_mask]
     rfx_std_n = std_n['rfx'][b][group_mask[b]][:, q_mask]
 
-    parts: list[torch.Tensor] = [
-        _ratio(std_m['ffx'][b][d_mask], std_n['ffx'][b][d_mask]),
-        _ratio(std_m['sigma_rfx'][b][q_mask], std_n['sigma_rfx'][b][q_mask]),
-        _ratio(rfx_std_m, rfx_std_n).reshape(-1),
-    ]
+    parts = {
+        'ffx': _ratio(std_m['ffx'][b][d_mask], std_n['ffx'][b][d_mask]),
+        'sigma_rfx': _ratio(std_m['sigma_rfx'][b][q_mask], std_n['sigma_rfx'][b][q_mask]),
+        'rfx': _ratio(rfx_std_m, rfx_std_n).reshape(-1),
+    }
     if 'sigma_eps' in std_m:
-        parts.append(_ratio(std_m['sigma_eps'][b].reshape(1), std_n['sigma_eps'][b].reshape(1)))
-    return torch.cat(parts)
+        parts['sigma_eps'] = _ratio(
+            std_m['sigma_eps'][b].reshape(1), std_n['sigma_eps'][b].reshape(1)
+        )
+    return parts
+
+
+def _stdRatios(
+    std_m: dict[str, torch.Tensor],
+    std_n: dict[str, torch.Tensor],
+    b: int,
+    mask_d: torch.Tensor | None,
+    mask_q: torch.Tensor | None,
+    group_mask: torch.Tensor,
+) -> torch.Tensor:
+    """Per-active-entry std_method / std_nuts for dataset b as a flat tensor."""
+    return torch.cat(list(_blockStdRatios(std_m, std_n, b, mask_d, mask_q, group_mask).values()))
 
 
 def computeSigmaRatio(
@@ -318,59 +347,92 @@ def computeRankMAD(
     mask_d, mask_q, group_mask = _masks(batch)
     B = p_method.ffx.shape[0]
     mads = np.empty(B)
-    # only the method's marginal carries IS weights; NUTS draws are equal-weight targets
-    w_all = p_method.weights   # (B, S) or None
-
-    def _add_global(
-        all_fracs: list[np.ndarray],
-        mb_v: torch.Tensor,
-        nu_v: torch.Tensor,
-        b: int,
-        mask: torch.Tensor | None,
-        w_b: np.ndarray | None,
-    ) -> None:
-        mb_np, nu_np = mb_v[b].numpy(), nu_v[b].numpy()   # (S, D)
-        D = mb_np.shape[-1]
-        for di in range(D):
-            if mask is not None and not bool(mask[b, di]):
-                continue
-            w = None if w_b is None else w_b[None, :]
-            all_fracs.append(_rankFracs(mb_np[:, di][None, :], nu_np[:, di][None, :], w))
-
     for b in range(B):
-        all_fracs: list[np.ndarray] = []
-        w_b = w_all[b].numpy() if w_all is not None else None
-
-        _add_global(all_fracs, p_method.ffx, p_nuts.ffx, b, mask_d, w_b)
-        _add_global(all_fracs, p_method.sigma_rfx, p_nuts.sigma_rfx, b, mask_q, w_b)
-        if p_method.has_sigma_eps:
-            _add_global(
-                all_fracs,
-                p_method.sigma_eps.unsqueeze(-1),
-                p_nuts.sigma_eps.unsqueeze(-1),
-                b,
-                None,
-                w_b,
-            )
-
-        q_mask = (
-            mask_q[b].numpy().astype(bool)
-            if mask_q is not None
-            else np.ones(p_method.rfx.shape[-1], dtype=bool)
-        )
-        active_groups = group_mask[b].numpy().astype(bool)
-        if active_groups.any() and q_mask.any():
-            mb_rfx = p_method.rfx[b][active_groups].numpy()   # (m_active, S, q)
-            nu_rfx = p_nuts.rfx[b][active_groups].numpy()
-            m_active = mb_rfx.shape[0]
-            # same per-sample weights apply to every group of this dataset
-            w_rfx = None if w_b is None else np.broadcast_to(w_b[None, :], (m_active, w_b.shape[0]))
-            for k in np.flatnonzero(q_mask):
-                all_fracs.append(_rankFracs(mb_rfx[:, :, k], nu_rfx[:, :, k], w_rfx))
-
+        blocks = _blockRankFracs(p_method, p_nuts, b, mask_d, mask_q, group_mask)
+        all_fracs = [f for fracs in blocks.values() for f in fracs]
         mads[b] = _rankMADFromFracs(np.concatenate(all_fracs)) if all_fracs else np.nan
-
     return mads
+
+
+def _blockRankFracs(
+    p_method: Proposal,
+    p_nuts: Proposal,
+    b: int,
+    mask_d: torch.Tensor | None,
+    mask_q: torch.Tensor | None,
+    group_mask: torch.Tensor,
+) -> dict[str, list[np.ndarray]]:
+    """NUTS-in-method rank fracs of dataset b, a list of per-entry arrays per parameter block."""
+    # only the method's marginal carries IS weights; NUTS draws are equal-weight targets
+    w_b = p_method.weights[b].numpy() if p_method.weights is not None else None
+
+    def _global(mb_v: torch.Tensor, nu_v: torch.Tensor, mask: torch.Tensor | None) -> list:
+        mb_np, nu_np = mb_v[b].numpy(), nu_v[b].numpy()   # (S, D)
+        w = None if w_b is None else w_b[None, :]
+        return [
+            _rankFracs(mb_np[:, di][None, :], nu_np[:, di][None, :], w)
+            for di in range(mb_np.shape[-1])
+            if mask is None or bool(mask[b, di])
+        ]
+
+    blocks = {
+        'ffx': _global(p_method.ffx, p_nuts.ffx, mask_d),
+        'sigma_rfx': _global(p_method.sigma_rfx, p_nuts.sigma_rfx, mask_q),
+    }
+    if p_method.has_sigma_eps:
+        blocks['sigma_eps'] = _global(
+            p_method.sigma_eps.unsqueeze(-1), p_nuts.sigma_eps.unsqueeze(-1), None
+        )
+
+    blocks['rfx'] = []
+    q_mask = (
+        mask_q[b].numpy().astype(bool)
+        if mask_q is not None
+        else np.ones(p_method.rfx.shape[-1], dtype=bool)
+    )
+    active_groups = group_mask[b].numpy().astype(bool)
+    if active_groups.any() and q_mask.any():
+        mb_rfx = p_method.rfx[b][active_groups].numpy()   # (m_active, S, q)
+        nu_rfx = p_nuts.rfx[b][active_groups].numpy()
+        m_active = mb_rfx.shape[0]
+        # same per-sample weights apply to every group of this dataset
+        w_rfx = None if w_b is None else np.broadcast_to(w_b[None, :], (m_active, w_b.shape[0]))
+        for k in np.flatnonzero(q_mask):
+            blocks['rfx'].append(_rankFracs(mb_rfx[:, :, k], nu_rfx[:, :, k], w_rfx))
+    return blocks
+
+
+def computeBlockAgreement(
+    p_method: Proposal,
+    p_nuts: Proposal,
+    batch: dict[str, torch.Tensor],
+) -> dict[str, dict[str, np.ndarray]]:
+    """r, sigma-ratio and rank-MAD per parameter block: {block: {metric: (B,)}}.
+
+    The same per-dataset statistics as computeCorr, computeSigmaRatio and computeRankMAD,
+    restricted to one block (ffx, sigma_rfx, sigma_eps, rfx) instead of pooled over all
+    active entries. NaN where a dataset has no active entry in the block, and r is NaN for
+    a block with fewer than two entries (sigma_eps, sigma_rfx at q=1).
+    """
+    B = p_method.ffx.shape[0]
+    mask_d, mask_q, group_mask = _masks(batch)
+    mean_m, mean_n = _weightedMean(p_method), _weightedMean(p_nuts)
+    std_m, std_n = _weightedStd(p_method), _weightedStd(p_nuts)
+    names = ['ffx', 'sigma_rfx'] + (['sigma_eps'] if p_method.has_sigma_eps else []) + ['rfx']
+    out = {k: {m: np.full(B, np.nan) for m in ('r', 'sigma_ratio', 'rank_mad')} for k in names}
+    for b in range(B):
+        means_m = _blockMeans(mean_m, b, mask_d, mask_q, group_mask)
+        means_n = _blockMeans(mean_n, b, mask_d, mask_q, group_mask)
+        ratios = _blockStdRatios(std_m, std_n, b, mask_d, mask_q, group_mask)
+        fracs = _blockRankFracs(p_method, p_nuts, b, mask_d, mask_q, group_mask)
+        for k in names:
+            if len(means_m[k]) >= 2:
+                out[k]['r'][b] = np.corrcoef(means_m[k], means_n[k])[0, 1]
+            if ratios[k].numel() > 0:
+                out[k]['sigma_ratio'][b] = float(ratios[k].median())
+            if fracs[k]:
+                out[k]['rank_mad'][b] = _rankMADFromFracs(np.concatenate(fracs[k]))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -680,16 +742,21 @@ def evaluateReal(
         if tpd_arr is not None:
             delta_tpd = (tpd_arr.float() - nuts_tpd.float()).numpy()
 
-        rows.append(
-            _buildRow(
-                label=label,
-                r=computeCorr(p_method, p_nuts_ref, batch_sub),
-                sigma_ratio=computeSigmaRatio(p_method, p_nuts_ref, batch_sub),
-                rank_mad=computeRankMAD(p_method, p_nuts_ref, batch_sub),
-                delta_nll=(summary.per_dataset.loo_nll - nuts_nll).float().numpy(),
-                delta_tpd=delta_tpd,
-            )
-        )
+        values = {
+            'r': computeCorr(p_method, p_nuts_ref, batch_sub),
+            'sigma_ratio': computeSigmaRatio(p_method, p_nuts_ref, batch_sub),
+            'rank_mad': computeRankMAD(p_method, p_nuts_ref, batch_sub),
+            'delta_nll': (summary.per_dataset.loo_nll - nuts_nll).float().numpy(),
+        }
+        row = _buildRow(label=label, delta_tpd=delta_tpd, **values)
+        blocks = computeBlockAgreement(p_method, p_nuts_ref, batch_sub)
+        # per-dataset values, keyed by the dataset's index in test.npz, for subset analyses
+        row['per_dataset'] = {
+            'index': np.flatnonzero(secondary[label][2] if label in secondary else conv_full),
+            **values,
+            **{f'{k}/{m}': v for k, metrics in blocks.items() for m, v in metrics.items()},
+        }
+        rows.append(row)
 
     return rows
 
@@ -795,6 +862,19 @@ def saveTables(
         logger.info('Saved LaTeX -> %s', tex_path)
 
 
+def savePerDataset(rows: list[dict], outdir: Path, stem: str, data_id: str) -> None:
+    """Per-dataset metrics of every method, pooled and per parameter block, as one npz.
+
+    Keys are ``<method>/<metric>`` and ``<method>/<block>/<metric>``; ``<method>/index`` holds
+    the datasets' indices in test.npz.
+    """
+    outdir.mkdir(parents=True, exist_ok=True)
+    path = outdir / f'real_{stem}_{data_id}_per_dataset.npz'
+    arrays = {f'{r["method"]}/{k}': v for r in rows for k, v in r['per_dataset'].items()}
+    np.savez(path, **arrays)
+    logger.info('Saved per-dataset metrics -> %s', path)
+
+
 # ---------------------------------------------------------------------------
 # Main
 
@@ -854,6 +934,7 @@ def main() -> None:
         )
         if rows:
             rows_by_regime[regime] = rows
+            savePerDataset(rows, Path(cfg.outdir), f'{ckpt_dir.name}_{cfg.prefix}', data_id)
 
     if not rows_by_regime:
         logger.error('No regimes evaluated - check data_ids and checkpoint.')

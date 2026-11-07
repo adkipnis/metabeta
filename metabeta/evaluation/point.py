@@ -144,6 +144,8 @@ def getCorrelation(
                     corr[i] = float('nan')
                 else:
                     corr[i] = cast(np.float32, pearsonr(gt_i, est_i)[0])
+        elif len(gt) < 2 or gt.std().item() == 0 or est.std().item() == 0:
+            corr = np.float32('nan')
         else:
             corr = cast(np.float32, pearsonr(gt, est)[0])
         out[key] = torch.tensor(corr)

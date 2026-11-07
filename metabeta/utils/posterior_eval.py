@@ -126,6 +126,9 @@ def loadModel(
 
 def fitBatchMask(batch: dict[str, torch.Tensor], prefix: str) -> np.ndarray:
     """Boolean mask (shape B) of datasets whose ``{prefix}`` fit succeeded (all True if absent)."""
+    # a fit that failed on every dataset has no draws, so collateGrouped drops its failure flags
+    if f'{prefix}_ffx' not in batch:
+        return np.zeros(batch['X'].shape[0], dtype=bool)
     failed_key = f'{prefix}_failed'
     if failed_key not in batch:
         return np.ones(batch['X'].shape[0], dtype=bool)
