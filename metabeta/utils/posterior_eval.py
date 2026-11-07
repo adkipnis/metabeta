@@ -58,7 +58,9 @@ FAM_LETTER = {0: 'n', 1: 'b', 2: 'p'}
 # The SNIS/Laplace families set PSIS-smoothed IS weights (proposal.is_results);
 # the IMH family returns an equal-weight chain.
 SNIS_METHODS = ('is', 'isFull', 'isMarginal')          # ImportanceSampler
-LAPLACE_METHODS = ('isLaplace', 'rbAttach')            # LaplaceImportanceSampler (GLMM only)
+# LaplaceImportanceSampler (GLMM only); isIS2 swaps the Laplace marginal for its unbiased IS²
+# estimate, the exact target of imhPM's chain
+LAPLACE_METHODS = ('isLaplace', 'isIS2', 'rbAttach')
 # '<imh method>+moves': that IMH followed by local random-walk moves on the datasets whose IMH
 # min bulk ESS is below 150 (posthoc/metropolis.py, LocalMoves). Every setting is spelled out,
 # not taken from the Api's random_walk default or LocalMoves', so cached '+moves' refinements
@@ -369,13 +371,14 @@ def _refineChunk(
 
     if method in LAPLACE_METHODS:
         if lf == 0:
-            raise ValueError('isLaplace / rbAttach are for GLMMs (lf != 0); use isMarginal')
+            raise ValueError(f'{method} is for GLMMs (lf != 0); use isMarginal')
         sampler = LaplaceImportanceSampler(
             batch,
             attach_only=(method == 'rbAttach'),
             corr_prior=True,
             pareto=True,
             likelihood_family=lf,
+            n_inner=IS2_N_INNER if method == 'isIS2' else 0,
         )
         return sampler(base.slice_b(0, B))
 
