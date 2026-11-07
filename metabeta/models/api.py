@@ -1181,9 +1181,9 @@ class Api:
     ) -> tuple[Proposal, dict[str, Any]]:
         """Refine the flow posterior ('imh' or 'is') and compute the reliability flags.
 
-        Both methods target the exact rfx-marginalized posterior for Normal. For GLMMs, 'imh'
-        targets the exact posterior through a pseudo-marginal chain on unbiased IS² estimates
-        of the marginal likelihood, and 'is' targets its Laplace approximation. Each redraws
+        Both methods target the exact rfx-marginalized posterior for Normal. For GLMMs, both
+        use unbiased IS² estimates of the marginal likelihood, so both target the exact
+        posterior: 'imh' as a pseudo-marginal chain, 'is' as importance weights. Each redraws
         the rfx from the matching conditional, so the delivered draws form a consistent joint
         sample.
 
@@ -1226,6 +1226,7 @@ class Api:
                 pareto=True,
                 k_threshold=k_threshold,
                 likelihood_family=lf,
+                n_inner=IS2_N_INNER,  # the exact posterior, as the IMH chain's target
             )
         B = proposal.samples_g.shape[0]
         proposal = sampler(proposal)
@@ -1244,7 +1245,7 @@ class Api:
         proposal.subset(idx)
         proposal.is_results = {}
         return proposal, {
-            'refine_method': 'isMarginal' if lf == 0 else 'isLaplace',
+            'refine_method': 'isMarginal' if lf == 0 else 'isIS2',
             'psis_k': psis_k,
             'psis_k_threshold': k_threshold,
             'psis_fallback': fallback,
