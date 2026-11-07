@@ -1,5 +1,7 @@
-"""Group budget on simulated data: metabeta against NUTS and the truth in every cell of
-experiments/simulation/group_budget_sets.py.
+"""Group budget: metabeta against NUTS and the truth in every cell of
+experiments/simulation/group_budget_sets.py (simulated, tags gb...) and against NUTS in every
+cell of group_budget_real_sets.py (real data, tags gbr..., which have no truth, so
+evaluateRegime and the oracle grid are skipped).
 
 ``run`` evaluates one (family, cell) with the benchmark functions, unchanged and with their
 CLI defaults except 4000 draws and no latency cache: oracle_posterior.evaluateRegime scores
@@ -9,11 +11,13 @@ tables are written as the two scripts write them, and both draw MB from one cach
 full_real_diagnostics.diagnose runs on every dataset: the safeguards the Api reports (IMH
 acceptance, min ESS, pool k-hat against its thresholds), from a batch-of-one run as in the Api.
 
-``collect`` lays the per-cell outputs out as grids per family. Its only statistic is
-real_posterior's median ± MAD over datasets, applied to the per-block values it saved.
+``collect`` lays the per-cell outputs out as grids per family and kind of data. Its only
+statistic is real_posterior's median ± MAD over datasets, applied to the per-block values it
+saved.
 
 Usage from repo root:
     python experiments/evaluation/group_budget.py run --family n --cell gb200x3000
+    python experiments/evaluation/group_budget.py run --family n --cell gbr200x3000
     python experiments/evaluation/group_budget.py collect
 """
 
@@ -40,6 +44,8 @@ import oracle_posterior  # noqa: E402
 import real_posterior  # noqa: E402
 from build_ckpt import BEST_SEEDS, _ckpt_dir  # noqa: E402
 from full_real_diagnostics import diagnose  # noqa: E402
+from group_budget_real_sets import SOURCES  # noqa: E402
+from group_budget_real_sets import cellTag as realTag  # noqa: E402
 from group_budget_sets import CELLS, SIZE, cellTag  # noqa: E402
 
 OUT_DIR = RESULTS_DIR / 'group-budget'
@@ -48,6 +54,7 @@ PREFIX = 'latest'
 N_SAMPLES = 4000
 BUDGET = (200, 3000)
 BLOCKS = ('ffx', 'sigma_rfx', 'sigma_eps', 'rfx')
+TAGS = {'simulated': cellTag, 'real': realTag}
 
 
 def checkpoint(family: str) -> Path:
@@ -79,28 +86,28 @@ def run(cfg: argparse.Namespace) -> None:
     device = setDevice('cpu')
     model, mcfg = loadModel(ckpt, PREFIX, device)
     methods = posthocDefaults(lf)
-
-    setSeed(cfg.seed)
-    rows, rows_conv = oracle_posterior.evaluateRegime(
-        model,
-        data_path,
-        mcfg.max_d,
-        mcfg.max_q,
-        lf,
-        n_samples=N_SAMPLES,
-        batch_size=cfg.batch_size,
-        device=device,
-        regime=SIZE,
-        ckpt_dir=ckpt,
-        prefix=PREFIX,
-        seed=cfg.seed,
-        methods=methods,
-    )
     stem = f'{ckpt.name}_{data_id}'
-    oracle_posterior.saveTables({SIZE: rows}, OUT_DIR, stem)
-    if rows_conv:
-        oracle_posterior.saveTables({SIZE: rows_conv}, OUT_DIR, f'{stem}_conv')
-    out['oracle_rows'].write_text(json.dumps({'rows': rows, 'rows_conv': rows_conv}))
+    if not cfg.cell.startswith('gbr'):  # real data has no truth
+        setSeed(cfg.seed)
+        rows, rows_conv = oracle_posterior.evaluateRegime(
+            model,
+            data_path,
+            mcfg.max_d,
+            mcfg.max_q,
+            lf,
+            n_samples=N_SAMPLES,
+            batch_size=cfg.batch_size,
+            device=device,
+            regime=SIZE,
+            ckpt_dir=ckpt,
+            prefix=PREFIX,
+            seed=cfg.seed,
+            methods=methods,
+        )
+        oracle_posterior.saveTables({SIZE: rows}, OUT_DIR, stem)
+        if rows_conv:
+            oracle_posterior.saveTables({SIZE: rows_conv}, OUT_DIR, f'{stem}_conv')
+        out['oracle_rows'].write_text(json.dumps({'rows': rows, 'rows_conv': rows_conv}))
 
     setSeed(cfg.seed)
     real_rows = real_posterior.evaluateReal(
@@ -145,12 +152,12 @@ def cellLabel(m: int, n: int) -> list[str]:
     return [str(m), str(n), 'in' if inside else 'beyond']
 
 
-def collectFamily(family: str) -> str:
+def collectFamily(family: str, kind: str) -> str:
     head = ['groups', 'rows', 'budget', 'method']
     blocks = [b for b in BLOCKS if family == 'n' or b != 'sigma_eps']
     agree, sigma, rank, oracle, diag = [], [], [], [], []
     for m, n in CELLS:
-        out = paths(family, cellTag(m, n))
+        out = paths(family, TAGS[kind](m, n))
         label = cellLabel(m, n)
 
         npz = np.load(out['real'])
@@ -161,8 +168,8 @@ def collectFamily(family: str) -> str:
             sigma.append(row + [fmt(npz[f'{method}/{b}/sigma_ratio']) for b in blocks])
             rank.append(row + [fmt(npz[f'{method}/{b}/rank_mad']) for b in blocks])
 
-        saved = json.loads(out['oracle_rows'].read_text())
-        rows = saved['rows_conv'] or saved['rows']
+        saved = json.loads(out['oracle_rows'].read_text()) if kind == 'simulated' else None
+        rows = (saved['rows_conv'] or saved['rows']) if saved else []
         for r in rows:
             classes = [r['classes'].get(c, {}).get('NRMSE') for c in ('beta', 'sigma', 'alpha')]
             oracle.append(
@@ -188,18 +195,26 @@ def collectFamily(family: str) -> str:
 
     md = lambda rows, cols: tabulate(rows, headers=cols, tablefmt='pipe', stralign='right')
     name = FAMILIES[family][0]
+    if kind == 'real':
+        name = f'{name}, real data ({SOURCES[family].stem})'
     parts = [
         f'# Group budget, {name}: {SIZE} checkpoint {checkpoint(family).name}, s{N_SAMPLES}',
         '## Agreement with nuts2, pooled (real_posterior.py; median ± MAD over NUTS-converged '
         'datasets)\n\n' + md(agree, head + ['N', 'r', 'sigma ratio', 'rank-MAD', 'Delta LOO-NLL']),
         '## Sigma ratio per block\n\n' + md(sigma, head + ['N'] + blocks),
         '## Rank-MAD per block\n\n' + md(rank, head + ['N'] + blocks),
-        '## Against the truth (oracle_posterior.py; NUTS-converged rows where they differ; NRMSE '
-        'per class and pooled, EACE mean ± std over parameter dimensions, LOO-NLL median ± MAD)'
-        '\n\n'
-        + md(
-            oracle, head + ['NRMSE beta', 'NRMSE sigma', 'NRMSE alpha', 'NRMSE', 'EACE', 'LOO-NLL']
-        ),
+    ]
+    if oracle:
+        parts.append(
+            '## Against the truth (oracle_posterior.py; NUTS-converged rows where they differ; '
+            'NRMSE per class and pooled, EACE mean ± std over parameter dimensions, LOO-NLL '
+            'median ± MAD)\n\n'
+            + md(
+                oracle,
+                head + ['NRMSE beta', 'NRMSE sigma', 'NRMSE alpha', 'NRMSE', 'EACE', 'LOO-NLL'],
+            )
+        )
+    parts += [
         f'## Safeguards (full_real_diagnostics.diagnose; flags: acceptance < {IMH_ACCEPT_WARN}, '
         f'min ESS < {IMH_ESS_WARN}, pool k-hat > {PSIS_K_THRESHOLD})\n\n'
         + md(
@@ -212,15 +227,17 @@ def collectFamily(family: str) -> str:
 
 
 def collect() -> None:
-    for family in FAMILIES:
-        if not all(paths(family, cellTag(m, n))['diagnostics'].exists() for m, n in CELLS):
-            print(f'{family}: cells missing - skipped')
-            continue
-        report = collectFamily(family)
-        path = OUT_DIR / f'group_budget_{family}.md'
-        path.write_text(report)
-        print(report)
-        print(f'Saved -> {path}')
+    for kind, tag in TAGS.items():
+        for family in FAMILIES:
+            if not all(paths(family, tag(m, n))['diagnostics'].exists() for m, n in CELLS):
+                print(f'{family} ({kind}): cells missing - skipped')
+                continue
+            report = collectFamily(family, kind)
+            suffix = '' if kind == 'simulated' else '_real'
+            path = OUT_DIR / f'group_budget{suffix}_{family}.md'
+            path.write_text(report)
+            print(report)
+            print(f'Saved -> {path}')
 
 
 # fmt: off
@@ -228,7 +245,7 @@ def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument('stage', choices=['run', 'collect'])
     parser.add_argument('--family', choices=list(FAMILIES))
-    parser.add_argument('--cell', choices=[cellTag(m, n) for m, n in CELLS])
+    parser.add_argument('--cell', choices=[tag(m, n) for tag in TAGS.values() for m, n in CELLS])
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--verbosity', type=int, default=1)

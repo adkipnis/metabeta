@@ -177,8 +177,7 @@ def generateFamily(family: str, cfg: argparse.Namespace) -> None:
         writeCell(family, m, n, cells, cfg)
 
 
-def printCommands(families: list[str], n_datasets: int) -> None:
-    ids = [data_id for family in families for data_id in cellIds(family)]
+def printCommands(ids: list[str], n_datasets: int) -> None:
     print('# analytical statistics first: they are written into test.npz, which fits checksum')
     for data_id in ids:
         family = FAMILY_NAMES_REVERSE[data_id.split('-')[1]]
@@ -202,13 +201,14 @@ def printCommands(families: list[str], n_datasets: int) -> None:
 def main() -> None:
     cfg = setup()
     setupLogging(cfg.verbosity)
+    ids = [data_id for family in cfg.families for data_id in cellIds(family)]
     if cfg.print_commands:
-        printCommands(cfg.families, cfg.n_datasets)
+        printCommands(ids, cfg.n_datasets)
         return
     for family in cfg.families:
         generateFamily(family, cfg)
     if not cfg.dry_run:
-        printCommands(cfg.families, cfg.n_datasets)
+        printCommands(ids, cfg.n_datasets)
 
 
 if __name__ == '__main__':
