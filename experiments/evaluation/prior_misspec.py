@@ -89,7 +89,8 @@ CONDITIONS: list[tuple[str, str]] = [
 # one size only and alignSizes would cut the default pool down to it
 OUT_OF_SUPPORT: list[tuple[str, str]] = [
     ('oosbase', 'correct'),
-    ('oosA', 'τ=2×max'),
+    ('oosA11', 'τ=1.1×drawn max'),
+    ('oosA20', 'τ=2×drawn max'),
     ('oosB', 'ν+5τ'),
     ('oosC', 'τ=min/2'),
 ]

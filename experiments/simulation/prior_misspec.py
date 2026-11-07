@@ -9,11 +9,17 @@ the stored hyperparameters that define the fitted model are rewritten:
     ν+kτ        ν_ffx shifted by k prior SDs, k ∈ {1, 2} (location, not scale)
     family+1    prior families rotated (Normal<->Student-t, Half-Normal->Half-Student-t->Exp.)
 
-and, outside the trained range of the hyperparameters (opt-in via --conditions):
+and, at or outside the edge of the trained hyperparameters (opt-in via --conditions):
 
-    oosA        every scale set to twice the largest stored value of the training sets
+    oosA11      every scale set to 1.1 times the upper bound of its draw (DRAWN_MAX)
+    oosA20      every scale set to 2 times the upper bound of its draw
     oosB        ν_ffx shifted by 5 prior SDs
     oosC        every scale set to half the smallest stored value of the training sets
+
+oosA11 and oosA20 lie outside every scale the network saw for Bernoulli and Poisson outcomes,
+whose stored scales stay below the drawn bound. Gaussian scales are stored divided by sd(y), so
+their stored range reaches far beyond the drawn bound (tau_ffx up to 44): the two Gaussian
+conditions are rare scales in the tail of the trained range, not unseen ones.
 
 Because metabeta reads those fields as posterior context and ``utils/pymc.buildPymc`` reads
 them to construct the PyMC model, writing them into a data dir is enough to make *both*
@@ -41,7 +47,7 @@ Usage (from repo root):
     uv run python experiments/simulation/prior_misspec.py --n_datasets 32
     uv run python experiments/simulation/prior_misspec.py --print_commands
     uv run python experiments/simulation/prior_misspec.py --sizes medium --n_datasets 128 \
-        --conditions oosA oosB --base_tag oosbase
+        --conditions oosA11 oosA20 oosB oosC --base_tag oosbase
 
 After generation, produce NUTS fits per condition dir (cluster):
     scripts/fit-ref.sh --method nuts --level 2 --n_datasets 32 --data_id small-n-tau3
@@ -82,14 +88,16 @@ BASE_TAG = 'priorbase'
 class Condition(NamedTuple):
     """How one ds_type rewrites the stored prior.
 
-    Scales are multiplied by ``scale``, unless ``pin`` names an end of the trained range: then
-    every scale is set to ``scale`` times that end (see trainedRange), the same for all datasets.
+    Scales are multiplied by ``scale``, unless ``pin`` names a reference: then every scale is
+    set to ``scale`` times it, the same for all datasets.  'drawn' is the upper bound of the
+    scale's draw (DRAWN_MAX), 'min' the smallest stored value of the training sets
+    (trainedRange).
     """
 
     scale: float = 1.0
     shift: float = 0.0  # ν_ffx shift in units of τ_ffx
     rotate: bool = False  # rotate the prior families
-    pin: Literal['min', 'max'] | None = None
+    pin: Literal['drawn', 'min'] | None = None
 
 
 # ds_type tag -> condition; kept in step with the display labels in
@@ -100,11 +108,20 @@ CONDITIONS: dict[str, Condition] = {
     'mu1': Condition(shift=1.0),
     'mu2': Condition(shift=2.0),
     'famrot': Condition(rotate=True),
-    'oosA': Condition(scale=2.0, pin='max'),
+    'oosA11': Condition(scale=1.1, pin='drawn'),
+    'oosA20': Condition(scale=2.0, pin='drawn'),
     'oosB': Condition(shift=5.0),
     'oosC': Condition(scale=0.5, pin='min'),
 }
 DEFAULT_CONDITIONS = ['tau033', 'tau3', 'mu1', 'mu2', 'famrot']
+
+# Upper bounds of the scale draws in metabeta/simulation/prior.py:hypersample, in the units the
+# network sees (the stored, standardized values); the released checkpoints were trained on them.
+DRAWN_MAX: dict[str, dict[str, float]] = {
+    'n': {'tau_ffx': 4.0, 'tau_rfx': 5.0, 'tau_eps': 8.0},
+    'b': {'tau_ffx': 3.0, 'tau_rfx': 2.0},
+    'p': {'tau_ffx': 1.5, 'tau_rfx': 1.0},
+}
 
 # hyperparameters that define the fitted prior; everything else is copied verbatim
 SCALE_KEYS = ('tau_ffx', 'tau_rfx', 'tau_eps')
@@ -162,10 +179,17 @@ def trainedRange(family: str) -> dict[str, tuple[float, float]]:
     return {key: (lo[key], hi[key]) for key in hi}
 
 
-def pinnedScales(cond: Condition, trained: dict[str, tuple[float, float]]) -> dict[str, float]:
+def pinnedScales(
+    cond: Condition,
+    family: str,
+    trained: dict[str, tuple[float, float]] | None,
+) -> dict[str, float]:
     """The value every scale hyperparameter is set to under a pinned condition."""
-    end = 1 if cond.pin == 'max' else 0
-    return {key: cond.scale * bounds[end] for key, bounds in trained.items()}
+    if cond.pin == 'drawn':
+        refs = DRAWN_MAX[family]
+    else:
+        refs = {key: lo for key, (lo, _) in trained.items()}
+    return {key: cond.scale * ref for key, ref in refs.items()}
 
 
 def perturbPrior(
@@ -283,7 +307,7 @@ def generateCombo(
     # --- perturbed conditions: rewritten prior, fresh NUTS fits required
     for tag in cfg.conditions:
         cond = CONDITIONS[tag]
-        pinned = pinnedScales(cond, trained) if cond.pin is not None else None
+        pinned = pinnedScales(cond, family, trained) if cond.pin is not None else None
         data_id = f'{size}-{family}-{tag}'
         out_dir = DATA_DIR / data_id
         created.append(data_id)
@@ -348,8 +372,8 @@ def main() -> None:
 
     created = []
     for family in cfg.families:
-        pins = any(CONDITIONS[tag].pin is not None for tag in cfg.conditions)
-        trained = trainedRange(family) if pins else None
+        pins_min = any(CONDITIONS[tag].pin == 'min' for tag in cfg.conditions)
+        trained = trainedRange(family) if pins_min else None
         if trained is not None:
             logger.info('%s: trained scale range %s', family, trained)
         for size in cfg.sizes:
