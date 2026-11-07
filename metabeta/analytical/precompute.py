@@ -72,7 +72,9 @@ def run(path: Path, batch_size: int, device: torch.device) -> int:
         out['sigma_eps_est'] = np.zeros((N, 1), dtype=np.float32)
     else:
         out['phi_pearson'] = np.zeros(N, dtype=np.float32)
-    psi_buf = np.zeros((N, q_file, q_file), dtype=np.float32) if q_file >= 2 else None
+    # Psi also at q_file = 1: padToModel zero-pads it to the model's max_q, whose correlation
+    # input the network reads from stats whenever max_q >= 2
+    psi_buf = np.zeros((N, q_file, q_file), dtype=np.float32)
     has_psi = False
 
     dl = Dataloader(path, batch_size=batch_size, sortish=False, shuffle=False)
@@ -126,7 +128,7 @@ def run(path: Path, batch_size: int, device: torch.device) -> int:
             out['blup_est'][idx + b, :m_b] = blup[b, :m_b, :q_file]
             out['blup_var'][idx + b, :m_b] = blupv[b, :m_b, :q_file]
 
-        if psi_buf is not None and 'Psi' in stats:
+        if 'Psi' in stats:
             has_psi = True
             psi_buf[idx : idx + B] = stats['Psi'].cpu().numpy()[:B, :q_file, :q_file]
 
