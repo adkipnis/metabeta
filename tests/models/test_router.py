@@ -1301,7 +1301,7 @@ def test_router_imh_skips_local_flow_and_raw_flow_keeps_it(tmp_path: Path, monke
     assert not calls
 
     result = router.sample(_glmm_batch(d=4, q=2), n_samples=64, refine='is')
-    assert result.safeguards['refine_method'] == 'isLaplace'
+    assert result.safeguards['refine_method'] == 'isIS2'
     assert result.proposal.n_samples == 64
     assert not calls
 
