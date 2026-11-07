@@ -2,20 +2,22 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Hashable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar, overload
 import contextlib
 import math
 import operator
 import os
+import sys
 import warnings
 
 import numpy as np
 import pandas as pd
 import torch
 from tabulate import tabulate
+from tqdm import tqdm
 
 import metabeta
 from metabeta.datasets.preprocessor import DataPreprocessor, PreprocessReport
@@ -35,6 +37,7 @@ from metabeta.utils.constants import LIKELIHOOD_FAMILIES, hasSigmaEps
 from metabeta.utils.dataloader import (
     Dataloader,
     collateGrouped,
+    concatBatches,
     sliceBatch,
     toDevice,
     trimBatchPadding,
@@ -110,6 +113,14 @@ RANDOM_WALK_DEFAULT = {
 # wrapper sits between Api.sample and its caller)
 INTERNAL_PREFIXES = tuple(str(Path(m.__file__).parent) + os.sep for m in (metabeta, torch))
 
+# rows (dataset × prior) per chunk of ``sample`` when ``batch_size`` is None; the CUDA value is
+# measured in #42
+CHUNK_ROWS = {'cpu': 64, 'cuda': 256}
+# warnings list at most this many datasets or rows, then the count
+LISTED_ROWS = 10
+
+K = TypeVar('K', bound=Hashable)
+
 
 def mapZScores(
     proposal: 'Proposal',
@@ -166,6 +177,35 @@ class RouterResult:
     evidence: dict[str, Any] | None = None
 
 
+@dataclass
+class _Metadata:
+    """What a dataset's result carries beyond its rows: its parameter names, its scale
+    information, its group labels, and the permutation from the model's fixed-effect layout
+    (random slopes first) back to the formula's order."""
+
+    param_names: dict[str, list[str]] | None = None
+    scale_info: ScaleInfo | None = None
+    group_names: list[str] | None = None
+    ffx_order: list[int] | None = None
+
+
+@dataclass
+class _Prepared:
+    """One input dataset of ``sample`` after preparation and routing: its batch at its own
+    padding, whose rows are its priors, and its routes, validation and metadata (empty for
+    collated input)."""
+
+    label: Hashable
+    batch: dict[str, torch.Tensor]
+    routes: list[str]
+    validation: list[dict[str, Any]]
+    metadata: _Metadata
+
+    @property
+    def rows(self) -> int:
+        return int(self.batch['X'].shape[0])
+
+
 class Api:
     """Route dataloader-formatted datasets through a joint checkpoint.
 
@@ -211,8 +251,9 @@ class Api:
         device:
             Torch device the models run on, e.g. ``"cuda"`` for a GPU.
         batch_size:
-            Number of datasets ``sample`` refines at a time; ``None`` refines them all at
-            once.  Lower it if many large datasets run out of memory.
+            Rows (one dataset under one prior) ``sample`` runs at a time through every
+            stage, from the network pass to the diagnostics; ``None`` takes 64 rows on CPU
+            and 256 on CUDA.  Lower it if large datasets run out of memory.
         warmup:
             Build every submodel and run one discarded sampling pass on dummy data while
             loading, so the first ``sample`` call is as fast as later ones.  ``False`` loads
@@ -245,6 +286,8 @@ class Api:
     ) -> None:
         self.joint_checkpoint = Path(joint_checkpoint)
         self.device = torch.device(device)
+        if batch_size is not None and batch_size < 1:
+            raise ValueError(f'batch_size must be at least 1 or None (got {batch_size!r})')
         self.batch_size = batch_size
 
         payload = torch.load(self.joint_checkpoint, map_location='cpu', weights_only=True)
@@ -311,6 +354,9 @@ class Api:
         - Formula/prior handling turns numpy dictionaries into model datasets.
         - ``collateGrouped`` turns model datasets into the tensor batch consumed
           by the router and approximator.
+
+        A batch built from a formula carries the dataset's names, scale information and group
+        labels under ``_router_metadata``, next to the prior index and name of each row.
         """
 
         if stage not in {'preprocessed', 'dataset', 'batch'}:
@@ -357,7 +403,7 @@ class Api:
         if isinstance(data, Mapping) and isPreprocessedDict(data):
             if stage == 'preprocessed':
                 return {str(k): v for k, v in data.items()}
-            datasets = self._buildModelDatasets(
+            datasets, metadata = self._buildModelDatasets(
                 data,
                 formula=formula,
                 priors=priors,
@@ -367,6 +413,7 @@ class Api:
             if stage == 'dataset':
                 return datasets[0] if len(datasets) == 1 else datasets
             batch = self._collateForSelectedSubmodel(datasets)
+            batch['_router_metadata'] = metadata
             return returnPreparedStage(batch, stage)
 
         if not isinstance(data, Mapping):
@@ -381,6 +428,20 @@ class Api:
             raise TypeError('route requires data prepared to batch stage')
         routes, _ = self._routeBatch(batch)
         return routes
+
+    @overload
+    def sample(
+        self, data: list[pd.DataFrame] | tuple[pd.DataFrame, ...], **kwargs: Any
+    ) -> list[RouterResult | None]:
+        ...
+
+    @overload
+    def sample(self, data: Mapping[K, pd.DataFrame], **kwargs: Any) -> dict[K, RouterResult | None]:
+        ...
+
+    @overload
+    def sample(self, data: Any, **kwargs: Any) -> RouterResult:
+        ...
 
     @torch.no_grad()
     def sample(
@@ -397,8 +458,20 @@ class Api:
         seed: int | None = None,
         diagnostics: bool | None = None,  # deprecated alias of loo, removed in 0.7
         **prepare_kwargs: Any,
-    ) -> RouterResult:
+    ) -> RouterResult | list[RouterResult | None] | dict[Any, RouterResult | None]:
         """Sample from the posterior, routing each dataset to the smallest compatible submodel.
+
+        ``data`` is one dataset (a DataFrame, a parquet or ``.npz`` path, a preprocessed dict or a
+        collated batch) or many: a list, a tuple or a dict of DataFrames under one formula, one
+        set of priors and one preprocessing.  Many datasets return a list, or a dict with the
+        same keys, holding one result per dataset as ``sample(df)`` would return it, with its own
+        parameter names, scale information and group labels; datasets that need different
+        submodels run in one call.  A dataset that cannot be prepared (outside the checkpoint's
+        limits, a collinear named column, a term or prior name that does not resolve) is skipped:
+        ``None`` takes its place and one warning lists the skipped datasets with their reasons,
+        and if every dataset fails the first error is raised with the dataset named.  Unsupported
+        formula syntax and a wrong argument type raise at once.  Warnings name datasets by their
+        key or index, and by the pair of dataset and prior under several priors.
 
         By default (``refine=True``, i.e. ``refine='imh'``) the flow posterior is refined
         by Independence Metropolis-Hastings: the flow serves as the proposal of a Markov
@@ -453,7 +526,9 @@ class Api:
 
         ``seed`` seeds torch for this call only: two calls with one seed return the same draws,
         as after ``torch.manual_seed(seed)``, and the caller's CPU and CUDA random streams stay
-        as they were.
+        as they were.  It reproduces the call as a whole, so a dataset's draws differ between a
+        batched and a separate call, and between containers that order or size datasets
+        differently.
         """
 
         if diagnostics is not None:
@@ -467,52 +542,158 @@ class Api:
         method = {True: 'imh', False: None}.get(refine, refine)
         if method not in (None, 'imh', 'is'):
             raise ValueError(f"refine must be True, False, 'imh' or 'is' (got {refine!r})")
-        do_refine = method is not None and n_samples >= MIN_SAFEGUARD_SAMPLES
         if random_walk is not False and method != 'imh':
             raise ValueError("random_walk requires refine='imh'")
         if evidence and n_samples < MIN_SAFEGUARD_SAMPLES:
             raise ValueError(f'evidence=True needs n_samples >= {MIN_SAFEGUARD_SAMPLES}')
+        preset = 'cuda' if self.device.type == 'cuda' else 'cpu'
         moves = None
         if method == 'imh' and random_walk:
-            preset = RANDOM_WALK_DEFAULT['cuda' if self.device.type == 'cuda' else 'cpu']
-            moves = preset if random_walk is True else random_walk
+            moves = RANDOM_WALK_DEFAULT[preset] if random_walk is True else random_walk
+        if n_samples < MIN_SAFEGUARD_SAMPLES:
+            method = None
 
-        self._param_names: dict[str, list[str]] | None = None
-        self._scale_info: 'ScaleInfo | None' = None
-        self._group_labels: list[str] | None = None
-        self._ffx_order: list[int] | None = None
+        labels = _asContainer(data)
+        container = labels is not None
+        frames = [data[label] for label in labels] if container else [data]
+        prepared = self._prepareDatasets(
+            labels if container else [0], frames, container, prepare_kwargs
+        )
+
+        # every stage runs per chunk of at most batch_size rows; a chunk holds whole datasets of
+        # one submodel, sorted by size, and is cut inside a dataset only when it alone exceeds
+        # the chunk, so a result joins one slice in the common case
+        order = sorted(prepared, key=lambda label: self._sizeKey(prepared[label]))
+        chunks = _cutChunks(prepared, order, self.batch_size or CHUNK_ROWS[preset])
+        pieces: dict[Hashable, list[dict[str, Any]]] = {label: [] for label in prepared}
+        results: dict[Hashable, RouterResult] = {}
+        n_rows = sum(item.rows for item in prepared.values())
+        # a one-chunk call shows no bar; otherwise `disable` stays unset so TQDM_DISABLE applies
+        silent = {'disable': True} if len(chunks) == 1 else {}
+        with _seeded(seed), tqdm(total=n_rows, unit='dataset', leave=False, **silent) as bar:
+            for chunk in chunks:
+                batch = self._chunkBatch(prepared, chunk)
+                routes = [route for label, _, _ in chunk for route in prepared[label].routes]
+                out = self._sampleChunk(
+                    batch,
+                    routes,
+                    n_samples=n_samples,
+                    method=method,
+                    k_threshold=k_threshold,
+                    map_z_threshold=map_z_threshold,
+                    moves=moves,
+                    evidence=evidence,
+                    loo=loo,
+                )
+                offset = 0
+                for label, start, end in chunk:
+                    pieces[label].append(_sliceRows(out, offset, offset + end - start))
+                    offset += end - start
+                    if end == prepared[label].rows:  # its last slice: free the chunk's tensors
+                        results[label] = self._assembleResult(
+                            prepared[label], pieces.pop(label), prepare_kwargs
+                        )
+                bar.update(offset)
+
+        ordered = [results[label] for label in prepared]  # input order
+        self._warnSafeguards(
+            _flagRows(ordered, 'safeguards'),
+            _flagRows(ordered, 'evidence'),
+            _rowLabels(list(prepared.values()), with_dataset=container),
+        )
+        if not container:
+            return results[0]
+        if isinstance(data, Mapping):
+            return {label: results.get(label) for label in labels}
+        return [results.get(label) for label in labels]
+
+    def _prepareDatasets(
+        self,
+        labels: list[Hashable],
+        frames: list[Any],
+        container: bool,
+        prepare_kwargs: dict[str, Any],
+    ) -> dict[Hashable, _Prepared]:
+        """Prepare and route each dataset on its own, by label.  A ``ValueError`` or
+        ``KeyError`` raised for one dataset of a container skips it (absent from the result, one
+        warning per call); other errors raise at once, and so does the first error when every
+        dataset fails.  Preparation warnings are emitted once per message with the datasets
+        that raised them."""
+        prepared: dict[Hashable, _Prepared] = {}
+        skipped: list[tuple[Hashable, Exception]] = []
+        noted: dict[tuple[type, str], list[Hashable]] = {}
+        caller = _callerFile()
+        for label, frame in zip(labels, frames):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter('always')
+                try:
+                    prepared[label] = self._prepareDataset(frame, label, prepare_kwargs)
+                except (ValueError, KeyError) as exc:
+                    skipped.append((label, exc))
+            for w in caught:
+                if w.filename == caller:  # metabeta's own, aimed at the caller: once per message
+                    noted.setdefault((w.category, str(w.message)), []).append(label)
+                else:  # a library's: back under the caller's filters, from where it was raised
+                    warnings.warn_explicit(w.message, w.category, w.filename, w.lineno)
+        if not prepared:
+            label, exc = skipped[0]
+            if container:
+                exc.add_note(f'raised while preparing dataset {label!r}')
+            raise exc
+        for (category, message), who in noted.items():
+            text = f'dataset(s) {_listed(who)}: {message}' if container else message
+            warnings.warn(text, category, skip_file_prefixes=INTERNAL_PREFIXES)
+        if skipped:
+            reasons = [
+                f'  {label!r}: {str(exc).splitlines()[0]}' for label, exc in skipped[:LISTED_ROWS]
+            ]
+            if len(skipped) > LISTED_ROWS:
+                reasons.append(f'  … {len(skipped)} in all')
+            warnings.warn(
+                f'Skipped {len(skipped)} of {len(labels)} dataset(s) that could not be prepared '
+                '(None in their place):\n' + '\n'.join(reasons),
+                skip_file_prefixes=INTERNAL_PREFIXES,
+            )
+        return prepared
+
+    def _prepareDataset(
+        self, data: Any, label: Hashable, prepare_kwargs: dict[str, Any]
+    ) -> _Prepared:
+        """One dataset prepared to a batch at its own padding, validated and routed."""
         batch = self.prepareData(data, **prepare_kwargs)
         if not isinstance(batch, dict) or not isCollatedBatch(batch):
             raise TypeError('sample requires data prepared to batch stage')
+        metadata = batch.pop('_router_metadata', _Metadata())
         self._validateBatchFormat(batch)
         routes, validation = self._routeBatch(batch)
-        batch = toDevice(batch, self.device)
-        # IMH consumes the first `burnin` steps of each chain, so over-draw the flow
-        # pool to hand back exactly n_samples post-burn-in draws; both refinements redraw
-        # the rfx from their conditional, so the local posterior is skipped for them
-        pool = n_samples
-        if do_refine and method == 'imh':
-            pool = IMH_N_CHAINS * (math.ceil(n_samples / IMH_N_CHAINS) + IMH_BURNIN)
-        with _seeded(seed):
-            proposal, stats = self._runRouted(batch, routes, n_samples=pool, local=not do_refine)
-            safeguards: dict[str, Any] | None = None
-            if do_refine:
-                proposal, safeguards = self._refineAndCheck(
-                    proposal,
-                    batch,
-                    method=method,
-                    k_threshold=k_threshold,
-                    n_samples=n_samples,
-                    moves=moves,
-                )
-            log_ev = None
-            if evidence:
-                pool_k = safeguards['psis_k'] if safeguards else None
-                log_ev = self._evidence(proposal, batch, k_threshold=k_threshold, pool_k=pool_k)
-            if stats is not None and n_samples >= MIN_SAFEGUARD_SAMPLES:
-                map_check = self._mapConsistency(proposal, stats, batch, threshold=map_z_threshold)
-                safeguards = {**(safeguards or {}), **map_check}
-            diags = self._computeDiagnostics(proposal, batch, loo=loo)
+        for entry in validation:
+            entry['dataset'] = label
+        return _Prepared(label, toDevice(batch, self.device), routes, validation, metadata)
+
+    def _sizeKey(self, item: _Prepared) -> tuple[tuple[float, str], int, int]:
+        """Submodel, then number of groups, then largest group (the batch's own padding)."""
+        submodel = routingSortKey(self._submodel_by_id[item.routes[0]])
+        return submodel, item.batch['mask_n'].shape[1], item.batch['mask_n'].shape[2]
+
+    @staticmethod
+    def _chunkBatch(
+        items: dict[Hashable, _Prepared], chunk: list[tuple[Hashable, int, int]]
+    ) -> dict[str, torch.Tensor]:
+        """A chunk's batch at its own padding: the slices of its datasets' batches, joined.
+        A formula batch is at its own padding already; a slice of collated input (a Dataloader
+        batch) keeps its parent's and shrinks."""
+        return trimBatchPadding(
+            concatBatches(
+                [sliceBatch(items[label].batch, start, end) for label, start, end in chunk]
+            )
+        )
+
+    def _assembleResult(
+        self, item: _Prepared, pieces: list[dict[str, Any]], prepare_kwargs: dict[str, Any]
+    ) -> RouterResult:
+        """One dataset's result from its slices of the chunk outputs."""
+        batch = item.batch
+        proposal, safeguards, log_ev, diags = self._joinChunks(pieces, batch)
         self._rescaleProposal(proposal, batch)
         prior_params: dict[str, np.ndarray] = {
             key: batch[key].float().cpu().numpy()
@@ -522,36 +703,190 @@ class Api:
         for key in ('family_ffx', 'family_sigma_rfx', 'family_sigma_eps'):
             if key in batch:
                 prior_params[key] = batch[key].long().cpu().numpy()
-        self._restoreFixedOrder(proposal, prior_params, diags, safeguards)
-        ns_arr = batch['ns'].cpu().numpy() if 'ns' in batch else None
+        meta = item.metadata
+        self._restoreFixedOrder(proposal, prior_params, diags, safeguards, meta.ffx_order)
         return RouterResult(
             proposal=proposal,
-            routes=routes,
-            validation=validation,
+            routes=item.routes,
+            validation=item.validation,
             diagnostics=diags,
-            param_names=self._param_names,
+            param_names=meta.param_names,
             formula=prepare_kwargs.get('formula'),
             priors_str=_priorStr(prepare_kwargs.get('priors')),
-            group_names=self._group_labels,
+            group_names=meta.group_names,
             prior_params=prior_params or None,
-            scale_info=self._scale_info,
+            scale_info=meta.scale_info,
             batch=batch,
-            ns=ns_arr,
+            ns=batch['ns'].cpu().numpy() if 'ns' in batch else None,
             safeguards=safeguards,
             evidence=log_ev,
         )
 
-    def _restoreFixedOrder(
+    def _sampleChunk(
         self,
+        batch: dict[str, torch.Tensor],
+        routes: list[str],
+        *,
+        n_samples: int,
+        method: str | None,
+        k_threshold: float,
+        map_z_threshold: float,
+        moves: LocalMoves | None,
+        evidence: bool,
+        loo: bool,
+    ) -> dict[str, Any]:
+        """Today's pipeline on one chunk: network pass, refinement (``method`` None skips it),
+        evidence, MAP check and per-row diagnostics.  Returns the chunk's proposal and its
+        per-row numbers and flags; ``_joinChunks`` concatenates them and ``_warnSafeguards``
+        turns the flags into warnings."""
+        # IMH consumes the first `burnin` steps of each chain, so over-draw the flow
+        # pool to hand back exactly n_samples post-burn-in draws; both refinements redraw
+        # the rfx from their conditional, so the local posterior is skipped for them
+        pool = n_samples
+        if method == 'imh':
+            pool = IMH_N_CHAINS * (math.ceil(n_samples / IMH_N_CHAINS) + IMH_BURNIN)
+        proposal, stats = self._runRouted(batch, routes, n_samples=pool, local=method is None)
+        safeguards: dict[str, Any] | None = None
+        if method is not None:
+            proposal, safeguards = self._refineAndCheck(
+                proposal,
+                batch,
+                method=method,
+                k_threshold=k_threshold,
+                n_samples=n_samples,
+                moves=moves,
+            )
+        log_ev = None
+        if evidence:
+            pool_k = safeguards['psis_k'] if safeguards else None
+            log_ev = self._evidence(proposal, batch, k_threshold=k_threshold, pool_k=pool_k)
+        if stats is not None and n_samples >= MIN_SAFEGUARD_SAMPLES:
+            map_check = self._mapConsistency(proposal, stats, batch, threshold=map_z_threshold)
+            safeguards = {**(safeguards or {}), **map_check}
+        diags = self._computeDiagnostics(proposal, batch, loo=loo)
+        return {'proposal': proposal, 'safeguards': safeguards, 'evidence': log_ev, 'diags': diags}
+
+    def _joinChunks(
+        self, chunks: list[dict[str, Any]], batch: dict[str, torch.Tensor]
+    ) -> tuple[Proposal, dict[str, Any] | None, dict[str, Any] | None, dict[str, Any]]:
+        """Join the chunks' outputs in row order: the proposal at the batch's group count, the
+        safeguards and evidence row by row, and the diagnostics with the posterior predictive
+        and the fit aggregates of the whole."""
+        proposals = [c['proposal'] for c in chunks]
+        proposal = proposals[0] if len(proposals) == 1 else concatProposalsBatch(proposals)
+        proposal = proposal.resizeGroups(batch['mask_n'].shape[1])
+        joined = {
+            key: None if chunks[0][key] is None else _joinRows([c[key] for c in chunks])
+            for key in ('safeguards', 'evidence', 'diags')
+        }
+        diags = self._finishDiagnostics(proposal, batch, joined['diags'])
+        return proposal, joined['safeguards'], joined['evidence'], diags
+
+    @staticmethod
+    def _warnSafeguards(
+        safeguards: dict[str, Any] | None, evidence: dict[str, Any] | None, labels: list[Any]
+    ) -> None:
+        """At most one warning per type for the rows the safeguards flagged, named by their
+        ``labels``; values are printed for the first ``LISTED_ROWS`` of them."""
+
+        def warn(message: str) -> None:
+            warnings.warn(message, skip_file_prefixes=INTERNAL_PREFIXES)
+
+        def named(flagged: np.ndarray) -> tuple[np.ndarray, str]:
+            return flagged[:LISTED_ROWS], _listed([labels[i] for i in flagged])
+
+        sg = safeguards or {}
+        if 'accept_flag' in sg:
+            a_bar, ess_min, ran = sg['accept_rate'], sg['ess_min'], sg['random_walk_ran']
+            # where the random-walk moves ran, they continued the chains these two warnings describe
+            flagged, names = named(np.flatnonzero(sg['accept_flag'] & ~ran))
+            if flagged.size:
+                a_vals = ', '.join(f'{a_bar[i]:.2f}' for i in flagged)
+                s_vals = ', '.join(f'{int(sg["suggested_n_samples"][i])}' for i in flagged)
+                respectively = ' (respectively)' if flagged.size > 1 else ''
+                warn(
+                    f'Low IMH acceptance for dataset(s) {names}: {a_vals} < '
+                    f'{sg["accept_threshold"]:g}.\n'
+                    'The network is far from the posterior, so the intervals can be too narrow. '
+                    'Remedies, in order:\n'
+                    f'  1. more draws: n_samples of at least {s_vals}{respectively}\n'
+                    '  2. exact MCMC, e.g. NUTS'
+                )
+            ess_low = np.flatnonzero(sg['ess_flag'] & ~ran)
+            flagged, names = named(ess_low)
+            if flagged.size:
+                e_vals = ', '.join(f'{ess_min[i]:.0f}' for i in flagged)
+                low = ess_low[ess_min[ess_low] < IMH_ESS_NUTS]
+                caveat = f' (may not suffice for {named(low)[1]})' if low.size else ''
+                warn(
+                    f'Low effective sample size (ESS) for dataset(s) {names}: min ESS '
+                    f'{e_vals} < {sg["ess_threshold"]:g}.\n'
+                    'The IMH chains repeat few draws, so the intervals can be too narrow. '
+                    'Remedies, in order:\n'
+                    '  1. more draws (n_samples)\n'
+                    f'  2. random_walk=True{caveat}\n'
+                    '  3. exact MCMC, e.g. NUTS'
+                )
+            # the moves replace the ESS warning, except where the IMH left them too little to work with
+            low, names = named(np.flatnonzero(ran & (ess_min < IMH_ESS_NUTS)))
+            if low.size:
+                e_vals = ', '.join(f'{ess_min[i]:.0f}' for i in low)
+                warn(
+                    f'Very low IMH ESS before the random-walk moves for dataset(s) {names}: '
+                    f'{e_vals} < {IMH_ESS_NUTS:g}.\n'
+                    'The moves may not close the gap, so the intervals can still be too narrow.\n'
+                    'Remedy: check against exact MCMC, e.g. NUTS.'
+                )
+        if 'psis_fallback' in sg:
+            flagged, names = named(np.flatnonzero(sg['psis_fallback']))
+            if flagged.size:
+                k_vals = ', '.join(f'{sg["psis_k"][i]:.2f}' for i in flagged)
+                warn(
+                    f'PSIS reliability check failed for dataset(s) {names} '
+                    f'(k̂ = {k_vals} > {sg["psis_k_threshold"]:g}): the posterior approximation '
+                    'may be inaccurate and the importance correction is not applicable, so the '
+                    'raw posterior was returned there. Treat those results with caution and '
+                    'consider exact MCMC (e.g. NUTS) instead.'
+                )
+        if evidence is not None:
+            flagged, names = named(np.flatnonzero(evidence['psis_flag']))
+            if flagged.size:
+                pool_k = evidence['pool_psis_k']
+                k_max = (
+                    evidence['psis_k'] if pool_k is None else np.maximum(evidence['psis_k'], pool_k)
+                )
+                k_vals = ', '.join(f'{k_max[i]:.2f}' for i in flagged)
+                warn(
+                    f'Evidence reliability check failed for dataset(s) {names} '
+                    f'(PSIS k̂ of the evidence pass or the flow pool = {k_vals} > '
+                    f'{evidence["psis_k_threshold"]:g}): '
+                    'the log-evidence and any Bayes factor built on it may be inaccurate. Treat '
+                    'those values with caution and consider bridge sampling on exact MCMC (e.g. '
+                    'NUTS) draws instead.'
+                )
+        if 'map_z_flag' in sg:
+            flagged, names = named(np.flatnonzero(sg['map_z_flag']))
+            if flagged.size:
+                z_vals = ', '.join(f'{sg["map_z"][i]:.1f}' for i in flagged)
+                warn(
+                    f'MAP check failed for dataset(s) {names}: max |posterior mean − '
+                    f'MAP| / posterior SD = {z_vals} > {sg["map_z_threshold"]:g}.\n'
+                    'The posterior disagrees with the analytical point estimates, so the data may '
+                    'lie outside what the network was trained on.\n'
+                    'Remedy: exact MCMC, e.g. NUTS.'
+                )
+
+    @staticmethod
+    def _restoreFixedOrder(
         proposal: Proposal,
         prior_params: dict[str, np.ndarray],
         diags: dict[str, Any],
         safeguards: dict[str, Any] | None,
+        order: list[int] | None,
     ) -> None:
         """Permute the fixed-effect columns from the model's layout (random slopes first) back
         to the user's formula order. Padding columns stay in place, and ``result.batch`` keeps
         the model's layout."""
-        order = self._ffx_order
         if order is None or order == sorted(order):
             return
 
@@ -723,23 +1058,17 @@ class Api:
     def _computeDiagnostics(
         self, proposal: Proposal, batch: dict[str, torch.Tensor], *, loo: bool
     ) -> dict[str, Any]:
+        """Per-row diagnostics of one chunk; ``_finishDiagnostics`` adds the whole's aggregates."""
         lf = int(batch['likelihood_family'].flatten()[0].item())
         pp = _predictive.getPosteriorPredictive(proposal, batch, likelihood_family=lf)
 
-        b = int(batch['X'].shape[0])
         if lf == 0:
             vals = _predictive.posteriorPredictiveR2(pp, batch, w=proposal.weights)
-            fit = vals.item() if b == 1 else vals.mean().item()
-            fit_label = 'R²' if b == 1 else 'Mean R²'
         elif lf == 1:
             vals = _predictive.posteriorPredictiveAUC(pp, batch, w=proposal.weights)
-            fit = vals.item() if b == 1 else vals.mean().item()
-            fit_label = 'AUC' if b == 1 else 'Mean AUC'
         else:
             vals = _predictive.posteriorPredictiveDeviance(pp, batch, w=proposal.weights)
-            fit = vals.item() if b == 1 else vals.mean().item()
-            fit_label = 'Deviance' if b == 1 else 'Mean Deviance'
-        diags = {'fit': fit, 'fit_vals': vals, 'fit_label': fit_label, 'pp': pp}
+        diags = {'fit_vals': vals}
         if not loo:
             return diags
 
@@ -765,15 +1094,30 @@ class Api:
         }
         if proposal.has_sigma_eps:
             param_summary['sigma_eps'] = _summarize(proposal.sigma_eps, dim=-1)
-        agg = (lambda t: t.item()) if b == 1 else (lambda t: t.mean().item())
         return diags | {
             'ppc_nll': ppc_nll,
             'param_summary': param_summary,
-            'loo_nll': agg(loo_nll_vals),
             'loo_nll_vals': loo_nll_vals,
-            'pareto_k': agg(pareto_k_vals),
             'pareto_k_vals': pareto_k_vals,
         }
+
+    @staticmethod
+    def _finishDiagnostics(
+        proposal: Proposal, batch: dict[str, torch.Tensor], diags: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The posterior predictive of the whole and the fit aggregates over its rows."""
+        lf = int(batch['likelihood_family'].flatten()[0].item())
+        b = int(batch['X'].shape[0])
+        label = {0: 'R²', 1: 'AUC', 2: 'Deviance'}[lf]
+        agg = (lambda t: t.item()) if b == 1 else (lambda t: t.mean().item())
+        out = {
+            'fit': agg(diags['fit_vals']),
+            'fit_label': label if b == 1 else f'Mean {label}',
+            'pp': _predictive.getPosteriorPredictive(proposal, batch, likelihood_family=lf),
+        }
+        if 'loo_nll_vals' in diags:
+            out |= {'loo_nll': agg(diags['loo_nll_vals']), 'pareto_k': agg(diags['pareto_k_vals'])}
+        return diags | out
 
     def _validateParameterKeys(self, batch: Mapping[str, Any]) -> None:
         missing = [k for k in ('ffx', 'sigma_rfx', 'rfx') if k not in batch]
@@ -812,9 +1156,11 @@ class Api:
         """
         unique_ids = list(dict.fromkeys(routes))
         if len(unique_ids) != 1:
-            raise NotImplementedError(
-                'mixed-submodel sample is not yet supported; route one compatible '
-                'dataset family at a time'
+            # datasets given as DataFrames never share a chunk across submodels; the rows of one
+            # collated batch are padded alike and can only run on one
+            raise ValueError(
+                f'the rows of a collated batch route to different submodels {unique_ids}; pass '
+                'the datasets as a list or dict of DataFrames instead'
             )
         submodel_id = unique_ids[0]
         model = self.model(submodel_id)
@@ -822,32 +1168,6 @@ class Api:
         stats = model._dataStatistics(batch) if model.analytical_context else None
         proposal = model.estimate(batch, n_samples=n_samples, stats=stats, local=local)
         return proposal, stats
-
-    def _mapChunks(
-        self,
-        fn: Callable[[Proposal, dict[str, torch.Tensor]], Any],
-        proposal: Proposal,
-        batch: dict[str, torch.Tensor],
-    ) -> list[Any]:
-        """fn(proposal chunk, batch chunk) per chunk of ``self.batch_size`` datasets (when set),
-        each trimmed to its own padding; one call on the whole batch when it fits."""
-        B = proposal.samples_g.shape[0]
-        chunk_size = self.batch_size or B
-        if chunk_size >= B:
-            return [fn(proposal, batch)]
-        out = []
-        for start in range(0, B, chunk_size):
-            end = min(start + chunk_size, B)
-            chunk = trimBatchPadding(sliceBatch(batch, start, end))
-            base_chunk = proposal.slice_b(start, end).resizeGroups(chunk['mask_n'].shape[1])
-            out.append(fn(base_chunk, chunk))
-        return out
-
-    @staticmethod
-    def _joinChunks(chunks: list[Proposal], batch: dict[str, torch.Tensor]) -> Proposal:
-        if len(chunks) == 1:
-            return chunks[0]
-        return concatProposalsBatch(chunks).resizeGroups(batch['mask_n'].shape[1])
 
     def _refineAndCheck(
         self,
@@ -859,7 +1179,7 @@ class Api:
         n_samples: int,
         moves: LocalMoves | None = None,
     ) -> tuple[Proposal, dict[str, Any]]:
-        """Refine the flow posterior ('imh' or 'is') and run the reliability checks.
+        """Refine the flow posterior ('imh' or 'is') and compute the reliability flags.
 
         Both methods target the exact rfx-marginalized posterior for Normal. For GLMMs, 'imh'
         targets the exact posterior through a pseudo-marginal chain on unbiased IS² estimates
@@ -871,7 +1191,7 @@ class Api:
         proposals: asymptotically exact in the pool size, no weight-degeneracy failure
         mode.  Per-dataset acceptance, a suggested pool size and the bulk ESS per global
         parameter are reported; mean acceptance below ``IMH_ACCEPT_WARN`` or a minimum ESS
-        below ``IMH_ESS_WARN`` triggers a warning.  The post-burn-in
+        below ``IMH_ESS_WARN`` is flagged.  The post-burn-in
         draws are trimmed to exactly ``n_samples``.  ``moves`` (``LocalMoves``) runs random-walk
         moves where its gate says; the ESS stays the IMH chains' (the gate's statistic).  Both
         methods report the PSIS k̂ of the pool's weights ('psis_k'), which the evidence check
@@ -879,40 +1199,36 @@ class Api:
 
         'is' applies self-normalized importance sampling with PSIS smoothing; datasets
         with k̂ > ``k_threshold`` fall back to uniform weights (the raw flow globals, with
-        conditionally redrawn rfx) and are reported.  The weighted sample is systematically
+        conditionally redrawn rfx) and are flagged.  The weighted sample is systematically
         resampled back to ``n_samples`` equal-weight draws (an exact pass-through for
         fallback datasets).
 
-        Datasets are processed in chunks of ``self.batch_size`` (when set): the marginal
-        likelihood materialises a (b, m, n, s) tensor, so full batches OOM on large data.
+        The flags are emitted as warnings by ``_warnSafeguards`` once every chunk is done.
         """
         lf = int(batch['likelihood_family'].flatten()[0].item())
         if method == 'imh':
             return self._refineIMH(proposal, batch, lf=lf, n_samples=n_samples, moves=moves)
 
-        def _refineChunk(chunk_proposal: Proposal, chunk: dict[str, torch.Tensor]) -> Proposal:
-            if lf == 0:
-                sampler = ImportanceSampler(
-                    chunk,
-                    marginal=True,
-                    rb_redraw=True,
-                    corr_prior=True,
-                    pareto=True,
-                    k_threshold=k_threshold,
-                    likelihood_family=lf,
-                )
-            else:
-                sampler = LaplaceImportanceSampler(
-                    chunk,
-                    corr_prior=True,
-                    pareto=True,
-                    k_threshold=k_threshold,
-                    likelihood_family=lf,
-                )
-            return sampler(chunk_proposal)
-
+        if lf == 0:
+            sampler = ImportanceSampler(
+                batch,
+                marginal=True,
+                rb_redraw=True,
+                corr_prior=True,
+                pareto=True,
+                k_threshold=k_threshold,
+                likelihood_family=lf,
+            )
+        else:
+            sampler = LaplaceImportanceSampler(
+                batch,
+                corr_prior=True,
+                pareto=True,
+                k_threshold=k_threshold,
+                likelihood_family=lf,
+            )
         B = proposal.samples_g.shape[0]
-        proposal = self._joinChunks(self._mapChunks(_refineChunk, proposal, batch), batch)
+        proposal = sampler(proposal)
         psis_k = proposal.is_results['pareto_k'].detach().float().cpu().numpy().copy()
         fallback = proposal.is_results['fallback'].detach().cpu().numpy().copy()
 
@@ -927,18 +1243,6 @@ class Api:
         ).clamp(max=proposal.samples_g.shape[-2] - 1)
         proposal.subset(idx)
         proposal.is_results = {}
-
-        if fallback.any():
-            flagged = np.flatnonzero(fallback)
-            k_vals = ', '.join(f'{psis_k[i]:.2f}' for i in flagged)
-            warnings.warn(
-                f'PSIS reliability check failed for dataset(s) {flagged.tolist()} '
-                f'(k̂ = {k_vals} > {k_threshold:g}): the posterior approximation may be '
-                'inaccurate and the importance correction is not applicable, so the raw '
-                'posterior was returned there. Treat those results with caution and '
-                'consider exact MCMC (e.g. NUTS) instead.',
-                skip_file_prefixes=INTERNAL_PREFIXES,
-            )
         return proposal, {
             'refine_method': 'isMarginal' if lf == 0 else 'isLaplace',
             'psis_k': psis_k,
@@ -956,33 +1260,22 @@ class Api:
         moves: LocalMoves | None = None,
     ) -> tuple[Proposal, dict[str, Any]]:
         """IMH-refine the flow posterior; see ``_refineAndCheck`` for the contract."""
-        n_steps = proposal.n_samples // IMH_N_CHAINS
-
-        def _imhChunk(
-            chunk_proposal: Proposal, chunk: dict[str, torch.Tensor]
-        ) -> tuple[Proposal, dict[str, Any]]:
-            sampler = MetropolisSampler(
-                chunk,
-                n_chains=IMH_N_CHAINS,
-                n_steps=n_steps,
-                burnin=IMH_BURNIN,
-                mode='marginal' if lf == 0 else 'laplace',
-                likelihood_family=lf,
-                # GLMMs: pseudo-marginal chain (unbiased IS² weights), i.e. the exact posterior
-                n_inner=0 if lf == 0 else IS2_N_INNER,
-                moves=moves,
-            )
-            return sampler(chunk_proposal)
-
-        parts = self._mapChunks(_imhChunk, proposal, batch)
-        proposal = self._joinChunks([p for p, _ in parts], batch)
+        sampler = MetropolisSampler(
+            batch,
+            n_chains=IMH_N_CHAINS,
+            n_steps=proposal.n_samples // IMH_N_CHAINS,
+            burnin=IMH_BURNIN,
+            mode='marginal' if lf == 0 else 'laplace',
+            likelihood_family=lf,
+            # GLMMs: pseudo-marginal chain (unbiased IS² weights), i.e. the exact posterior
+            n_inner=0 if lf == 0 else IS2_N_INNER,
+            moves=moves,
+        )
+        proposal, diag = sampler(proposal)
         accept, ess, ran, rw_accept = (
-            torch.cat([diag[k] for _, diag in parts])
-            for k in ('accept_rate', 'ess', 'moved', 'move_accept')
+            diag[k] for k in ('accept_rate', 'ess', 'moved', 'move_accept')
         )
-        pool_k = np.concatenate(
-            [psislw(diag['log_w'].cpu().double().numpy())[1] for _, diag in parts]
-        )
+        pool_k = psislw(diag['log_w'].cpu().double().numpy())[1]
         B = accept.shape[0]
         ran, ess = ran.numpy(), ess.numpy()  # ess (B, D_g): the IMH chains', NaN = padding
         with warnings.catch_warnings():
@@ -1001,47 +1294,6 @@ class Api:
         suggested = suggestPoolSize(accept)
         flag = (a_bar < IMH_ACCEPT_WARN).cpu().numpy()
         ess_flag = ess_min < IMH_ESS_WARN
-        # where the random-walk moves ran, they continued the chains these two warnings describe
-        flagged = np.flatnonzero(flag & ~ran)
-        if flagged.size:
-            a_vals = ', '.join(f'{a_bar[i]:.2f}' for i in flagged)
-            s_vals = ', '.join(f'{int(suggested[i])}' for i in flagged)
-            respectively = ' (respectively)' if flagged.size > 1 else ''
-            warnings.warn(
-                f'Low IMH acceptance for dataset(s) {flagged.tolist()}: {a_vals} < '
-                f'{IMH_ACCEPT_WARN:g}.\n'
-                'The network is far from the posterior, so the intervals can be too narrow. '
-                'Remedies, in order:\n'
-                f'  1. more draws: n_samples of at least {s_vals}{respectively}\n'
-                '  2. exact MCMC, e.g. NUTS',
-                skip_file_prefixes=INTERNAL_PREFIXES,
-            )
-        flagged = np.flatnonzero(ess_flag & ~ran)
-        if flagged.size:
-            e_vals = ', '.join(f'{ess_min[i]:.0f}' for i in flagged)
-            low = flagged[ess_min[flagged] < IMH_ESS_NUTS]
-            caveat = f' (may not suffice for {low.tolist()})' if low.size else ''
-            warnings.warn(
-                f'Low effective sample size (ESS) for dataset(s) {flagged.tolist()}: min ESS '
-                f'{e_vals} < {IMH_ESS_WARN:g}.\n'
-                'The IMH chains repeat few draws, so the intervals can be too narrow. '
-                'Remedies, in order:\n'
-                '  1. more draws (n_samples)\n'
-                f'  2. random_walk=True{caveat}\n'
-                '  3. exact MCMC, e.g. NUTS',
-                skip_file_prefixes=INTERNAL_PREFIXES,
-            )
-        # the moves replace the ESS warning, except where the IMH left them too little to work with
-        low = np.flatnonzero(ran & (ess_min < IMH_ESS_NUTS))
-        if low.size:
-            e_vals = ', '.join(f'{ess_min[i]:.0f}' for i in low)
-            warnings.warn(
-                f'Very low IMH ESS before the random-walk moves for dataset(s) {low.tolist()}: '
-                f'{e_vals} < {IMH_ESS_NUTS:g}.\n'
-                'The moves may not close the gap, so the intervals can still be too narrow.\n'
-                'Remedy: check against exact MCMC, e.g. NUTS.',
-                skip_file_prefixes=INTERNAL_PREFIXES,
-            )
         return proposal, {
             'refine_method': ('imhMarginal' if lf == 0 else 'imhPM') + ('+moves' if moves else ''),
             'accept_rate': a_bar.detach().float().cpu().numpy().copy(),
@@ -1068,21 +1320,10 @@ class Api:
         """Cross-check posterior means against the analytical MAP anchor.
 
         See ``mapZScores`` for the statistic.  Datasets whose max-z exceeds
-        ``threshold`` trigger a warning recommending exact MCMC.
+        ``threshold`` are flagged (``_warnSafeguards`` recommends exact MCMC there).
         """
         map_z = mapZScores(proposal, stats, batch)
         flag = map_z > threshold
-        if flag.any():
-            flagged = np.flatnonzero(flag)
-            z_vals = ', '.join(f'{map_z[i]:.1f}' for i in flagged)
-            warnings.warn(
-                f'MAP check failed for dataset(s) {flagged.tolist()}: max |posterior mean − MAP| '
-                f'/ posterior SD = {z_vals} > {threshold:g}.\n'
-                'The posterior disagrees with the analytical point estimates, so the data may lie '
-                'outside what the network was trained on.\n'
-                'Remedy: exact MCMC, e.g. NUTS.',
-                skip_file_prefixes=INTERNAL_PREFIXES,
-            )
         return {
             'map_z': map_z,
             'map_z_threshold': threshold,
@@ -1097,32 +1338,17 @@ class Api:
         k_threshold: float,
         pool_k: np.ndarray | None,
     ) -> dict[str, Any]:
-        """log p(y) per dataset from the unrescaled posterior, chunked like the refinement.
+        """log p(y) per dataset from the unrescaled posterior.
 
         A dataset is flagged where the PSIS k̂ of the t pass or of the flow pool's weights (pool_k,
         None without refinement) exceeds k_threshold: the t is fitted to draws that inherit the
         pool's gaps, which the t pass's own k̂ can miss.
         """
         lf = int(batch['likelihood_family'].flatten()[0].item())
-        parts = self._mapChunks(
-            lambda p, chunk: tEvidence(chunk, p, lf, proposal.n_samples), proposal, batch
-        )
-        log_ev, psis_k, eff = (
-            np.concatenate([p[k] for p in parts]) for k in ('log_ev', 'k', 'eff')
-        )
+        t_pass = tEvidence(batch, proposal, lf, proposal.n_samples)
+        log_ev, psis_k, eff = (t_pass[k] for k in ('log_ev', 'k', 'eff'))
         k_max = psis_k if pool_k is None else np.maximum(psis_k, pool_k)
         flag = k_max > k_threshold
-        if flag.any():
-            flagged = np.flatnonzero(flag)
-            k_vals = ', '.join(f'{k_max[i]:.2f}' for i in flagged)
-            warnings.warn(
-                f'Evidence reliability check failed for dataset(s) {flagged.tolist()} '
-                f'(PSIS k̂ of the evidence pass or the flow pool = {k_vals} > {k_threshold:g}): '
-                'the log-evidence and any Bayes factor built on it may be inaccurate. Treat '
-                'those values with caution and consider bridge sampling on exact MCMC (e.g. NUTS) '
-                'draws instead.',
-                skip_file_prefixes=INTERNAL_PREFIXES,
-            )
         return {
             'log_evidence': log_ev,
             'psis_k': psis_k,
@@ -1207,7 +1433,8 @@ class Api:
         priors: Any,
         likelihood_family: int | str | None,
         q: int | None,
-    ) -> list[dict[str, np.ndarray]]:
+    ) -> tuple[list[dict[str, np.ndarray]], _Metadata]:
+        """One model dataset per prior, and the dataset's metadata."""
         required = ('X', 'y', 'groups', 'columns', 'd', 'n', 'ns', 'm', 'y_type')
         missing = [key for key in required if key not in preprocessed]
         if missing:
@@ -1263,7 +1490,7 @@ class Api:
                 'suppress the fixed intercept with 0 +'
             )
         # the model sees the random slopes first, in the random term's order; every output
-        # is mapped back to the user's order (`fixed_names`) through `_ffx_order`
+        # is mapped back to the user's order (`fixed_names`) through `ffx_order`
         slope_indices = resolveFixedIndices([t for t in random_terms if t != '1'], columns)
         missing = [columns[idx] for idx in slope_indices if idx not in fixed_indices]
         if missing:
@@ -1274,16 +1501,14 @@ class Api:
         intercept = [-1] if spec.intercept else []  # -1 stands for the column of ones
         user_columns = intercept + fixed_indices
         model_columns = intercept + slope_indices + other_indices
-        self._ffx_order = [model_columns.index(idx) for idx in user_columns]
+        ffx_order = [model_columns.index(idx) for idx in user_columns]
         fixed_names = ['Intercept' if idx < 0 else columns[idx] for idx in user_columns]
         X_parts = [np.ones(len(y)) if idx < 0 else X_pre[:, idx] for idx in model_columns]
         X = np.column_stack(X_parts) if X_parts else np.empty((X_pre.shape[0], 0))
 
         Z = buildRandomDesign(X_pre, columns, random_terms)
         random_names = self._randomNames(random_terms, columns)
-        self._param_names = {'ffx': list(fixed_names), 'sigma_rfx': list(random_names)}
         levels = preprocessed.get('group_levels')  # the preprocessor's label of each group code
-        self._group_labels = None if levels is None else [str(v) for v in levels]
 
         # Build scale info for optional back-transformation to original X units
         x_means_meta = np.asarray(
@@ -1295,14 +1520,19 @@ class Api:
 
         si_means = [0.0 if idx < 0 else float(x_means_meta[idx]) for idx in user_columns]
         si_stds = [1.0 if idx < 0 else float(x_stds_meta[idx]) for idx in user_columns]
-        self._scale_info = ScaleInfo(
-            y_mean=y_mean_meta,
-            y_std=y_std_meta,
-            x_means=np.array(si_means),
-            x_stds=np.array(si_stds),
-            param_names=list(fixed_names),
-            random_names=list(random_names),
-            has_intercept=spec.intercept,
+        metadata = _Metadata(
+            param_names={'ffx': list(fixed_names), 'sigma_rfx': list(random_names)},
+            scale_info=ScaleInfo(
+                y_mean=y_mean_meta,
+                y_std=y_std_meta,
+                x_means=np.array(si_means),
+                x_stds=np.array(si_stds),
+                param_names=list(fixed_names),
+                random_names=list(random_names),
+                has_intercept=spec.intercept,
+            ),
+            group_names=None if levels is None else [str(v) for v in levels],
+            ffx_order=ffx_order,
         )
 
         actual_d = int(X.shape[-1])
@@ -1360,23 +1590,18 @@ class Api:
         for prior_index, (prior_name, prior_values) in enumerate(prior_variants):
             dataset = {**base, **prior_values}
             dataset['_router_prior_index'] = np.array(prior_index, dtype=np.int64)
-            dataset['_router_source_index'] = np.array(0, dtype=np.int64)
             if prior_name is not None:
                 dataset['_router_prior_name'] = np.array(prior_name)
             datasets.append(dataset)
-        return datasets
+        return datasets, metadata
 
     def _collateForSelectedSubmodel(
         self, datasets: list[dict[str, np.ndarray]]
     ) -> dict[str, torch.Tensor]:
-        tentative = collateGrouped(datasets)
+        """The batch of one dataset's priors, padded to the submodel they route to (the same
+        for every prior, as routing reads the dimensions only)."""
+        tentative = collateGrouped(datasets[:1])
         routes, _ = self._routeBatch(tentative)
-        if len(set(routes)) != 1:
-            raise NotImplementedError(
-                'mixed-submodel prior batches are not reassembled yet; use one compatible '
-                'dataset family at a time'
-            )
-
         selected = self._submodel_by_id[routes[0]]
         max_d = routeValue(selected, 'max_d')
         max_q = routeValue(selected, 'max_q')
@@ -1446,10 +1671,6 @@ class Api:
             [int(np.asarray(dataset['_router_prior_index']).item()) for dataset in datasets],
             dtype=torch.int64,
         )
-        batch['_router_source_index'] = torch.as_tensor(
-            [int(np.asarray(dataset['_router_source_index']).item()) for dataset in datasets],
-            dtype=torch.int64,
-        )
         batch['_router_prior_name'] = [
             str(np.asarray(dataset['_router_prior_name']).item())
             if '_router_prior_name' in dataset
@@ -1477,8 +1698,6 @@ class Api:
             }
             if '_router_prior_index' in batch:
                 report['prior_index'] = int(batch['_router_prior_index'][i].item())
-            if '_router_source_index' in batch:
-                report['source_index'] = int(batch['_router_source_index'][i].item())
             if '_router_prior_name' in batch:
                 report['prior_name'] = batch['_router_prior_name'][i]
             validation.append(report)
@@ -1494,7 +1713,9 @@ class Api:
                 return entry, failures_by_submodel
             failures_by_submodel[str(entry['id'])] = failures
         misfit = self._misfit(batch, i, failures_by_submodel)
-        raise ValueError(f"dataset {i} is outside the checkpoint's limits: {misfit}")
+        # a batch of one dataset names no row; sample labels its datasets itself
+        which = 'the dataset' if batch['X'].shape[0] == 1 else f'dataset {i}'
+        raise ValueError(f"{which} is outside the checkpoint's limits: {misfit}")
 
     def _misfit(
         self,
@@ -1975,7 +2196,6 @@ class Api:
         log_ev, log_ev_ref = result.evidence['log_evidence'], reference.evidence['log_evidence']
         log_bf = log_ev - log_ev_ref  # a one-row result broadcasts
         rows = result if len(log_ev) >= len(log_ev_ref) else reference
-        names = [entry.get('prior_name') for entry in rows.validation]
         return pd.DataFrame(
             {
                 'log BF': log_bf,
@@ -1983,7 +2203,7 @@ class Api:
                 'strength': [_bfStrength(b) for b in log_bf],
                 'PSIS k̂': np.maximum(result.evidence['psis_k'], reference.evidence['psis_k']),
             },
-            index=pd.Index(range(len(names)) if None in names else names, name='prior'),
+            index=pd.Index(_priorLabels(rows.validation), name='prior'),
         )
 
     def rfxSummary(
@@ -2109,6 +2329,130 @@ def _renamedArg(old: str, old_value: Any, new: str, new_value: Any) -> Any:
         skip_file_prefixes=INTERNAL_PREFIXES,
     )
     return old_value
+
+
+def _asContainer(data: Any) -> list[Hashable] | None:
+    """The labels (indices or keys) of a list, tuple or dict of DataFrames; None for one
+    dataset."""
+    if isinstance(data, (list, tuple)):
+        labels = list(range(len(data)))
+    elif isinstance(data, Mapping) and (
+        not data or any(isinstance(v, pd.DataFrame) for v in data.values())
+    ):
+        labels = list(data)
+    else:
+        return None
+    if not labels:
+        raise ValueError('sample needs at least one dataset')
+    other = [label for label in labels if not isinstance(data[label], pd.DataFrame)]
+    if other:
+        raise TypeError(
+            f'every dataset of a list, tuple or dict must be a DataFrame; dataset(s) '
+            f'{_listed(other)} are not'
+        )
+    return labels
+
+
+def _cutChunks(
+    items: dict[Hashable, _Prepared], order: list[Hashable], chunk_rows: int
+) -> list[list[tuple[Hashable, int, int]]]:
+    """Chunks of at most ``chunk_rows`` rows over the items in ``order``, as (label, start, end)
+    slices.  A chunk never mixes submodels, and a cut falls on an item boundary unless one
+    item alone has more rows than a chunk."""
+    chunks: list[list[tuple[Hashable, int, int]]] = []
+    route, rows = None, 0  # the open chunk's submodel and rows
+    for label in order:
+        item = items[label]
+        if item.rows > chunk_rows:
+            chunks += [
+                [(label, start, min(start + chunk_rows, item.rows))]
+                for start in range(0, item.rows, chunk_rows)
+            ]
+            route, rows = None, chunk_rows
+        elif rows + item.rows > chunk_rows or item.routes[0] != route:
+            chunks.append([(label, 0, item.rows)])
+            route, rows = item.routes[0], item.rows
+        else:
+            chunks[-1].append((label, 0, item.rows))
+            rows += item.rows
+    return chunks
+
+
+def _sliceRows(out: Any, start: int, end: int) -> Any:
+    """Rows [start, end) of a chunk's output: the proposal and its per-row arrays (numpy or
+    torch, nested dicts included); scalars and None pass through."""
+    if isinstance(out, Proposal):
+        return out.slice_b(start, end)
+    if isinstance(out, dict):
+        return {key: _sliceRows(value, start, end) for key, value in out.items()}
+    if (torch.is_tensor(out) or isinstance(out, np.ndarray)) and out.ndim:
+        return out[start:end]
+    return out
+
+
+def _joinRows(parts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Concatenate the chunks' per-row arrays (numpy or torch, nested dicts included) along
+    the row axis; scalars and None are the same in every chunk and come from the first."""
+    out = {}
+    for key, first in parts[0].items():
+        values = [part[key] for part in parts]
+        if isinstance(first, dict):
+            out[key] = _joinRows(values)
+        elif torch.is_tensor(first) and first.ndim:
+            out[key] = torch.cat(values)
+        elif isinstance(first, np.ndarray) and first.ndim:
+            out[key] = np.concatenate(values)
+        else:
+            out[key] = first
+    return out
+
+
+def _rowLabels(items: list[_Prepared], *, with_dataset: bool) -> list[Any]:
+    """How the warnings name each row, in the items' order: by its dataset label, or by the
+    pair of dataset label and prior (its name, else its index) when a dataset has several
+    priors.  A single dataset drops the dataset half, so its rows read as its priors."""
+    several = any(item.rows > 1 for item in items)
+    labels = []
+    for item in items:
+        for prior in _priorLabels(item.validation):
+            if not with_dataset:
+                labels.append(prior)
+            else:
+                labels.append((item.label, prior) if several else item.label)
+    return labels
+
+
+def _priorLabels(validation: list[dict[str, Any]]) -> list[Any]:
+    """Each row's prior by its name, else its index."""
+    return [
+        entry['index'] if entry.get('prior_name') is None else entry['prior_name']
+        for entry in validation
+    ]
+
+
+def _flagRows(results: list[RouterResult], attr: str) -> dict[str, Any] | None:
+    """The results' safeguards or evidence joined row by row for the warnings, which read the
+    per-row vectors only (``ess`` is (rows, globals) and differs in width across submodels)."""
+    parts = [getattr(result, attr) for result in results]
+    if parts[0] is None:
+        return None
+    return _joinRows([{k: v for k, v in part.items() if np.ndim(v) <= 1} for part in parts])
+
+
+def _callerFile() -> str:
+    """The file ``warnings.warn(..., skip_file_prefixes=INTERNAL_PREFIXES)`` attributes a
+    warning to: the first frame outside metabeta and torch."""
+    frame = sys._getframe(1)
+    while frame.f_back is not None and frame.f_code.co_filename.startswith(INTERNAL_PREFIXES):
+        frame = frame.f_back
+    return frame.f_code.co_filename
+
+
+def _listed(labels: list[Any]) -> str:
+    """A list of labels, cut after ``LISTED_ROWS`` with the count."""
+    if len(labels) <= LISTED_ROWS:
+        return str(labels)
+    return f'{str(labels[:LISTED_ROWS])[:-1]}, … {len(labels)} in all]'
 
 
 def _priorRow(result: RouterResult, prior_id: int | str) -> int:
