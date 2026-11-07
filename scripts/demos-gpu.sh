@@ -4,7 +4,7 @@
 # partition, QOS and GPU constraint go on the command line:
 #   mkdir -p logs/demos-gpu
 #   sbatch --partition gpu_p --qos gpu_normal --constraint h100_80gb \
-#       scripts/demos-gpu.sh demos/04-many-datasets.ipynb
+#       scripts/demos-gpu.sh demos/01-quickstart.ipynb
 
 #SBATCH --job-name=demos-gpu
 #SBATCH --output=logs/demos-gpu/%j.out
