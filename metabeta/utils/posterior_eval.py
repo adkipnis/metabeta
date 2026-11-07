@@ -141,7 +141,8 @@ def fit2proposal(batch: dict[str, torch.Tensor], prefix: str) -> Proposal:
         'global': {'samples': torch.cat(samples_g, dim=-1)},
         'local': {'samples': batch[f'{prefix}_rfx']},
     }
-    corr_rfx = batch.get(f'{prefix}_corr_rfx', None)
+    # fit.py stores a (1, 1) matrix for a random intercept, which has no correlations
+    corr_rfx = batch.get(f'{prefix}_corr_rfx') if batch[f'{prefix}_rfx'].shape[-1] >= 2 else None
     proposal = Proposal(proposed, has_sigma_eps=has_sigma_eps, corr_rfx=corr_rfx)
     proposal.tpd = batch[f'{prefix}_duration'].mean().item()
     return proposal
