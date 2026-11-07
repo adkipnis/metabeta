@@ -16,16 +16,18 @@ Designs:
 Every analysis prior lies inside the checkpoint's training prior (``checkTrainingRange``).
 
 Stages:
-  mb        simulate every trial and fit all of them in one batched ``Api.sample`` call; per
-            trial and prior, record the interval of `program`, the detection and the safeguards
-            (mb.csv) and the call's wall time (timing.json); export the first ``--n_nuts``
-            replicates of every cell as a fit.py batch (outputs/data/power-{name}/test.npz)
-            together with MB's draws of it
+  mb        simulate every trial and fit those of each cell in one batched ``Api.sample`` call
+            (``--refine is``: SNIS with IS² weights, the default; ``imh``: IMH with random-walk
+            moves); per trial and prior, record the interval of `program`, the detection and the
+            safeguards (mb.csv) and the calls' wall time (timing.json); export the first
+            ``--n_nuts`` replicates of every cell as a fit.py batch
+            (outputs/data/power-{name}/test.npz) together with MB's draws of it
   compare   after fit.py ran the NUTS ladder on that batch (scripts/power-nuts.sh): MB vs NUTS
             with the metrics of real_posterior.py (nuts2 reference on the datasets where it
-            converged, the composite nuts for time) and the detections of both (compare.csv)
+            converged, the composite nuts for time) and the detections of MB, nuts2 and the
+            composite nuts, a run independent of nuts2 below level 2 (compare.csv)
   report    power per cell with its Monte Carlo standard error, the exact power (gaussian) and
-            the pass criterion fixed before the run (report.md)
+            the pass criterion fixed before the NUTS results (report.md)
   figure    detection rate vs schools per prior, MB and NUTS (power_{name}.pdf)
 
 Usage (from repo root):
@@ -68,6 +70,21 @@ from real_posterior import _medianMad, computeCorr, computeRankMAD, computeSigma
 N_STUDENTS = 20
 SEED = 2026_11_07
 TIMING_TAG = 'nuts'  # NUTS time: the escalating composite, as in real_posterior.py
+# Api's CUDA chunk of 256 rows (#42) holds 1,000 draws per row: a quarter of it at 4,000 draws
+CHUNK_ROWS = 64
+# per-row safeguards of Api.sample, recorded where the refinement returns them: IMH (the
+# random-walk moves where its ESS is low) or SNIS (PSIS k and the fallback to the raw flow)
+SAFEGUARDS = (
+    'accept_rate',
+    'accept_flag',
+    'ess_min',
+    'ess_flag',
+    'random_walk_ran',
+    'psis_k',
+    'psis_fallback',
+    'map_z',
+    'map_z_flag',
+)
 
 # the paper figures' colors and layout (prior_sensitivity.py): full text width at a 9 in canvas
 C_MB, C_NUTS = PALETTE[4], PALETTE[3]
@@ -80,6 +97,7 @@ WEAK = {
     'fixed': {'Intercept': {'nu': 0.0, 'tau': 1.5}, 'program': {'nu': 0.0, 'tau': 1.0}},
     'random_sd': {'Intercept': {'tau': 1.0}},
 }
+PRIOR_TITLES = {'weak': 'weakly informative', 'skeptical': 'skeptical'}
 SKEPTICAL = {
     'fixed': {'Intercept': {'nu': 0.0, 'tau': 1.5}, 'program': {'nu': 0.0, 'tau': 0.36}},
     'random_sd': {'Intercept': {'tau': 1.0}},
@@ -192,7 +210,9 @@ class PowerAnalysis:
         cfg, priors, formula = self.cfg, self.design['priors'], self.design['formula']
         device = torch.device(cfg.device)
         t0 = time.perf_counter()
-        mb = Api.from_pretrained(self.design['family'], device=device, verbose=False)
+        mb = Api.from_pretrained(
+            self.design['family'], device=device, batch_size=CHUNK_ROWS, verbose=False
+        )
         load_s = time.perf_counter() - t0
 
         trials = self.trials()
@@ -202,19 +222,24 @@ class PowerAnalysis:
                 mb.prepareData(first, formula=formula, priors={name: prior}, stage='dataset')
             )
 
-        # one call per effect, each timed end to end (preparation, chunked network passes,
-        # refinement): the proposals stay on the GPU, and 20,000 binary rows exceed 80 GiB
+        # one call per cell, each timed end to end (preparation, chunked network passes,
+        # refinement): the proposals stay on the GPU, and 10,000 binary rows at 1,000 draws
+        # already peaked at 52 GiB
         records, units, call_s = [], [], []
-        for effect in self.effects:
-            cell = {key: df for key, df in trials.items() if key[1] == effect}
+        for i, (m, effect) in enumerate(dict.fromkeys(key[:2] for key in trials)):
+            cell = {key: df for key, df in trials.items() if key[:2] == (m, effect)}
             if device.type == 'cuda':
                 torch.cuda.synchronize()
             t0 = time.perf_counter()
-            results = mb.sample(cell, formula=formula, priors=priors, random_walk=True, seed=0)
+            results = mb.sample(
+                cell, formula=formula, priors=priors, n_samples=cfg.n_samples,
+                refine=cfg.refine, random_walk=cfg.refine == 'imh', seed=i,
+            )  # fmt: skip
             if device.type == 'cuda':
                 torch.cuda.synchronize()
             call_s.append(time.perf_counter() - t0)
-            print(f'sample: {len(cell)} trials x {len(priors)} priors in {call_s[-1]:.1f} s')
+            print(f'sample m={m} effect={effect:g}: {len(cell)} trials x {len(priors)} priors '
+                  f'in {call_s[-1]:.1f} s')  # fmt: skip
             records += [
                 r for key, res in results.items() for r in self._record(mb, key, res, cell[key])
             ]
@@ -235,6 +260,9 @@ class PowerAnalysis:
             'trials': len(trials),
             'rows': rows,
             'skipped': int(table['skipped'].sum()) // len(priors),
+            'refine': cfg.refine,
+            'n_samples': cfg.n_samples,
+            'batch_size': CHUNK_ROWS,
             'load_s': load_s,
             'call_s': call_s,
             'sample_s': sum(call_s),
@@ -273,14 +301,8 @@ class PowerAnalysis:
                     'mean': draws.mean(),
                     'sd': draws.std(),
                     'detect': bool(detects(lo, hi)),
-                    'accept_rate': sg['accept_rate'][row],
-                    'accept_flag': bool(sg['accept_flag'][row]),
-                    'ess_min': sg['ess_min'][row],
-                    'ess_flag': bool(sg['ess_flag'][row]),
-                    'random_walk_ran': bool(sg['random_walk_ran'][row]),
-                    'map_z': sg['map_z'][row],
-                    'map_z_flag': bool(sg['map_z_flag'][row]),
                 }
+                | {key: sg[key][row] for key in SAFEGUARDS if key in sg}
             )
         return out
 
@@ -325,9 +347,21 @@ class PowerAnalysis:
             local[i, : d.shape[0]] = d
         folder = self.batch_path.parent
         folder.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(self.batch_path, **aggregate(list(datasets)))
-        config = {'data_id': folder.name, 'likelihood_family': self.lf}
-        (folder / 'config.yaml').write_text(yaml.safe_dump(config))
+        batch = aggregate(list(datasets))
+        if self.batch_path.exists():
+            # fit.py may be reading the batch and its config (scripts/power-nuts.sh): a rerun
+            # with new draws keeps both, as long as they hold the same trials
+            with np.load(self.batch_path) as old:
+                same = set(old.files) == set(batch) and all(
+                    np.array_equal(old[k], v, equal_nan=v.dtype.kind == 'f')
+                    for k, v in batch.items()
+                )
+            if not same:
+                raise ValueError(f'{self.batch_path} holds other trials: move it away first')
+        else:
+            np.savez_compressed(self.batch_path, **batch)
+            config = {'data_id': folder.name, 'likelihood_family': self.lf}
+            (folder / 'config.yaml').write_text(yaml.safe_dump(config))
         np.savez_compressed(
             folder / 'mb_draws.npz',
             samples_g=np.stack(draws_g),  # (N, S, D)
@@ -375,10 +409,13 @@ class PowerAnalysis:
                 dataset_chunk_size=4,
             )  # fmt: skip
             loo[label] = summary.per_dataset.loo_nll.float().numpy()
-            q = torch.quantile(p.ffx[..., 1].float(), torch.tensor([0.025, 0.975]), dim=-1)
-            units.loc[conv, f'{label}_lo'] = q[0].numpy()
-            units.loc[conv, f'{label}_hi'] = q[1].numpy()
-            units.loc[conv, f'{label}_detect'] = detects(q[0].numpy(), q[1].numpy())
+            self._detections(units, conv, label, p)
+        # the noise floor of the detections: the composite nuts below level 2 is a run
+        # independent of nuts2 with as many draws as MB (4,000)
+        p_comp = fit2proposal(batch, TIMING_TAG)
+        p_comp.rescale(batch['sd_y'])
+        self._detections(units, conv, 'comp', p_comp)
+        units.loc[units.nuts_level == 2, ['comp_lo', 'comp_hi', 'comp_detect']] = np.nan
         units.loc[conv, 'r'] = computeCorr(p_mb, p_nuts, batch)
         units.loc[conv, 'sigma_ratio'] = computeSigmaRatio(p_mb, p_nuts, batch)
         units.loc[conv, 'rank_mad'] = computeRankMAD(p_mb, p_nuts, batch)
@@ -386,6 +423,15 @@ class PowerAnalysis:
         units['delta_tpd'] = float(mb_tpd) - units['nuts_duration']
         units.to_csv(self.outdir / 'compare.csv', index=False)
         print(f'{conv.sum()}/{len(conv)} units with a converged {REFERENCE_TAG}')
+
+    @staticmethod
+    def _detections(units: pd.DataFrame, rows: np.ndarray, label: str, p: Proposal) -> None:
+        """The 95% interval of `program` and its detection, one proposal dataset per row."""
+        q = torch.quantile(p.ffx[..., 1].float(), torch.tensor([0.025, 0.975]), dim=-1)
+        lo, hi = q[0].numpy(), q[1].numpy()  # (B,)
+        units.loc[rows, f'{label}_lo'] = lo
+        units.loc[rows, f'{label}_hi'] = hi
+        units.loc[rows, f'{label}_detect'] = detects(lo, hi)
 
     # -------------------------------------------------------------------------
     # Report
@@ -397,12 +443,11 @@ class PowerAnalysis:
 
         fitted = mb[~mb.skipped]
         cells = fitted.groupby(['effect', 'm', 'prior'], sort=True)
+        flags = [key for key in SAFEGUARDS if key.endswith(('_flag', '_ran', '_fallback'))]
         table = cells.agg(
             trials=('detect', 'size'),
             power=('detect', 'mean'),
-            moves_ran=('random_walk_ran', 'mean'),
-            accept_flag=('accept_flag', 'mean'),
-            map_z_flag=('map_z_flag', 'mean'),
+            **{key: (key, 'mean') for key in flags if key in fitted},
         )
         table['mc_se'] = np.sqrt(table.power * (1 - table.power) / table.trials)
         table['skipped'] = mb[mb.skipped].groupby(['effect', 'm', 'prior']).size()
@@ -426,10 +471,12 @@ class PowerAnalysis:
         print('\n'.join(lines))
 
     def _agreement(self, units: pd.DataFrame) -> list[str]:
-        """Pass criterion (fixed 2026-11-07): per m, odds ratio and prior, the paired MB - NUTS
-        difference in detection rate within 2 SE and >= 95% agreeing detections; type I error of
-        the weakly informative prior in [0.025, 0.075] (Bradley, 1978). Plus real_posterior.py's
-        metrics, median and MAD over units."""
+        """Pass criterion (fixed 2026-11-07, agreement amended before the binary NUTS results):
+        per m, odds ratio and prior, the paired MB - NUTS difference in detection rate within
+        2 SE, and MB's agreement with nuts2 not below the NUTS-vs-NUTS floor (the composite's
+        agreement with nuts2 on the same units) by more than 2 SE of the paired difference;
+        type I error of the weakly informative prior in [0.025, 0.075] (Bradley, 1978). Plus
+        real_posterior.py's metrics, median and MAD over units."""
         conv = units[units.converged].copy()
         conv['diff'] = conv.mb_detect.astype(float) - conv.nuts_detect.astype(float)
         conv['agree'] = conv.mb_detect == conv.nuts_detect
@@ -443,7 +490,16 @@ class PowerAnalysis:
         )
         table['diff_se'] = cells['diff'].std() / np.sqrt(table.units)
         table['diff_ok'] = table['diff'].abs() <= 2 * table.diff_se.fillna(0)
-        table['agree_ok'] = table.agree >= 0.95
+
+        floor = conv[conv.comp_detect.notna()].copy()
+        floor['comp_agree'] = floor.comp_detect.astype(bool) == floor.nuts_detect
+        floor['gap'] = floor.agree.astype(float) - floor.comp_agree.astype(float)
+        cells = floor.groupby(['effect', 'm', 'prior'])
+        table['floor_units'] = cells.size()
+        table['floor'] = cells.comp_agree.mean()
+        table['agree_gap'] = cells.gap.mean()
+        table['agree_gap_se'] = cells.gap.std() / np.sqrt(table.floor_units)
+        table['agree_ok'] = table.agree_gap >= -2 * table.agree_gap_se.fillna(0)
         table['not_converged'] = units[~units.converged].groupby(['effect', 'm', 'prior']).size()
         table['not_converged'] = table['not_converged'].fillna(0).astype(int)
 
@@ -508,16 +564,20 @@ class PowerAnalysis:
                             p.index, p, yerr=2 * se, fmt='o', color=C_NUTS, mfc=mfc, ms=4.5, lw=1
                         )
                     if self.lf == 1 and ax is axes[0, -1]:
-                        label = (
-                            'type I error (OR 1)' if effect == null else f'power (OR {effect:g})'
-                        )
-                        y = 0.12 if effect == null else power.iloc[-1] - 0.12
-                        ax.text(self.m[-1], y, label, ha='right', va='center', color='0.25')
+                        if effect == null:  # right end, above the 0.05 line
+                            ax.text(self.m[-1], 0.12, 'type I error (OR 1)', ha='right',
+                                    va='center', color='0.25')  # fmt: skip
+                        else:  # below the curve's middle, clear of the NUTS error bars
+                            mid = self.m[len(self.m) // 2]
+                            ax.text(mid, power[mid] - 0.15, f'power (OR {effect:g})', ha='left',
+                                    va='top', color='0.25')  # fmt: skip
                 for level in (0.05, 0.8):
                     ax.axhline(level, color='0.6', lw=0.8, ls=':', zorder=0)
-                title = 'default priors' if prior is None else (
-                    f'{name} prior, program ~ N(0, {prior["fixed"]["program"]["tau"]:g})'
-                )  # fmt: skip
+                if prior is None:
+                    title = 'default priors'
+                else:
+                    tau = prior['fixed']['program']['tau']
+                    title = f'{PRIOR_TITLES[name]} prior, program ~ N(0, {tau:g})'
                 ax.set(title=title, xlabel='schools per trial', xticks=self.m, ylim=(0, 1))
             axes[0, 0].set_ylabel('trials detecting the effect')
             fig.legend(
@@ -542,6 +602,8 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--m', type=int, nargs='+', default=None, help='Numbers of schools (default: the design)')
     parser.add_argument('--effects', type=float, nargs='+', default=None, help='Effects (default: the design)')
     parser.add_argument('--n_nuts', type=int, default=0, help='Replicates per cell exported for NUTS')
+    parser.add_argument('--refine', type=str, default='is', choices=['is', 'imh'], help='SNIS with IS² weights, or IMH with random-walk moves')
+    parser.add_argument('--n_samples', type=int, default=4000, help='MB draws per posterior (the composite NUTS keeps 4000)')
     parser.add_argument('--device', type=str, default='cpu')
     parser.add_argument('--outdir', type=str, default=str(RESULTS_DIR / 'power_analysis'))
     return parser.parse_args()
