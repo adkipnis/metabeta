@@ -20,10 +20,17 @@ Rows are selected here, not with Subsampler, whose labels do not follow its rows
 cell's source row indices go to source_rows.npz beside its test.npz, and every label is checked
 to cover exactly one source group before anything is written.
 
+--extend adds the cells (600, 3000) and (600, 9000) of group_budget_sets.py without touching the
+sets above. It rebuilds the masters, checks them against the written sets, and adds to each 200
+groups of 15 shuffled rows, drawn at random from the source groups with >= 15 rows that the
+master does not hold. Predictors and Gaussian outcomes are standardized anew on the extended
+master; the prior stays the master's.
+
 Usage from repo root:
     python experiments/simulation/group_budget_real_sets.py --dry_run
     python experiments/simulation/group_budget_real_sets.py
     python experiments/simulation/group_budget_real_sets.py --print_commands
+    python experiments/simulation/group_budget_real_sets.py --extend
 """
 
 import argparse
@@ -31,7 +38,20 @@ import logging
 
 import numpy as np
 import yaml
-from group_budget_sets import CELLS, SIZE, D, Q, cellNs, printCommands
+from group_budget_sets import (
+    CELLS,
+    EXT_CELLS,
+    EXT_ENTROPY,
+    EXT_M,
+    EXT_NI,
+    SIZE,
+    D,
+    Q,
+    cellNs,
+    cellRows,
+    checkWritten,
+    printCommands,
+)
 
 from metabeta.simulation import hypersample
 from metabeta.simulation.generate import Generator
@@ -59,8 +79,8 @@ def cellTag(m: int, n: int) -> str:
     return f'gbr{m}x{n}'
 
 
-def cellIds(family: str) -> list[str]:
-    return [f'{SIZE}-{family}-{cellTag(m, n)}' for m, n in CELLS]
+def cellIds(family: str, cells: list[tuple[int, int]] = CELLS) -> list[str]:
+    return [f'{SIZE}-{family}-{cellTag(m, n)}' for m, n in cells]
 
 
 # fmt: off
@@ -71,6 +91,7 @@ def setup() -> argparse.Namespace:
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--dry_run', action='store_true', help='generate and check, write nothing')
     parser.add_argument('--print_commands', action='store_true', help='only print the fit campaign')
+    parser.add_argument('--extend', action='store_true', help='the 3x cells from extended masters')
     parser.add_argument('--verbosity', type=int, default=1)
     return parser.parse_args()
 # fmt: on
@@ -79,21 +100,16 @@ def setup() -> argparse.Namespace:
 def loadSource(family: str) -> dict[str, np.ndarray]:
     src = dict(np.load(SOURCES[family], allow_pickle=True))
     assert np.all(np.diff(src['groups']) >= 0), 'source groups must be sorted'
+    assert np.array_equal(np.unique(src['groups']), np.arange(len(src['ns'])))
     src['start'] = np.concatenate([[0], np.cumsum(src['ns'])[:-1]])
     src['name'] = SOURCES[family].stem
     return src
 
 
-def cellRows(ns: np.ndarray) -> np.ndarray:
-    """Master row indices taking the first ns[g] rows of master group g."""
-    start = np.concatenate([[0], np.cumsum(MASTER_NS)[:-1]])
-    return np.concatenate([start[g] + np.arange(k) for g, k in enumerate(ns)])
-
-
 def cell(master: dict[str, np.ndarray], m: int, n: int) -> dict[str, np.ndarray]:
     ns = cellNs(m, n)
-    assert np.all(ns <= MASTER_NS[:m])
-    rows = cellRows(ns)
+    assert np.all(ns <= master['ns'][:m])
+    rows = cellRows(ns, master['ns'])
     out = dict(master)
     out.update(
         X=master['X'][rows],
@@ -118,6 +134,41 @@ def sourceRows(rng: np.random.Generator, src: dict[str, np.ndarray]) -> np.ndarr
     )
 
 
+def constantCells(
+    x: np.ndarray, ns: np.ndarray, cells: list[tuple[int, int]]
+) -> list[tuple[int, int]]:
+    """The cells in which a column of x, a master's raw predictors, is constant."""
+    return [(m, n) for m, n in cells if np.any(x[cellRows(cellNs(m, n), ns)].std(0) == 0)]
+
+
+def assemble(
+    src: dict[str, np.ndarray], rows: np.ndarray, cols: np.ndarray, ns: np.ndarray, lf: int
+) -> dict[str, np.ndarray]:
+    """The data of a master from its source rows and columns, standardized on those rows."""
+    x = transformPredictors(
+        src['X'][rows][:, cols], axis=0, exclude_binary=True, transform_counts=True
+    )
+    x = np.concatenate([np.ones((len(x), 1)), x], axis=-1)
+    y = src['y'][rows]
+    sd_y = max(float(y.std()), 1e-6) if lf == 0 else 1.0
+    if lf == 0:
+        y = y / sd_y
+    return {
+        'y': y,
+        'X': x,
+        'groups': np.repeat(np.arange(len(ns)), ns),
+        'm': np.array(len(ns)),
+        'n': np.array(len(rows)),
+        'ns': ns,
+        'd': np.array(D),
+        'q': np.array(Q),
+        'sd_y': np.array(sd_y),
+        'source': np.array(src['name'], dtype=object),
+        'source_rows': rows,
+        'source_cols': cols,
+    }
+
+
 def drawMaster(
     seedseq: np.random.SeedSequence, src: dict[str, np.ndarray], lf: int
 ) -> tuple[dict[str, np.ndarray], int]:
@@ -127,41 +178,49 @@ def drawMaster(
         n_cols = src['X'].shape[1]
         cols = np.sort(rng.choice(n_cols, D - 1, replace=False))
         rows = sourceRows(rng, src)
-        x = src['X'][rows][:, cols]
-        constant = [(m, n) for m, n in CELLS if np.any(x[cellRows(cellNs(m, n))].std(0) == 0)]
+        constant = constantCells(src['X'][rows][:, cols], MASTER_NS, CELLS)
         if constant:
             logger.info('  redraw (constant predictor in cells %s)', constant)
             continue
-        x = transformPredictors(x, axis=0, exclude_binary=True, transform_counts=True)
-        x = np.concatenate([np.ones((len(x), 1)), x], axis=-1)
-        y = src['y'][rows]
-        sd_y = max(float(y.std()), 1e-6) if lf == 0 else 1.0
-        if lf == 0:
-            y = y / sd_y
         master = {
             'ffx': np.full(D, np.nan),
             'sigma_rfx': np.full(Q, np.nan),
             'corr_rfx': np.full((Q, Q), np.nan),
             'rfx': np.full((len(MASTER_NS), Q), np.nan),
             **{k: np.asarray(v) for k, v in hypersample(rng, D, Q, likelihood_family=lf).items()},
-            'y': y,
-            'X': x,
-            'groups': np.repeat(np.arange(len(MASTER_NS)), MASTER_NS),
-            'm': np.array(len(MASTER_NS)),
-            'n': np.array(len(rows)),
-            'ns': MASTER_NS,
-            'd': np.array(D),
-            'q': np.array(Q),
-            'sd_y': np.array(sd_y),
-            'source': np.array(src['name'], dtype=object),
-            'source_rows': rows,
-            'source_cols': cols,
+            **assemble(src, rows, cols, MASTER_NS, lf),
         }
         if hasSigmaEps(lf):
             master['sigma_eps'] = np.array(np.nan)
             master['r_squared'] = np.array(np.nan)
         return master, attempt
     raise RuntimeError(f'no valid master after {MAX_REDRAWS} draws')
+
+
+def extendMaster(
+    master: dict[str, np.ndarray],
+    seedseq: np.random.SeedSequence,
+    src: dict[str, np.ndarray],
+    lf: int,
+) -> tuple[dict[str, np.ndarray], int]:
+    """The master with EXT_M more source groups of EXT_NI rows and the number of redraws it took."""
+    held = np.unique(src['groups'][master['source_rows']])
+    pool = np.setdiff1d(np.flatnonzero(src['ns'] >= EXT_NI), held)
+    cols = master['source_cols']
+    ns = np.concatenate([master['ns'], np.full(EXT_M, EXT_NI)])
+    for attempt, seed in enumerate(seedseq.spawn(MAX_REDRAWS)):
+        rng = np.random.default_rng(seed)
+        members = rng.choice(pool, EXT_M, replace=False)
+        new = [src['start'][g] + rng.permutation(src['ns'][g])[:EXT_NI] for g in members]
+        rows = np.concatenate([master['source_rows'], *new])
+        constant = constantCells(src['X'][rows][:, cols], ns, EXT_CELLS)
+        if constant:
+            logger.info('  redraw extension (constant predictor in cells %s)', constant)
+            continue
+        ext = {**master, **assemble(src, rows, cols, ns, lf)}
+        ext['rfx'] = np.full((len(ns), Q), np.nan)
+        return ext, attempt
+    raise RuntimeError(f'no valid extension after {MAX_REDRAWS} draws')
 
 
 def checkLabels(cells: list[dict[str, np.ndarray]], src: dict[str, np.ndarray]) -> None:
@@ -173,7 +232,9 @@ def checkLabels(cells: list[dict[str, np.ndarray]], src: dict[str, np.ndarray]) 
         assert np.array_equal(np.bincount(c['groups']), c['ns'])
 
 
-def writeCell(family: str, m: int, n: int, cells: list[dict], cfg: argparse.Namespace) -> None:
+def writeCell(
+    family: str, m: int, n: int, cells: list[dict], cfg: argparse.Namespace, **meta
+) -> None:
     data_id = f'{SIZE}-{family}-{cellTag(m, n)}'
     out_dir = DATA_DIR / data_id
     path = out_dir / 'test.npz'
@@ -188,7 +249,7 @@ def writeCell(family: str, m: int, n: int, cells: list[dict], cfg: argparse.Name
         data_id=data_id,
         bs_test=len(cells),
         group_budget_cell=[m, n],
-        group_budget_master_ns=[[200, 30], [200, 15]],
+        **meta,
         group_budget_source=SOURCES[family].name,
         group_budget_seed=cfg.seed,
     )
@@ -209,19 +270,56 @@ def generateFamily(family: str, cfg: argparse.Namespace) -> None:
         master, redraws = drawMaster(seedseq, src, lf)
         logger.info('%s master %d: %d redraw(s)', family, i, redraws)
         masters.append(master)
+    if cfg.extend:
+        extendFamily(family, lf, src, masters, cfg)
+        return
     for m, n in CELLS:
         cells = [cell(master, m, n) for master in masters]
         checkLabels(cells, src)
         if cfg.dry_run:
             logger.info('%s cell (%d, %d): ok (dry run)', family, m, n)
             continue
-        writeCell(family, m, n, cells, cfg)
+        writeCell(family, m, n, cells, cfg, group_budget_master_ns=[[200, 30], [200, 15]])
+
+
+def extendFamily(
+    family: str, lf: int, src: dict[str, np.ndarray], masters: list[dict], cfg: argparse.Namespace
+) -> None:
+    for data_id, (m, n) in zip(cellIds(family), CELLS):
+        cells = [cell(master, m, n) for master in masters]
+        side = {k: np.stack([c.pop(k) for c in cells]) for k in ('source_rows', 'source_cols')}
+        checkWritten(data_id, cells)
+        with np.load(DATA_DIR / data_id / 'source_rows.npz', allow_pickle=True) as z:
+            assert all(np.array_equal(z[k], v) for k, v in side.items()), data_id
+    logger.info('%s: rebuilt masters reproduce the written sets', family)
+    root = np.random.SeedSequence([cfg.seed, lf, EXT_ENTROPY])
+    extended = []
+    for i, seedseq in enumerate(root.spawn(cfg.n_datasets)):
+        ext, redraws = extendMaster(masters[i], seedseq, src, lf)
+        logger.info('%s extension %d: %d redraw(s)', family, i, redraws)
+        extended.append(ext)
+    for m, n in EXT_CELLS:
+        cells = [cell(ext, m, n) for ext in extended]
+        checkLabels(cells, src)
+        if cfg.dry_run:
+            logger.info('%s cell (%d, %d): ok (dry run)', family, m, n)
+            continue
+        writeCell(
+            family,
+            m,
+            n,
+            cells,
+            cfg,
+            group_budget_master_ns=[[200, 30], [400, 15]],
+            group_budget_extension_entropy=[cfg.seed, lf, EXT_ENTROPY],
+        )
 
 
 def main() -> None:
     cfg = setup()
     setupLogging(cfg.verbosity)
-    ids = [data_id for family in cfg.families for data_id in cellIds(family)]
+    cells = EXT_CELLS if cfg.extend else CELLS
+    ids = [data_id for family in cfg.families for data_id in cellIds(family, cells)]
     if cfg.print_commands:
         printCommands(ids, cfg.n_datasets)
         return

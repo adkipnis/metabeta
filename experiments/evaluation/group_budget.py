@@ -46,7 +46,7 @@ from build_ckpt import BEST_SEEDS, _ckpt_dir  # noqa: E402
 from full_real_diagnostics import diagnose  # noqa: E402
 from group_budget_real_sets import SOURCES  # noqa: E402
 from group_budget_real_sets import cellTag as realTag  # noqa: E402
-from group_budget_sets import CELLS, SIZE, cellTag  # noqa: E402
+from group_budget_sets import CELLS, EXT_CELLS, SIZE, cellTag  # noqa: E402
 
 OUT_DIR = RESULTS_DIR / 'group-budget'
 FAMILIES = {'n': ('normal', 0), 'b': ('bernoulli', 1), 'p': ('poisson', 2)}
@@ -55,6 +55,7 @@ N_SAMPLES = 4000
 BUDGET = (200, 3000)
 BLOCKS = ('ffx', 'sigma_rfx', 'sigma_eps', 'rfx')
 TAGS = {'simulated': cellTag, 'real': realTag}
+ALL_CELLS = CELLS + EXT_CELLS
 
 
 def checkpoint(family: str) -> Path:
@@ -156,7 +157,7 @@ def collectFamily(family: str, kind: str) -> str:
     head = ['groups', 'rows', 'budget', 'method']
     blocks = [b for b in BLOCKS if family == 'n' or b != 'sigma_eps']
     agree, sigma, rank, oracle, diag = [], [], [], [], []
-    for m, n in CELLS:
+    for m, n in ALL_CELLS:
         out = paths(family, TAGS[kind](m, n))
         label = cellLabel(m, n)
 
@@ -229,7 +230,7 @@ def collectFamily(family: str, kind: str) -> str:
 def collect() -> None:
     for kind, tag in TAGS.items():
         for family in FAMILIES:
-            if not all(paths(family, tag(m, n))['diagnostics'].exists() for m, n in CELLS):
+            if not all(paths(family, tag(m, n))['diagnostics'].exists() for m, n in ALL_CELLS):
                 print(f'{family} ({kind}): cells missing - skipped')
                 continue
             report = collectFamily(family, kind)
@@ -245,7 +246,7 @@ def setup() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument('stage', choices=['run', 'collect'])
     parser.add_argument('--family', choices=list(FAMILIES))
-    parser.add_argument('--cell', choices=[tag(m, n) for tag in TAGS.values() for m, n in CELLS])
+    parser.add_argument('--cell', choices=[tag(m, n) for tag in TAGS.values() for m, n in ALL_CELLS])
     parser.add_argument('--batch_size', type=int, default=8)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--verbosity', type=int, default=1)
