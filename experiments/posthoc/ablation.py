@@ -12,6 +12,10 @@ isMarginal   : Rao-Blackwellised marginal SNIS (Normal only) - exact marginal we
                correlated Σ_rfx + LKJ prior, rfx redrawn from the exact conditional
 isLaplace    : Laplace analog of isMarginal (Bernoulli/Poisson only) - nAGQ=1-style
                approximate marginal weights + Laplace-Gaussian conditional rfx redraw
+isIS2        : isLaplace with the Laplace marginal replaced by its unbiased IS² estimate
+               (IS2_N_INNER draws per group), so the weights target the exact posterior, as
+               imhPM's chain does; Api.sample(refine='is') for GLMMs. Runs on --device.
+               Added 2026-11-07.
 rbAttach     : rfx attachment only (Bernoulli/Poisson only) - uniform weights, flow rfx
                replaced by Laplace conditional draws (zero weight bias)
 imhMarginal  : IMH mode='marginal' (Normal, Rao-Blackwellised) or 'global' (other). Note:
@@ -139,7 +143,16 @@ IMH_CONDITIONS = {
     'imhMarginal+moves': ('marginal', 0, MOVES_RW),
     'imhPM+moves': ('laplace', IS2_N_INNER, MOVES_RW),
 }
-CONDITIONS = ('raw', 'is', 'isFull', 'isMarginal', 'isLaplace', 'rbAttach', *IMH_CONDITIONS)
+CONDITIONS = (
+    'raw',
+    'is',
+    'isFull',
+    'isMarginal',
+    'isLaplace',
+    'isIS2',
+    'rbAttach',
+    *IMH_CONDITIONS,
+)
 OPT_IN_CONDITIONS = ('svgd', 'coldNuts', 'warmNuts')  # flags or the test split add them
 
 
@@ -713,18 +726,24 @@ def runWarmNutsLive(refined, tensor_batch, score, ds_list, lf, fits_dir, label, 
     return summary, diag
 
 
-def runISLaplace(proposals, batches, score, lf, attach_only=False):
+def runISLaplace(proposals, batches, score, lf, attach_only=False, n_inner=0, device='cpu'):
     out = []
     with torch.no_grad():
         for p, batch in zip(proposals, batches):
+            # slice-copy before moving, so the shared pool proposals stay on the CPU
+            p = p.slice_b(0, p.samples_g.shape[0])
+            p.to(device)
             sampler = LaplaceImportanceSampler(
-                batch,
+                toDevice(dict(batch), device),
                 attach_only=attach_only,
                 corr_prior=True,
                 pareto=True,
                 likelihood_family=lf,
+                n_inner=n_inner,
             )
-            out.append(sampler(p.slice_b(0, p.samples_g.shape[0])))
+            p_out = sampler(p)
+            p_out.to('cpu')
+            out.append(p_out)
     proposal = concatProposalsBatch(out)
     diag = _weightHealth(proposal)
     print(diag, end='')
@@ -1012,7 +1031,14 @@ def main() -> None:
             for cond in conditions:
                 if cond == 'isMarginal' and lf != 0:
                     continue  # exact marginal requires the Normal likelihood
-                laplace_conds = ('isLaplace', 'rbAttach', 'imhLaplace', 'imhPM', 'imhPM+moves')
+                laplace_conds = (
+                    'isLaplace',
+                    'isIS2',
+                    'rbAttach',
+                    'imhLaplace',
+                    'imhPM',
+                    'imhPM+moves',
+                )
                 if cond in laplace_conds and lf == 0:
                     continue  # Normal has the exact marginal - Laplace is for GLMMs
                 if cond == 'imhGlobal' and lf != 0:
@@ -1081,6 +1107,10 @@ def main() -> None:
                     )
                 elif cond == 'isLaplace':
                     summary, diag = runISLaplace(proposals, batches, score, lf)
+                elif cond == 'isIS2':
+                    summary, diag = runISLaplace(
+                        proposals, batches, score, lf, n_inner=IS2_N_INNER, device=args.device
+                    )
                 elif cond == 'rbAttach':
                     summary, diag = runISLaplace(proposals, batches, score, lf, attach_only=True)
                 elif cond in IMH_CONDITIONS:
