@@ -35,6 +35,10 @@ import logging
 import sys
 from pathlib import Path
 
+import numpy as np
+from tabulate import tabulate
+
+from metabeta.models.api import IMH_ACCEPT_WARN, IMH_ESS_WARN
 from metabeta.utils.device import setDevice
 from metabeta.utils.experiments import RESULTS_DIR, REPO_ROOT
 from metabeta.utils.logger import setupLogging
@@ -47,7 +51,7 @@ sys.path.insert(0, str(REPO_ROOT / 'scripts'))
 from build_ckpt import BEST_SEEDS  # noqa: E402
 
 # sibling experiment scripts (this directory is sys.path[0] at run time)
-from condition_number import LF_FROM_FAM
+from condition_number import LF_FROM_FAM, METHOD_LABELS
 
 # Collection and the table layer are shared verbatim with the likelihood-misspecification
 # study: once the perturbed prior lives in the data dir, a prior condition and a likelihood
@@ -81,6 +85,55 @@ CONDITIONS: list[tuple[str, str]] = [
     ('mu2', 'ν+2τ'),
     ('famrot', 'family+1'),
 ]
+# outside the trained hyperparameter range; opt-in via --conditions, since these dirs exist at
+# one size only and alignSizes would cut the default pool down to it
+OUT_OF_SUPPORT: list[tuple[str, str]] = [
+    ('oosbase', 'correct'),
+    ('oosA11', 'τ=1.1×drawn max'),
+    ('oosA20', 'τ=2×drawn max'),
+    ('oosB', 'ν+5τ'),
+    ('oosC', 'τ=min/2'),
+]
+
+
+def renderDiagnosticsMd(
+    pooled: dict[str, dict[str, np.ndarray]], labels: dict[str, str], methods: list[str]
+) -> str:
+    """IMH acceptance and the share of datasets the Api's two IMH warnings flag, per condition.
+
+    Over all datasets, since neither check reads NUTS. The ESS columns stay empty on the +moves
+    row, whose draws no longer hold the IMH chains; its gate read the same statistic on its own
+    chain.
+    """
+    rows = []
+    for tag, agree in pooled.items():
+        for m in methods:
+            if f'{m}:accept' not in agree:
+                continue
+            accept, ess = agree[f'{m}:accept'], agree[f'{m}:ess_min']
+            low_accept, low_ess = accept < IMH_ACCEPT_WARN, ess < IMH_ESS_WARN
+            has_ess = not np.isnan(ess).all()
+            rows.append(
+                [
+                    labels[tag],
+                    METHOD_LABELS.get(m, m),
+                    len(accept),
+                    f'{np.median(accept):.2f}',
+                    f'{100 * low_accept.mean():.0f}',
+                    f'{100 * low_ess.mean():.0f}' if has_ess else '-',
+                    f'{100 * (low_accept | low_ess).mean():.0f}' if has_ess else '-',
+                ]
+            )
+    headers = [
+        'condition',
+        'method',
+        'n',
+        'median acceptance',
+        f'% acceptance < {IMH_ACCEPT_WARN:g}',
+        f'% min ESS < {IMH_ESS_WARN:g}',
+        '% flagged',
+    ]
+    return tabulate(rows, headers=headers, tablefmt='pipe', stralign='right')
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +180,7 @@ def main() -> None:
 
     conditions = CONDITIONS
     if cfg.conditions is not None:
-        known = dict(conditions)
+        known = dict(conditions + OUT_OF_SUPPORT)
         unknown = [t for t in cfg.conditions if t not in known]
         if unknown:
             raise KeyError(f'unknown condition tags: {unknown} (known: {list(known)})')
@@ -171,6 +224,10 @@ def main() -> None:
     print('\n=== MB<->NUTS agreement by prior perturbation (median ± MAD, converged) ===\n')
     print(agree_md)
 
+    diag_md = renderDiagnosticsMd(pooled_agree, labels, methods)
+    print('\n=== IMH acceptance and flags by prior perturbation (all datasets) ===\n')
+    print(diag_md)
+
     rows_quality = qualityRows(pooled_entries, pooled_agree, labels, methods)
     quality_md = renderQualityMd(rows_quality, dp=cfg.decimals)
     print('\n=== Quality vs generating parameters by perturbation (converged subset) ===\n')
@@ -182,6 +239,9 @@ def main() -> None:
         'each perturbed prior. All metrics on the NUTS-converged subset (paired).\n',
         '## MB<->NUTS agreement by perturbation (median ± MAD over converged datasets)\n',
         agree_md,
+        '',
+        '## IMH acceptance and flags by perturbation (all datasets)\n',
+        diag_md,
         '',
         '## Quality vs generating parameters by perturbation\n',
         'Global (ffx, σ_rfx' + (', σ_ε' if lf == 0 else '') + ') and local (rfx) parameters; '
