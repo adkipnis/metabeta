@@ -120,6 +120,21 @@ estimator), burn in for a number of steps that grows with the number of active g
 dimensions, then record every `thin`-th state. Only datasets whose IMH min bulk ESS falls below
 `gate_ess` are moved (Api.sample(random_walk=True) gates at its IMH_ESS_WARN). Supported for
 mode='marginal' and mode='laplace'.
+
+Beyond the flow's support: the start refresh (Normal data)
+----------------------------------------------------------
+The training prior caps R² at 0.95, and the global flow's context carries a REML estimate of
+sigma_eps it has never seen below that cap. Beyond it the flow overestimates sigma_eps and
+widens the fixed effects with it; the IMH can only pick pool members and keeps the error, and
+the random walk starts there with steps sized from the IMH spread, too small to travel the
+distance. For mode='marginal' the moves therefore refresh their starts: the sigma_eps
+coordinate is moved to the maximum of the moves' own target along it (a start may be anything,
+only the kernel must be invariant), then REFRESH_ITER slice iterations (Neal 2003) on that
+coordinate give the starts their conditional spread, then the fixed effects are drawn from
+their exact conditional given Sigma_rfx and sigma_eps (sampleFfxConditionalNormal), and the
+proposal covariance comes from the refreshed starts. The slice and the draw leave the
+posterior invariant, so the chain stays exact. The mode start matters far out: from 200 NUTS
+SDs each slice iteration only halves the distance on average.
 """
 
 import argparse
@@ -143,7 +158,7 @@ from metabeta.posthoc.laplace_glmm import (
 )
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.dataloader import subsetBatch
-from metabeta.utils.families import sampleRfxConditionalNormal
+from metabeta.utils.families import sampleFfxConditionalNormal, sampleRfxConditionalNormal
 from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.regularization import (
     constrainGlobals,
@@ -169,6 +184,8 @@ SUGGEST_MAX = 16_000
 
 # random-walk proposal scale 2.38 / sqrt(D) (Roberts & Rosenthal, 2001)
 RWM_SCALE = 2.38
+REFRESH_ITER = 3  # slice iterations of the sigma_eps start refresh (module docstring)
+REFRESH_WIDTH = 0.5  # its initial interval and the mode search's step, inverse-softplus coordinate
 
 
 # Newton steps of the pseudo-marginal move chains' Laplace mode search: the IS² estimate is
@@ -200,6 +217,89 @@ class LocalMoves:
     def chainCount(self, n_draws: int) -> int:
         """Chains run for n_draws kept states: n_chains, but at least 4 records per chain."""
         return max(1, min(self.n_chains, n_draws // 4))
+
+
+def sliceCoordinate(
+    log_target,  # (b, s, D) -> (b, s)
+    u: Tensor,  # (b, s, D)
+    j: int,
+    active: Tensor,  # (b,) datasets whose coordinate j is updated
+    n_iter: int,
+    width: float,
+    max_out: int = 30,
+    max_shrink: int = 60,
+) -> Tensor:
+    """``n_iter`` slice-sampling iterations (Neal 2003, stepping out then shrinkage) on
+    coordinate ``j`` of every state, vectorized over states; each loop runs until its slowest
+    active state is done. States of inactive datasets are returned unchanged."""
+    act = active[:, None].expand(u.shape[:2])
+    x0 = u[..., j].clone()
+    full = lambda x: log_target(torch.cat([u[..., :j], x[..., None], u[..., j + 1 :]], -1))
+    f0 = full(x0)
+    for _ in range(n_iter):
+        log_y = f0 - torch.empty_like(f0).exponential_()
+        lo = x0 - width * torch.rand_like(x0)
+        hi = lo + width
+        for side, sign in ((lo, -1.0), (hi, 1.0)):
+            for _ in range(max_out):
+                grow = (full(side) > log_y) & act
+                if not grow.any():
+                    break
+                side += sign * width * grow
+        done = ~act
+        for _ in range(max_shrink):
+            x1 = lo + torch.rand_like(x0) * (hi - lo)
+            f1 = full(x1)
+            ok = (f1 > log_y) & ~done
+            x0, f0 = torch.where(ok, x1, x0), torch.where(ok, f1, f0)
+            done |= ok
+            if done.all():
+                break
+            lo = torch.where(~done & (x1 < x0), x1, lo)
+            hi = torch.where(~done & (x1 >= x0), x1, hi)
+    out = u.clone()
+    out[..., j] = x0
+    return out
+
+
+def modeCoordinate(
+    log_target,  # (b, s, D) -> (b, s)
+    u: Tensor,  # (b, s, D)
+    j: int,
+    active: Tensor,  # (b,) datasets whose coordinate j is updated
+    width: float,
+    max_walk: int = 40,
+    n_golden: int = 10,
+) -> Tensor:
+    """Coordinate ``j`` of every state moved to the maximum of ``log_target`` along it: an uphill
+    walk in steps of ``width`` brackets the maximum, golden-section search narrows the bracket.
+    Vectorized over states; states of inactive datasets are returned unchanged."""
+    act = active[:, None].expand(u.shape[:2])
+    full = lambda x: log_target(torch.cat([u[..., :j], x[..., None], u[..., j + 1 :]], -1))
+    x0 = u[..., j].clone()
+    f0, f_lo, f_hi = full(x0), full(x0 - width), full(x0 + width)
+    sign = torch.where(f_hi >= f_lo, 1.0, -1.0)
+    behind, best, f_best = x0 - sign * width, x0, f0
+    ahead = x0 + sign * width
+    f_ahead = torch.where(sign > 0, f_hi, f_lo)
+    moving = (f_ahead > f_best) & act
+    for _ in range(max_walk):
+        if not moving.any():
+            break
+        behind = torch.where(moving, best, behind)
+        best, f_best = torch.where(moving, ahead, best), torch.where(moving, f_ahead, f_best)
+        step, f_step = best + sign * width, full(best + sign * width)
+        ahead, f_ahead = torch.where(moving, step, ahead), torch.where(moving, f_step, f_ahead)
+        moving = moving & (f_ahead > f_best)
+    lo, hi = torch.minimum(behind, ahead), torch.maximum(behind, ahead)
+    g = 0.381966  # 1 - 1/phi
+    for _ in range(n_golden):
+        x1, x2 = lo + g * (hi - lo), hi - g * (hi - lo)
+        left = full(x1) > full(x2)
+        lo, hi = torch.where(left, lo, x1), torch.where(left, x2, hi)
+    out = u.clone()
+    out[..., j] = torch.where(act, 0.5 * (lo + hi), x0)
+    return out
 
 
 def suggestPoolSize(
@@ -535,6 +635,32 @@ class MetropolisSampler:
         L = torch.where((info > 0)[:, None, None], diag, L)  # not PD: diagonal proposal
         return (L * pair).to(u.dtype)
 
+    def _refreshStarts(self, u: Tensor, evaluate, evaluator, constrain, proposal, active, d, q):
+        """The chain starts (b, C, D_g) with sigma_eps moved to its conditional mode and sliced,
+        then the fixed effects redrawn from their exact conditional (module docstring, 'Beyond
+        the flow's support')."""
+        j_eps, log_target = d + q, lambda x: evaluate(x)[0]
+        u = modeCoordinate(log_target, u, j_eps, active[:, j_eps], REFRESH_WIDTH)
+        u = sliceCoordinate(log_target, u, j_eps, active[:, j_eps], REFRESH_ITER, REFRESH_WIDTH)
+        p = proposal(constrain(u)[0])
+        d_p = p.ffx.shape[-1]
+        ffx, _ = sampleFfxConditionalNormal(
+            p.ffx,
+            p.sigma_rfx,
+            p.sigma_eps,
+            evaluator.y,
+            evaluator.X[..., :d_p],
+            evaluator.Z,
+            evaluator.mask_n,
+            evaluator.mask_m,
+            evaluator.nu_ffx[..., :d_p],
+            evaluator.tau_ffx[..., :d_p],
+            evaluator.family_ffx,
+            evaluator.mask_d[..., :d_p],
+            L_corr=evaluator._getLCorr(p),
+        )
+        return torch.cat([ffx, u[..., d:]], -1)
+
     @torch.no_grad()
     def _localMoves(
         self,
@@ -564,15 +690,14 @@ class MetropolisSampler:
         )
         eps = self.has_sigma_eps
         active = globalMask(data, d, q, eps, d_corr)
-        u = unconstrainGlobals(sg, d, q, eps, d_corr)
-        L = self._rwmCholesky(u, active)
+        u_kept = unconstrainGlobals(sg, d, q, eps, d_corr)
         burnin = max(1, math.ceil(mv.burnin_per_dim * int(active.sum(-1).max())))
         C = mv.chainCount(S)
         n_rec = math.ceil(S / C)
 
         start = torch.rand(b, S, device=sg.device).argsort(-1)[:, :C]  # (b, C)
         sg_ref = sg[:, :1]  # padded dims are constant within a dataset
-        u = torch.gather(u, 1, start[..., None].expand(b, C, D_g))
+        u = torch.gather(u_kept, 1, start[..., None].expand(b, C, D_g))
         seed = seed_l.expand(b, seed_l.shape[1], C, seed_l.shape[-1])
         zeros_g, zeros_l = sg.new_zeros(b, C), sg.new_zeros(b, seed.shape[1], C)
 
@@ -580,10 +705,8 @@ class MetropolisSampler:
             theta, ldj = constrainGlobals(u, active, d, q, eps, d_corr)
             return torch.where(active[:, None, :], theta, sg_ref), ldj
 
-        def evaluate(u: Tensor) -> tuple[Tensor, dict[str, Tensor]]:
-            """Log target in u (−inf where not finite) and the estimate's Laplace tensors."""
-            sg_u, ldj = constrain(u)
-            p = Proposal(
+        def proposal(sg_u: Tensor) -> Proposal:
+            return Proposal(
                 {
                     'global': {'samples': sg_u, 'log_prob': zeros_g},
                     'local': {'samples': seed, 'log_prob': zeros_l},
@@ -591,12 +714,22 @@ class MetropolisSampler:
                 has_sigma_eps=self.has_sigma_eps,
                 d_corr=d_corr,
             )
-            ll, lp = evaluator.unnormalizedPosterior(p)
+
+        def evaluate(u: Tensor) -> tuple[Tensor, dict[str, Tensor]]:
+            """Log target in u (−inf where not finite) and the estimate's Laplace tensors."""
+            sg_u, ldj = constrain(u)
+            ll, lp = evaluator.unnormalizedPosterior(proposal(sg_u))
             log_t = ll + lp + ldj
             log_t = torch.where(torch.isfinite(log_t), log_t, -math.inf)
             if self.mode != 'laplace':
                 return log_t, {}
             return log_t, self._laplaceFactors(evaluator)
+
+        if self.mode == 'marginal':
+            u = self._refreshStarts(u, evaluate, evaluator, constrain, proposal, active, d, q)
+            L = self._rwmCholesky(u, active)
+        else:
+            L = self._rwmCholesky(u_kept, active)
 
         cur, state = evaluate(u)
         out_u = u.new_empty(b, C, n_rec, D_g)  # chain-major records

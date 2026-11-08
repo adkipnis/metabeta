@@ -3,6 +3,8 @@ conjugate dual sampleRfxConditionalNormal."""
 
 import math
 
+import pytest
+
 import torch
 from torch import distributions as D
 
@@ -154,3 +156,132 @@ def test_conditional_masked_groups_zero():
     rfx = sampleRfxConditionalNormal(ffx, sigma_rfx, sigma_eps, y, X, Z, mask_n, mask_m)
     assert (rfx[:, -1] == 0).all()
     assert (rfx[:, :-1] != 0).any()
+
+
+# ---------------------------------------------------------------------------
+# sampleFfxConditionalNormal: ffx | Sigma_rfx, sigma_eps, y with the rfx integrated out
+# ---------------------------------------------------------------------------
+
+
+def _glsPosterior(X, Z, y, sigma_rfx, sigma_eps, nu, tau, L_corr=None):
+    """Brute force: precision Σ_j X_jᵀ V_j⁻¹ X_j + diag(1/τ²), mean from the matching rhs, for
+    the one state (sigma_rfx (q,), sigma_eps scalar) of dataset 0."""
+    m, n, d = X.shape
+    q = Z.shape[-1]
+    Sigma = (
+        torch.diag(sigma_rfx**2)
+        if L_corr is None
+        else (sigma_rfx[:, None] * L_corr) @ (sigma_rfx[:, None] * L_corr).mT
+    )
+    P = torch.diag(1.0 / tau**2)
+    rhs = nu / tau**2
+    for j in range(m):
+        V = Z[j] @ Sigma @ Z[j].mT + sigma_eps**2 * torch.eye(n, dtype=X.dtype)
+        Vi = torch.linalg.inv(V)
+        P = P + X[j].mT @ Vi @ X[j]
+        rhs = rhs + X[j].mT @ Vi @ y[j, :, 0]
+    cov = torch.linalg.inv(P)
+    return cov @ rhs, cov
+
+
+def _ffxProblem(d=2, q=2, m=3, n=6, s=200000, seed=5, corr=False):
+    g = torch.Generator().manual_seed(seed)
+    X = torch.randn(1, m, n, d, generator=g, dtype=torch.float64)
+    Z = torch.randn(1, m, n, q, generator=g, dtype=torch.float64)
+    y = torch.randn(1, m, n, 1, generator=g, dtype=torch.float64)
+    sigma_rfx = (torch.rand(1, 1, q, generator=g, dtype=torch.float64) * 0.9 + 0.1).expand(1, s, q)
+    sigma_eps = (torch.rand(1, 1, generator=g, dtype=torch.float64) * 0.9 + 0.1).expand(1, s)
+    ffx = torch.randn(1, s, d, generator=g, dtype=torch.float64)
+    nu = torch.randn(1, 1, d, generator=g, dtype=torch.float64)
+    tau = torch.rand(1, 1, d, generator=g, dtype=torch.float64) + 0.5
+    L_corr = None
+    if corr:
+        z_corr = torch.randn(1, 1, q * (q - 1) // 2, generator=g, dtype=torch.float64)
+        L_corr = unconstrainedToCholesky(z_corr, q).expand(1, s, q, q)
+    masks = (torch.ones(1, m, n, 1, dtype=torch.float64), torch.ones(1, m, 1, dtype=torch.float64))
+    return X, Z, y, ffx, sigma_rfx, sigma_eps, nu, tau, L_corr, masks
+
+
+@pytest.mark.parametrize('corr', [False, True])
+def test_ffx_conditional_normal_prior_matches_gls_posterior(corr):
+    from metabeta.utils.families import sampleFfxConditionalNormal
+
+    X, Z, y, ffx, sigma_rfx, sigma_eps, nu, tau, L_corr, (mask_n, mask_m) = _ffxProblem(corr=corr)
+    torch.manual_seed(0)
+    family = torch.zeros(1, dtype=torch.long)
+    mask_d = torch.ones(1, 1, 2, dtype=torch.bool)
+    draw, accepted = sampleFfxConditionalNormal(
+        ffx, sigma_rfx, sigma_eps, y, X, Z, mask_n, mask_m, nu, tau, family, mask_d, L_corr=L_corr
+    )
+    assert bool(accepted.all())  # the normal-prior draw is exact: no rejection
+    want_mean, want_cov = _glsPosterior(
+        X[0], Z[0], y[0], sigma_rfx[0, 0], sigma_eps[0, 0], nu[0, 0], tau[0, 0],
+        L_corr=None if L_corr is None else L_corr[0, 0],
+    )  # fmt: skip
+    s = draw.shape[1]
+    sd = want_cov.diagonal().sqrt()
+    assert torch.allclose(draw[0].mean(0), want_mean, atol=4 * float(sd.max()) / s**0.5)
+    assert torch.allclose(
+        torch.cov(draw[0].mT), want_cov, rtol=0.03, atol=1e-3 * float(sd.max()) ** 2
+    )
+
+
+def test_ffx_conditional_keeps_padded_dims():
+    from metabeta.utils.families import sampleFfxConditionalNormal
+
+    X, Z, y, ffx, sigma_rfx, sigma_eps, nu, tau, L_corr, (mask_n, mask_m) = _ffxProblem(s=50)
+    X = X.clone()
+    X[..., 1] = 0.0  # padded ffx column
+    mask_d = torch.tensor([[[True, False]]])
+    torch.manual_seed(1)
+    draw, _ = sampleFfxConditionalNormal(
+        ffx, sigma_rfx, sigma_eps, y, X, Z, mask_n, mask_m, nu, tau,
+        torch.zeros(1, dtype=torch.long), mask_d,
+    )  # fmt: skip
+    assert torch.equal(draw[..., 1], ffx[..., 1])
+    assert torch.isfinite(draw).all() and not torch.equal(draw[..., 0], ffx[..., 0])
+
+
+def test_ffx_conditional_student_prior_targets_the_t_posterior():
+    """Repeated draws form an independence-MH chain whose stationary law is the posterior under
+    the Student-t prior, not the normal-prior GLS law (a tight prior at 0 against data at 2:
+    the grid means are 1.94 and 1.73, the step accepts about a third)."""
+    from metabeta.utils.constants import STUDENT_DF
+    from metabeta.utils.families import sampleFfxConditionalNormal
+
+    g = torch.Generator().manual_seed(8)
+    m, n, s = 4, 8, 4000
+    X = torch.ones(1, m, n, 1, dtype=torch.float64)
+    Z = torch.ones(1, m, n, 1, dtype=torch.float64)
+    y = 2.0 + 0.3 * torch.randn(1, m, n, 1, generator=g, dtype=torch.float64)
+    sigma_rfx = torch.full((1, s, 1), 0.3, dtype=torch.float64)
+    sigma_eps = torch.full((1, s), 0.3, dtype=torch.float64)
+    nu, tau = torch.zeros(1, 1, 1, dtype=torch.float64), torch.full(
+        (1, 1, 1), 0.4, dtype=torch.float64
+    )
+    mask_n, mask_m = torch.ones(1, m, n, 1, dtype=torch.float64), torch.ones(
+        1, m, 1, dtype=torch.float64
+    )
+    # grid posterior under the t prior
+    beta = torch.linspace(-1.0, 4.0, 2001, dtype=torch.float64)
+    ll = logMarginalLikelihoodNormal(
+        beta.view(1, -1, 1), sigma_rfx[:, :1].expand(1, beta.numel(), 1),
+        sigma_eps[:, :1].expand(1, beta.numel()), y, X, Z, mask_n, mask_m,
+    )[0]  # fmt: skip
+    lp = D.StudentT(STUDENT_DF, 0.0, 0.4).log_prob(beta)
+    post = torch.softmax(ll + lp, 0)
+    want_mean = float((post * beta).sum())
+    want_sd = float(((post * beta**2).sum() - want_mean**2).sqrt())
+    torch.manual_seed(2)
+    ffx = torch.zeros(1, s, 1, dtype=torch.float64)
+    family = torch.ones(1, dtype=torch.long)
+    mask_d = torch.ones(1, 1, 1, dtype=torch.bool)
+    acc = []
+    for _ in range(300):
+        ffx, accepted = sampleFfxConditionalNormal(
+            ffx, sigma_rfx, sigma_eps, y, X, Z, mask_n, mask_m, nu, tau, family, mask_d
+        )
+        acc.append(accepted.double().mean().item())
+    assert 0.1 < sum(acc[-50:]) / 50 < 0.9  # the correction rejects some draws
+    assert abs(ffx.mean().item() - want_mean) < 0.1 * want_sd
+    assert abs(ffx.std().item() / want_sd - 1) < 0.1

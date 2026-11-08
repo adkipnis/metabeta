@@ -678,6 +678,87 @@ def sampleRfxConditionalNormal(
     return (post_mean + rfx_centered) * mask_m.unsqueeze(-1).float()  # (b, m, s, q)
 
 
+def sampleFfxConditionalNormal(
+    ffx: torch.Tensor,  # (b, s, d) current draw: kept on padded dims and on rejection
+    sigma_rfx: torch.Tensor,  # (b, s, q)
+    sigma_eps: torch.Tensor,  # (b, s)
+    y: torch.Tensor,  # (b, m, n, 1)
+    X: torch.Tensor,  # (b, m, n, d)
+    Z: torch.Tensor,  # (b, m, n, q)
+    mask_n: torch.Tensor,  # (b, m, n, 1)
+    mask_m: torch.Tensor,  # (b, m, 1)
+    nu_ffx: torch.Tensor,  # (b, 1, d) prior location
+    tau_ffx: torch.Tensor,  # (b, 1, d) prior scale
+    family_ffx: torch.Tensor,  # (b,) index into FFX_FAMILIES
+    mask_d: torch.Tensor,  # (b, 1, d)
+    L_corr: torch.Tensor | None = None,  # (b, s, q, q) Cholesky of the rfx correlation matrix
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Draw ffx ~ p(ffx | σ_rfx, σ_eps, y) with the rfx integrated out.
+
+    Under the normal prior N(ν, τ²) the conditional is Gaussian (generalized least squares on
+    the V_j of logMarginalLikelihoodNormal, Woodbury per group):
+
+        P = Σ_j X_jᵀ V_j⁻¹ X_j + diag(1/τ²),   μ = P⁻¹ (Σ_j X_jᵀ V_j⁻¹ y_j + ν/τ²),
+        X_jᵀ V_j⁻¹ A = (X_jᵀ A − X_jᵀ Z_j M_j⁻¹ Z_jᵀ A / σ²_eps) / σ²_eps.
+
+    Under the Student-t prior that Gaussian serves as an independence-MH proposal for the exact
+    conditional, whose ratio reduces to the prior ratio p_t(ffx*) p_N(ffx) / (p_t(ffx) p_N(ffx*)).
+    Computed in float64. Returns (ffx (b, s, d), accepted (b, s) bool).
+    """
+    dtype = torch.float64
+    b, s, d = ffx.shape
+    q = Z.shape[-1]
+    mn = mask_n.to(dtype)
+    X_m, Z_m, y_m = X.to(dtype) * mn, Z.to(dtype) * mn, y.to(dtype) * mn
+    XtX, XtZ, Xty = (
+        X_m.mT @ X_m,
+        X_m.mT @ Z_m,
+        X_m.mT @ y_m,
+    )  # (b, m, d, d), (b, m, d, q), (b, m, d, 1)
+    ZtZ, Zty = Z_m.mT @ Z_m, Z_m.mT @ y_m  # (b, m, q, q), (b, m, q, 1)
+    m = X.shape[1]
+
+    s_rfx = sigma_rfx.to(dtype).clamp(min=1e-6)
+    eye_q = torch.eye(q, dtype=dtype, device=X.device)
+    if L_corr is None:
+        Sigma_inv = torch.diag_embed(1.0 / s_rfx.pow(2))  # (b, s, q, q)
+    else:
+        L_Sigma = s_rfx.unsqueeze(-1) * L_corr.to(dtype)
+        Sigma_inv = choleskySolve(eye_q.expand_as(L_Sigma), L_Sigma)
+    inv_s2e = (1.0 / sigma_eps.to(dtype).pow(2))[:, None, :, None, None]  # (b, 1, s, 1, 1)
+    M = Sigma_inv[:, None] + ZtZ[:, :, None] * inv_s2e  # (b, m, s, q, q)
+    chol_M = torch.linalg.cholesky(M + 1e-6 * eye_q)
+    Minv_ZtX = choleskySolve(XtZ.mT[:, :, None].expand(b, m, s, q, d), chol_M)  # (b, m, s, q, d)
+    Minv_Zty = choleskySolve(Zty[:, :, None].expand(b, m, s, q, 1), chol_M)  # (b, m, s, q, 1)
+    G = (XtX[:, :, None] - XtZ[:, :, None] @ Minv_ZtX * inv_s2e) * inv_s2e  # (b, m, s, d, d)
+    g = (Xty[:, :, None] - XtZ[:, :, None] @ Minv_Zty * inv_s2e) * inv_s2e  # (b, m, s, d, 1)
+    mm = mask_m.to(dtype)[:, :, None, :, None]  # (b, m, 1, 1, 1)
+    G, g = (G * mm).sum(1), (g * mm).sum(1).squeeze(-1)  # (b, s, d, d), (b, s, d)
+
+    # padded dims: unit precision, zero mean, then the input value is kept
+    active = mask_d.bool()  # (b, 1, d)
+    nu, tau = nu_ffx.to(dtype), tau_ffx.to(dtype)
+    prec = torch.where(active, 1.0 / tau.pow(2), 1.0)  # (b, 1, d)
+    pair = active.unsqueeze(-1) & active.unsqueeze(-2)  # (b, 1, d, d)
+    P = G * pair + torch.diag_embed(prec.expand(b, s, d))
+    L_P = torch.linalg.cholesky(P)
+    mean = choleskySolve(((g + nu * prec) * active).unsqueeze(-1), L_P).squeeze(-1)
+    z = torch.randn_like(mean)
+    draw = mean + torch.linalg.solve_triangular(L_P.mT, z.unsqueeze(-1), upper=True).squeeze(-1)
+
+    cur = ffx.to(dtype)
+    normal = torch.zeros_like(family_ffx)
+    log_ratio = (
+        logProbFfx(draw, nu, tau, family_ffx, active)
+        - logProbFfx(draw, nu, tau, normal, active)
+        - logProbFfx(cur, nu, tau, family_ffx, active)
+        + logProbFfx(cur, nu, tau, normal, active)
+    )
+    accepted = torch.rand_like(log_ratio).log() < log_ratio  # (b, s); 0 < 0 never: normal always
+    draw = torch.where(active & accepted[..., None], draw, cur)
+    return draw.to(ffx.dtype), accepted
+
+
 def logLikelihood(
     ffx: torch.Tensor,  # (b, s, d)
     sigma_eps: torch.Tensor,  # (b, s)
