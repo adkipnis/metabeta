@@ -165,7 +165,8 @@ the final ordered `X/Z` names.
 
 Supported prior inputs:
 
-- `None`: Bambi-style defaults via `bambiDefaultPriors`.
+- `None`: Bambi-style defaults, with the scales outside the trained range lowered into it
+  (`apiDefaultPriors`).
 - Canonical fit-style keys:
   - `nu_ffx`
   - `tau_ffx`
