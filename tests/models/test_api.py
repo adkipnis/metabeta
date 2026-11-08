@@ -545,7 +545,7 @@ def test_low_ess_warning_suggests_more_draws_and_points_at_the_call(api: Api):
     assert ess.filename == __file__
 
 
-def test_random_walk_runs_quietly_unless_the_ess_is_very_low(api: Api):
+def test_random_walk_rows_still_warn_with_a_nuts_check(api: Api):
     df = _sleepstudy()
     kwargs = dict(
         formula='Reaction ~ Days + (1 + Days | Subject)', n_samples=64, fit_preprocessor=True
@@ -560,15 +560,70 @@ def test_random_walk_runs_quietly_unless_the_ess_is_very_low(api: Api):
     safeguards = result.safeguards
     assert safeguards['random_walk_ran'][0]
     chain = [w for w in caught if 'ESS' in str(w.message) or 'acceptance' in str(w.message)]
-    if safeguards['ess_min'][0] < 10:
-        (line,) = chain
-        assert 'NUTS' in str(line.message)
-        assert line.filename == __file__
-    else:
-        assert not chain
+    (line,) = chain
+    assert 'Random-walk moves ran' in str(line.message)
+    assert 'NUTS' in str(line.message)
+    assert 'random_walk=True' not in str(line.message)
+    assert line.filename == __file__
     assert _footer(api.posteriorSummary(result))['min ESS'].endswith('(random-walk moves ran)')
     for key in ('accept_rate', 'accept_flag', 'suggested_n_samples', 'ess', 'ess_min', 'ess_flag'):
         np.testing.assert_array_equal(safeguards[key], reference.safeguards[key], err_msg=key)
+
+
+def _imhSafeguards(accept: list[float], ess_min: list[float], ran: list[bool]) -> dict:
+    accept_rate, ess = np.array(accept), np.array(ess_min)
+    return {
+        'accept_rate': accept_rate,
+        'accept_threshold': 0.1,
+        'accept_flag': accept_rate < 0.1,
+        'suggested_n_samples': np.full(len(accept), 4000),
+        'ess_min': ess,
+        'ess_threshold': 150,
+        'ess_flag': ess < 150,
+        'random_walk_ran': np.array(ran),
+    }
+
+
+def test_random_walk_mode_flags_the_rows_the_default_mode_flags():
+    # rows: ESS in [10, 150), ESS below 10, low acceptance, low acceptance unmoved, neither
+    accept, ess_min = [0.4, 0.4, 0.05, 0.05, 0.4], [50, 5, 50, 500, 500]
+    labels = ['ess', 'very low ess', 'low acceptance', 'unmoved', 'fine']
+
+    def warned(ran: list[bool]) -> dict[str, str]:
+        _, caught = _warningsOf(
+            lambda: Api._warnSafeguards(_imhSafeguards(accept, ess_min, ran), None, labels)
+        )
+        return {str(w.message).split(' for ')[0]: str(w.message) for w in caught}
+
+    default = warned([False] * 5)
+    assert set(default) == {'Low IMH acceptance', 'Low effective sample size (ESS)'}
+    assert "['low acceptance', 'unmoved']" in default['Low IMH acceptance']
+    assert "['ess', 'very low ess', 'low acceptance']" in default['Low effective sample size (ESS)']
+
+    moves = warned([True, True, True, False, False])
+    assert set(moves) == {'Random-walk moves ran after a weak IMH', 'Low IMH acceptance'}
+    message = moves['Random-walk moves ran after a weak IMH']
+    assert "['ess', 'very low ess', 'low acceptance']" in message
+    assert "least of all for ['very low ess']" in message
+    assert 'NUTS' in message and 'random_walk=True' not in message
+    assert "['unmoved']" in moves['Low IMH acceptance']
+
+
+def test_default_priors_stay_quiet_and_out_of_range_priors_warn(api: Api):
+    df = _sleepstudy()
+    kwargs = dict(
+        formula='Reaction ~ Days + (1 + Days | Subject)', n_samples=8, fit_preprocessor=True
+    )
+    default, caught = _warningsOf(lambda: api.sample(df, **kwargs))
+    assert not default.safeguards['prior_flag'][0]
+    assert not [w for w in caught if 'trained on' in str(w.message)]
+
+    wide, caught = _warningsOf(lambda: api.sample(df, priors={'tau_ffx': [1.0, 100.0]}, **kwargs))
+    assert wide.safeguards['prior_flag'][0]
+    (prior,) = [w for w in caught if 'trained on' in str(w.message)]
+    assert 'tau_ffx 100 outside [0.0015, 44.35]' in str(prior.message)
+    assert 'NUTS' in str(prior.message)
+    assert prior.filename == __file__
 
 
 @pytest.mark.parametrize(

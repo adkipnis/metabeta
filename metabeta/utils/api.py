@@ -20,7 +20,7 @@ from metabeta.utils.constants import (
     hasSigmaEps,
 )
 from metabeta.utils.experiments import CHECKPOINT_DIR
-from metabeta.utils.priors import bambiDefaultPriors
+from metabeta.utils.priors import apiDefaultPriors
 
 
 JOINT_CHECKPOINT_VERSION = 1
@@ -396,7 +396,7 @@ def coercePriors(
     if q > MAX_ROUTER_Q:
         raise ValueError(f'random-effect dimension q must be <= {MAX_ROUTER_Q}')
 
-    values = bambiDefaultPriors(d, q, likelihood_family=likelihood_family)
+    values = apiDefaultPriors(d, q, likelihood_family=likelihood_family)
     if priors is not None:
         values.update({str(key): np.asarray(value) for key, value in priors.items()})
 
