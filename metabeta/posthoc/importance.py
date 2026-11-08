@@ -89,7 +89,9 @@ WEIGHTS_VERSION = 2
 
 # Per-method revision on top of WEIGHTS_VERSION, bumped when one method's output changes, so
 # only that method's caches are ignored. imhPM r1 (2026-09-26): rfx refresh per kept state.
-METHOD_REVISION = {'imhPM': 1}
+# imhMarginal+moves r2 (2026-11-08): sigma_eps and ffx refresh at the moves' chain starts (r1
+# was the same day's variant without the mode start; its caches on hpc are superseded).
+METHOD_REVISION = {'imhPM': 1, 'imhMarginal+moves': 2}
 
 
 def weightsTag(method: str, sep: str = '_') -> str:
