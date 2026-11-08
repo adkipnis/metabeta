@@ -42,6 +42,7 @@ from metabeta.utils.dataloader import (
     toDevice,
     trimBatchPadding,
 )
+from metabeta.utils.priors import TRAINED_RANGE, outsideTrainedRange
 from metabeta.utils.psis import psislw
 from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.utils.api import (
@@ -100,7 +101,7 @@ IMH_N_CHAINS = 4
 IMH_BURNIN = 25
 IMH_ACCEPT_WARN = 0.1
 IMH_ESS_WARN = 150
-# below it the random-walk moves narrow the gap but may not close it: exact MCMC is recommended
+# below it the random-walk moves are least likely to close the gap (the warning says so)
 IMH_ESS_NUTS = 10
 # sample(random_walk=True): random-walk moves after the IMH on the datasets IMH_ESS_WARN flags.
 # A CPU step costs in proportion to chains × IS² draws per group, a GPU step barely, so the GPU
@@ -120,6 +121,14 @@ CHUNK_ROWS = {'cpu': 64, 'cuda': 256}
 LISTED_ROWS = 10
 
 K = TypeVar('K', bound=Hashable)
+
+
+def imhFlagged(accept_rate: np.ndarray, ess_min: np.ndarray) -> np.ndarray:
+    """(B,) the datasets an IMH warning names, with or without the random-walk moves: mean
+    acceptance below ``IMH_ACCEPT_WARN`` or min bulk ESS below ``IMH_ESS_WARN``.  The moves
+    change a warning's text, not whether it fires (#53); the evaluation scripts count the
+    Api's flags with this function."""
+    return (accept_rate < IMH_ACCEPT_WARN) | (ess_min < IMH_ESS_WARN)
 
 
 def mapZScores(
@@ -493,9 +502,9 @@ class Api:
         datasets whose minimum bulk ESS over the global parameters falls below
         ``IMH_ESS_WARN`` are flagged with a warning.  ``random_walk=True`` continues the IMH
         on the flagged datasets with pseudo-marginal random-walk moves on the same target
-        (posthoc/metropolis.py, ``LocalMoves``; ``RANDOM_WALK_DEFAULT``, by device) instead of
-        warning; below ``IMH_ESS_NUTS`` they may not repair it fully, and a warning recommends
-        exact MCMC there.  A
+        (posthoc/metropolis.py, ``LocalMoves``; ``RANDOM_WALK_DEFAULT``, by device).  The
+        moves may not close the gap, so the datasets they ran on still warn, recommending a
+        check against exact MCMC: both modes flag the same datasets (``imhFlagged``).  A
         ``LocalMoves`` instance sets them, and its own gate, explicitly.  Per dataset, the safeguards record
         the flag ('ess_flag'), whether the moves ran ('random_walk_ran') and their acceptance
         ('random_walk_accept', NaN where they did not run).
@@ -510,7 +519,11 @@ class Api:
         Independently of ``refine``, posterior means are cross-checked against the
         analytical MAP estimates that condition the model (a flow-independent anchor);
         datasets whose maximum |posterior mean − MAP| / posterior SD exceeds
-        ``map_z_threshold`` trigger a warning.  All checks are reported in
+        ``map_z_threshold`` trigger a warning.  Prior hyperparameters outside the range the
+        network was trained on (``utils/priors.py``, ``TRAINED_RANGE``) trigger a warning that
+        names them and their range ('prior_flag', values in 'prior_outside'): the network
+        extrapolates there.  The default priors are Bambi's, with the scales outside that range
+        lowered into it (``API_DEFAULT_SCALES``).  All checks are reported in
         ``RouterResult.safeguards``.
 
         Every call also stores the posterior predictive and a fit metric (R², AUC or deviance)
@@ -763,6 +776,11 @@ class Api:
         if stats is not None and n_samples >= MIN_SAFEGUARD_SAMPLES:
             map_check = self._mapConsistency(proposal, stats, batch, threshold=map_z_threshold)
             safeguards = {**(safeguards or {}), **map_check}
+        # a chunk holds one submodel, so one likelihood family
+        lf = int(batch['likelihood_family'].flatten()[0].item())
+        keys = (*TRAINED_RANGE[lf], 'mask_d', 'mask_q')
+        outside = outsideTrainedRange({k: batch[k].cpu().numpy() for k in keys if k in batch}, lf)
+        safeguards = {**(safeguards or {}), 'prior_flag': outside != '', 'prior_outside': outside}
         diags = self._computeDiagnostics(proposal, batch, loo=loo)
         return {'proposal': proposal, 'safeguards': safeguards, 'evidence': log_ev, 'diags': diags}
 
@@ -827,15 +845,31 @@ class Api:
                     f'  2. random_walk=True{caveat}\n'
                     '  3. exact MCMC, e.g. NUTS'
                 )
-            # the moves replace the ESS warning, except where the IMH left them too little to work with
-            low, names = named(np.flatnonzero(ran & (ess_min < IMH_ESS_NUTS)))
-            if low.size:
-                e_vals = ', '.join(f'{ess_min[i]:.0f}' for i in low)
+            # where the moves ran, one warning for both: the default mode's rows warn here too
+            moved = np.flatnonzero(ran & imhFlagged(a_bar, ess_min))
+            flagged, names = named(moved)
+            if flagged.size:
+                a_vals = ', '.join(f'{a_bar[i]:.2f}' for i in flagged)
+                e_vals = ', '.join(f'{ess_min[i]:.0f}' for i in flagged)
+                low = moved[ess_min[moved] < IMH_ESS_NUTS]
+                caveat = f', least of all for {named(low)[1]}' if low.size else ''
                 warn(
-                    f'Very low IMH ESS before the random-walk moves for dataset(s) {names}: '
-                    f'{e_vals} < {IMH_ESS_NUTS:g}.\n'
-                    'The moves may not close the gap, so the intervals can still be too narrow.\n'
+                    f'Random-walk moves ran after a weak IMH for dataset(s) {names}: acceptance '
+                    f'{a_vals} (warns below {sg["accept_threshold"]:g}), min ESS {e_vals} '
+                    f'(warns below {sg["ess_threshold"]:g}).\n'
+                    f'The moves may not close the gap{caveat}, so the intervals can still be too '
+                    'narrow.\n'
                     'Remedy: check against exact MCMC, e.g. NUTS.'
+                )
+        if 'prior_flag' in sg:
+            flagged, names = named(np.flatnonzero(sg['prior_flag']))
+            if flagged.size:
+                found = '\n'.join(f'  {labels[i]!r}: {sg["prior_outside"][i]}' for i in flagged)
+                warn(
+                    f'Prior outside the range the network was trained on for dataset(s) {names}:\n'
+                    f'{found}\n'
+                    'The network extrapolates there, so the posterior can be off.\n'
+                    'Remedy: check against exact MCMC, e.g. NUTS, or a prior inside the range.'
                 )
         if 'psis_fallback' in sg:
             flagged, names = named(np.flatnonzero(sg['psis_fallback']))
