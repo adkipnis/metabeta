@@ -28,6 +28,7 @@ Usage (from repo root):
 import argparse
 import logging
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -42,6 +43,7 @@ from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.sampling import setSeed
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR, REPO_ROOT
 from metabeta.utils.fits import fitPath
+from metabeta.utils.results import Proposal
 from metabeta.posthoc.metropolis import bulkEss
 from metabeta.utils.posterior_eval import (
     IMH_METHODS,
@@ -115,11 +117,14 @@ def collectCondition(
     tag: str,
     device: torch.device,
     methods: list[str],
+    extra: Callable[[dict, Proposal, dict], dict[str, np.ndarray]] | None = None,
 ) -> dict | None:
     """Per-dataset agreement arrays and quality entries for one condition dir.
 
     Proposals are computed on the full condition batch (NUTS fits exist for every dataset);
     the converged subset is applied downstream when aggregating, so all methods stay paired.
+    ``extra(proposals, proposal_nuts, batch)`` adds per-dataset arrays of its own, computed
+    on the same rescaled proposals.
     """
     data_id = f'{size}-{family}-{tag}'
     seed = BEST_SEEDS.get((FAMILY_NAMES[family], size))
@@ -268,6 +273,8 @@ def collectCondition(
                 else np.nanmin(bulkEss(proposal.samples_g, IMH_N_CHAINS).numpy(), axis=1)
             )
         entries[METHOD_LABELS.get(m, m)] = keptEntries(proposal)
+    if extra is not None:
+        out.update(extra(proposals, proposal_nuts, batch))
     return {'agree': {k: v[keep] for k, v in out.items()}, 'entries': entries}
 
 
