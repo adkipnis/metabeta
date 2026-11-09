@@ -18,10 +18,10 @@ likelihood_misspec.py and prior_misspec.py:
      lies more than SHIFT_MAX NUTS posterior SDs away or a stressed SD is off by more than a
      factor SD_RATIO_MAX; the off datasets are counted with and without a flag.
 
-The flags are the Api's warnings, read from the plain IMH run: acceptance below
-IMH_ACCEPT_WARN or min ESS below IMH_ESS_WARN for IMH, and for IMH followed by the
-random-walk moves (which run where ESS < IMH_ESS_WARN) min ESS below IMH_ESS_NUTS, or low
-acceptance where the moves did not run. The per-dataset arrays go to
+The flags are the Api's warnings (metabeta.models.api.imhFlagged), read from each method's own
+IMH run: acceptance below IMH_ACCEPT_WARN or min ESS below IMH_ESS_WARN. The random-walk moves
+run exactly where that ESS falls below IMH_ESS_WARN, so with the moves a dataset is flagged where
+they ran or where its IMH acceptance is low. The per-dataset arrays go to
 stress_{family}_{axis}.npz, keyed '{tag}/{key}', with 'idx' the position in the set.
 
 Usage (from repo root):
@@ -40,11 +40,18 @@ import numpy as np
 import yaml
 from tabulate import tabulate
 
-from metabeta.models.api import IMH_ACCEPT_WARN, IMH_ESS_NUTS, IMH_ESS_WARN
+from metabeta.models.api import IMH_ACCEPT_WARN, IMH_ESS_WARN, imhFlagged
+from metabeta.posthoc.metropolis import bulkEss
 from metabeta.utils.device import setDevice
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR
 from metabeta.utils.logger import setupLogging
-from metabeta.utils.posterior_eval import IMH_METHODS, IMH_MOVES, posthocDefaults, validMethods
+from metabeta.utils.posterior_eval import (
+    IMH_METHODS,
+    IMH_MOVES,
+    IMH_N_CHAINS,
+    posthocDefaults,
+    validMethods,
+)
 from metabeta.utils.results import Proposal
 from metabeta.utils.sampling import setSeed
 
@@ -82,6 +89,27 @@ AXES: dict[str, dict[str, list[tuple[str, str]]]] = {
 }
 SHIFT_MAX = 1.0  # |Δmean| in NUTS posterior SDs
 SD_RATIO_MAX = 1.5
+# a run's share of changed steps differs from its stored IMH acceptance by at most 0.001 where
+# the moves did not run (the first kept step's decision is not in the draws)
+ACCEPT_GAP_MOVED = 0.002
+
+
+def movesRan(proposal: Proposal) -> np.ndarray:
+    """(B,) the datasets on which a '+moves' run's random-walk moves ran.
+
+    The run keeps only its IMH acceptance. Where the moves did not run, its draws are the IMH
+    chains, whose share of changed steps matches that acceptance and whose min bulk ESS passed
+    the moves' gate (IMH_ESS_WARN); where they ran, the draws hold the moves' chains instead.
+    """
+    samples_g = proposal.samples_g  # (B, S, D)
+    B, S, D = samples_g.shape
+    x = samples_g.reshape(B, IMH_N_CHAINS, S // IMH_N_CHAINS, D)
+    prev, cur = x[:, :, :-1], x[:, :, 1:]
+    changed = ((cur != prev) & ~(cur.isnan() & prev.isnan())).any(-1)  # (B, C, S/C - 1)
+    accept = proposal.is_results['imh_accept_rate'].double().numpy()
+    gap = np.abs(changed.double().mean((1, 2)).numpy() - accept)
+    ess = np.nanmin(bulkEss(samples_g, IMH_N_CHAINS).numpy(), axis=1)
+    return (gap >= ACCEPT_GAP_MOVED) | (ess < IMH_ESS_WARN)
 
 
 def stressedShift(stress_col: np.ndarray | None) -> Callable:
@@ -89,7 +117,8 @@ def stressedShift(stress_col: np.ndarray | None) -> Callable:
 
     Per dataset, over the stressed parameters (the fixed effect of column ``stress_col``, or
     every active global parameter when it is None): the largest |Δmean| in NUTS posterior
-    SDs, and the SD ratio (method / NUTS) furthest from 1.
+    SDs, and the SD ratio (method / NUTS) furthest from 1. For a '+moves' run, also whether
+    its moves ran (``{m}:moved``, see movesRan), which apiFlags reads.
     """
 
     def hook(
@@ -124,21 +153,25 @@ def stressedShift(stress_col: np.ndarray | None) -> Callable:
             out[f'{m}:shift_at'] = np.nan_to_num(shift, nan=-1.0).argmax(1)
             out[f'{m}:sd_ratio'] = np.exp(log_ratio[np.arange(B), worst])
             out[f'{m}:sd_ratio_at'] = worst
+            if m in IMH_MOVES:
+                out[f'{m}:moved'] = movesRan(p)
         return out
 
     return hook
 
 
 def apiFlags(agree: dict[str, np.ndarray], imh: str | None) -> dict[str, np.ndarray]:
-    """Per method, the datasets the Api would warn about (see the module docstring)."""
+    """The datasets the Api warns about, for the IMH run ``imh`` and, where ``agree`` holds
+    whether its moves ran, for ``{imh}+moves`` (see the module docstring)."""
     if imh is None:
         return {}
-    accept, ess = agree[f'{imh}:accept'], agree[f'{imh}:ess_min']
-    low_accept = accept < IMH_ACCEPT_WARN
-    return {
-        imh: low_accept | (ess < IMH_ESS_WARN),
-        f'{imh}+moves': (ess < IMH_ESS_NUTS) | (low_accept & (ess >= IMH_ESS_WARN)),
-    }
+    flags = {imh: imhFlagged(agree[f'{imh}:accept'], agree[f'{imh}:ess_min'])}
+    moves = f'{imh}+moves'
+    if f'{moves}:moved' in agree:
+        # the moves ran exactly where the run's IMH min ESS fell below IMH_ESS_WARN
+        ess = np.where(agree[f'{moves}:moved'], 0.0, np.inf)
+        flags[moves] = imhFlagged(agree[f'{moves}:accept'], ess)
+    return flags
 
 
 def renderShiftMd(
@@ -250,9 +283,8 @@ def main() -> None:
             '## Stressed parameters (converged datasets)\n',
             f'Stressed: {stressed}. Off NUTS: |Δmean| > {SHIFT_MAX:g} NUTS posterior SD or '
             f'SD ratio beyond {SD_RATIO_MAX:g}x either way. Unflagged: no Api warning for that '
-            'method (IMH: acceptance < '
-            f'{IMH_ACCEPT_WARN:g} or min ESS < {IMH_ESS_WARN:g}; IMH+RW: min ESS < '
-            f'{IMH_ESS_NUTS:g}); none for the raw flow.\n',
+            f'method (acceptance < {IMH_ACCEPT_WARN:g} or min ESS < {IMH_ESS_WARN:g} on its own '
+            'IMH run, so with the random-walk moves wherever they ran); none for the raw flow.\n',
             shift_md,
             '',
         ]

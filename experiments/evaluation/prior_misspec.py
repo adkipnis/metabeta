@@ -103,7 +103,7 @@ def renderDiagnosticsMd(
 
     Over all datasets, since neither check reads NUTS. The ESS columns stay empty on the +moves
     row, whose draws no longer hold the IMH chains; its gate read the same statistic on its own
-    chain. Below IMH_ESS_NUTS the Api warns even after the random-walk moves.
+    chain. Below IMH_ESS_NUTS the Api's warning adds that the random-walk moves may not suffice.
     """
     rows = []
     for tag, agree in pooled.items():
