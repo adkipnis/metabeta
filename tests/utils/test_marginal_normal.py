@@ -149,6 +149,25 @@ def test_conditional_moments_match_conjugate():
         assert torch.allclose(emp_cov, V, atol=0.15 * V.diagonal().max())
 
 
+def test_conditional_mean_at_tiny_sigma_eps_matches_float64():
+    """At sigma_eps 2e-19 (an IMH chain stuck on such a flow draw, issue #57) Zᵀr / σ²_eps
+    overflows float32 although the conditional is ordinary: the draw is the float64
+    conditional mean, which is close to the per-group least-squares fit."""
+    x = torch.tensor([-1.0, -0.5, 0.0, 0.5, 1.0])
+    Z = torch.stack([torch.ones(5), x], -1).reshape(1, 1, 5, 2)
+    X = torch.ones(1, 1, 5, 1)
+    y = (1000.0 + 50.0 * x + torch.tensor([0.3, -0.2, 0.1, 0.0, -0.4])).reshape(1, 1, 5, 1)
+    ffx, sigma_rfx = torch.zeros(1, 2, 1), torch.full((1, 2, 2), 3.0)
+    sigma_eps = torch.tensor([[0.5, 2e-19]])  # σ²_eps 4e-38, a normal float32
+    mask_n, mask_m = torch.ones(1, 1, 5, 1), torch.ones(1, 1, 1)
+    rfx = sampleRfxConditionalNormal(ffx, sigma_rfx, sigma_eps, y, X, Z, mask_n, mask_m)
+    assert torch.isfinite(rfx).all()
+    Zd, yd, s2e = Z[0, 0].double(), y[0, 0, :, 0].double(), 4e-38
+    precision = torch.eye(2, dtype=torch.float64) / 9.0 + Zd.T @ Zd / s2e
+    mean = torch.linalg.solve(precision, Zd.T @ yd / s2e)
+    torch.testing.assert_close(rfx[0, 0, 1].double(), mean, rtol=1e-4, atol=1e-3)
+
+
 def test_conditional_masked_groups_zero():
     X, Z, y, ffx, sigma_rfx, sigma_eps, mask_n, mask_m = _makeProblem(seed=7)
     mask_m = mask_m.clone()
@@ -240,6 +259,33 @@ def test_ffx_conditional_keeps_padded_dims():
     )  # fmt: skip
     assert torch.equal(draw[..., 1], ffx[..., 1])
     assert torch.isfinite(draw).all() and not torch.equal(draw[..., 0], ffx[..., 0])
+
+
+def test_ffx_conditional_keeps_states_whose_precision_does_not_factor():
+    """At sigma_eps near zero the Woodbury terms of the precision cancel and rounding leaves it
+    indefinite; those states keep their draw, the others are drawn (issue #57: the random-walk
+    moves' start refresh raised under priors far outside the trained range)."""
+    from metabeta.utils.families import sampleFfxConditionalNormal
+
+    g = torch.Generator().manual_seed(0)
+    b, m, n, d, s = 1, 20, 8, 3, 6
+    X = torch.randn(b, m, n, d, generator=g)
+    X[..., 0] = 1.0
+    Z, y = X.clone(), torch.randn(b, m, n, 1, generator=g)
+    ffx = torch.randn(b, s, d, generator=g)
+    sigma_rfx = torch.tensor([2.5e3, 0.0, 1e3]).expand(b, s, d)
+    sigma_eps = torch.full((b, s), 1e-8)
+    sigma_eps[:, 0] = 0.5  # state 0 ordinary
+    torch.manual_seed(2)
+    draw, accepted = sampleFfxConditionalNormal(
+        ffx, sigma_rfx, sigma_eps, y, X, Z, torch.ones(b, m, n, 1), torch.ones(b, m, 1),
+        torch.zeros(b, 1, d), torch.full((b, 1, d), 88.0), torch.zeros(b, dtype=torch.long),
+        torch.ones(b, 1, d, dtype=torch.bool),
+    )  # fmt: skip
+    assert torch.isfinite(draw).all()
+    assert bool(accepted[0, 0]) and not torch.equal(draw[0, 0], ffx[0, 0])
+    kept = ~accepted[0]
+    assert kept.any() and torch.equal(draw[0, kept], ffx[0, kept])
 
 
 def test_ffx_conditional_student_prior_targets_the_t_posterior():

@@ -653,27 +653,29 @@ def sampleRfxConditionalNormal(
     eye = torch.eye(q, device=L_rfx.device, dtype=L_rfx.dtype)
     Sigma_inv = choleskySolve(eye.expand_as(L_rfx), L_rfx)  # (b, s, q, q)
 
-    # M = Σ_rfx⁻¹ + ZᵀZ / σ²_eps  (b, m, s, q, q) - posterior precision
+    # M = σ²_eps V⁻¹ = σ²_eps Σ_rfx⁻¹ + ZᵀZ  (b, m, s, q, q): unlike V⁻¹ itself it stays finite
+    # as σ_eps → 0, where Zᵀr / σ²_eps overflows float32 although the conditional tends to the
+    # least-squares fit (#57: an IMH chain stuck on a flow draw with σ_eps 2e-19).
     s2e = sigma_eps.pow(2)  # (b, s)
-    M = Sigma_inv.unsqueeze(1) + ZtZ.unsqueeze(2) / s2e[:, None, :, None, None]
-    # extreme flow samples (σ_eps ≈ 0 / huge σ_rfx) can make M numerically non-PD
-    # or non-finite in float32; those samples carry zero IS weight anyway
-    # (logMarginalLikelihoodNormal fails the same factorisation -> -inf ll), so a
-    # placeholder N(0, I) draw for them never influences downstream results.
+    M = s2e[:, None, :, None, None] * Sigma_inv.unsqueeze(1) + ZtZ.unsqueeze(2)
+    # non-finite flow samples (e.g. σ_eps overflowing) can make M non-PD or non-finite; those
+    # samples carry zero IS weight anyway (logMarginalLikelihoodNormal fails the same
+    # factorisation -> -inf ll), so a placeholder N(0, I) draw for them never influences
+    # downstream results.
     chol_M, degenerate = safeCholesky(M)  # (b, m, s, q, q), (b, m, s)
 
-    # Posterior mean: μ = M⁻¹ (Zᵀr / σ²_eps)
-    rhs = Ztr / s2e[:, None, :, None]  # (b, m, s, q)
+    # Posterior mean: μ = V (Zᵀr / σ²_eps) = M⁻¹ Zᵀr
+    rhs = Ztr  # (b, m, s, q)
     if degenerate.any():
         rhs = torch.where(degenerate[..., None], torch.zeros_like(rhs), rhs)
     post_mean = choleskySolve(rhs.unsqueeze(-1), chol_M).squeeze(-1)  # (b, m, s, q)
 
-    # Sample: rfx = μ + chol_M⁻ᵀ z  where z ~ N(0, I)
-    # chol_M is Chol(V⁻¹), so Chol(V) = chol_M⁻ᵀ (upper-triangular solve)
-    z = torch.randn_like(post_mean)
-    rfx_centered = torch.linalg.solve_triangular(chol_M.mT, z.unsqueeze(-1), upper=True).squeeze(
-        -1
-    )  # (b, m, s, q)
+    # Sample: rfx = μ + σ_eps chol_M⁻ᵀ z  where z ~ N(0, I)
+    # chol_M is Chol(M) and V = σ²_eps M⁻¹, so Chol(V) = σ_eps chol_M⁻ᵀ (upper-triangular solve)
+    z = torch.randn_like(post_mean).unsqueeze(-1)  # (b, m, s, q, 1)
+    unit = torch.linalg.solve_triangular(chol_M.mT, z, upper=True).squeeze(-1)  # (b, m, s, q)
+    noise_sd = torch.where(degenerate, 1.0, sigma_eps[:, None, :])  # (b, m, s)
+    rfx_centered = noise_sd[..., None] * unit  # (b, m, s, q)
 
     return (post_mean + rfx_centered) * mask_m.unsqueeze(-1).float()  # (b, m, s, q)
 
@@ -703,7 +705,9 @@ def sampleFfxConditionalNormal(
 
     Under the Student-t prior that Gaussian serves as an independence-MH proposal for the exact
     conditional, whose ratio reduces to the prior ratio p_t(ffx*) p_N(ffx) / (p_t(ffx) p_N(ffx*)).
-    Computed in float64. Returns (ffx (b, s, d), accepted (b, s) bool).
+    At σ_eps near 0 the Woodbury terms cancel and rounding can leave M or P indefinite; such
+    states keep the current draw, as on rejection (#57). Computed in float64. Returns (ffx (b, s, d),
+    accepted (b, s) bool).
     """
     dtype = torch.float64
     b, s, d = ffx.shape
@@ -727,7 +731,7 @@ def sampleFfxConditionalNormal(
         Sigma_inv = choleskySolve(eye_q.expand_as(L_Sigma), L_Sigma)
     inv_s2e = (1.0 / sigma_eps.to(dtype).pow(2))[:, None, :, None, None]  # (b, 1, s, 1, 1)
     M = Sigma_inv[:, None] + ZtZ[:, :, None] * inv_s2e  # (b, m, s, q, q)
-    chol_M = torch.linalg.cholesky(M + 1e-6 * eye_q)
+    chol_M, info_M = torch.linalg.cholesky_ex(M + 1e-6 * eye_q)  # info_M (b, m, s)
     Minv_ZtX = choleskySolve(XtZ.mT[:, :, None].expand(b, m, s, q, d), chol_M)  # (b, m, s, q, d)
     Minv_Zty = choleskySolve(Zty[:, :, None].expand(b, m, s, q, 1), chol_M)  # (b, m, s, q, 1)
     G = (XtX[:, :, None] - XtZ[:, :, None] @ Minv_ZtX * inv_s2e) * inv_s2e  # (b, m, s, d, d)
@@ -741,7 +745,9 @@ def sampleFfxConditionalNormal(
     prec = torch.where(active, 1.0 / tau.pow(2), 1.0)  # (b, 1, d)
     pair = active.unsqueeze(-1) & active.unsqueeze(-2)  # (b, 1, d, d)
     P = G * pair + torch.diag_embed(prec.expand(b, s, d))
-    L_P = torch.linalg.cholesky(P)
+    L_P, info_P = torch.linalg.cholesky_ex(P)
+    factored = (info_P == 0) & (info_M == 0).all(1)  # (b, s)
+    L_P = torch.where(factored[..., None, None], L_P, torch.eye(d, dtype=dtype, device=X.device))
     mean = choleskySolve(((g + nu * prec) * active).unsqueeze(-1), L_P).squeeze(-1)
     z = torch.randn_like(mean)
     draw = mean + torch.linalg.solve_triangular(L_P.mT, z.unsqueeze(-1), upper=True).squeeze(-1)
@@ -754,7 +760,8 @@ def sampleFfxConditionalNormal(
         - logProbFfx(cur, nu, tau, family_ffx, active)
         + logProbFfx(cur, nu, tau, normal, active)
     )
-    accepted = torch.rand_like(log_ratio).log() < log_ratio  # (b, s); 0 < 0 never: normal always
+    # (b, s); 0 < 0 never: the normal prior always accepts where P factored
+    accepted = (torch.rand_like(log_ratio).log() < log_ratio) & factored
     draw = torch.where(active & accepted[..., None], draw, cur)
     return draw.to(ffx.dtype), accepted
 
