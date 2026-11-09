@@ -150,15 +150,21 @@ They are in the summary's last line and in `result.safeguards`:
 - `R²`, `AUC` or `Deviance`, by family: how well the posterior predicts the data (in
   `result.diagnostics`).
 
-`sample` warns when the acceptance, the ESS or `MAP z` crosses its threshold.
+`sample` warns when the acceptance, the ESS or `MAP z` crosses its threshold. It also warns when a
+prior lies outside the range the networks were trained on.
 
 </details>
 
 <details>
 <summary><b>When should I fall back to NUTS?</b></summary>
 
-When `sample` still warns after you apply its suggested remedy, e.g. more draws or
-random-walk moves (`random_walk=True`). `02-families` compares a Poisson fit with NUTS.
+When `sample` still warns after more draws (`n_samples`), or warns about the prior:
+
+- **Random-walk moves** (`random_walk=True`): usually repair the intervals, but the warning
+  stays, so check the fit against NUTS.
+- **A prior outside the trained range**: fit with NUTS, or choose a prior inside the range.
+
+`02-families` compares a Poisson fit with NUTS.
 
 </details>
 
