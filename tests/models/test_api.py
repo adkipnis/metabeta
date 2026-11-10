@@ -626,6 +626,22 @@ def test_default_priors_stay_quiet_and_out_of_range_priors_warn(api: Api):
     assert prior.filename == __file__
 
 
+def test_data_larger_than_the_training_data_is_fitted_and_warns(api: Api):
+    kwargs = dict(
+        formula='Reaction ~ Days + (1 + Days | Subject)', n_samples=8, fit_preprocessor=True
+    )
+    large, caught = _warningsOf(lambda: api.sample(_sleepstudy(m=210, n_i=5), **kwargs))
+    assert large.safeguards['size_flag'][0]
+    (size,) = [w for w in caught if 'larger than the network' in str(w.message)]
+    assert 'm=210 > max_m=200' in str(size.message)
+    assert 'NUTS' in str(size.message)
+    assert size.filename == __file__
+
+    small, caught = _warningsOf(lambda: api.sample(_sleepstudy(), **kwargs))
+    assert not small.safeguards['size_flag'][0]
+    assert not [w for w in caught if 'larger than the network' in str(w.message)]
+
+
 @pytest.mark.parametrize(
     ('formula', 'syntax'),
     [
@@ -679,9 +695,8 @@ def test_named_column_the_correlation_filter_drops_raises(api: Api, partner: str
         )
 
 
-@pytest.mark.parametrize('m', [3, 210])
-def test_too_few_or_too_many_groups_raise_one_concise_error(api: Api, m: int):
-    df = _sleepstudy(m=m)
+def test_too_few_groups_raise_one_concise_error(api: Api):
+    df = _sleepstudy(m=3)
 
     with warnings.catch_warnings(record=True) as caught, pytest.raises(ValueError) as error:
         warnings.simplefilter('always')
@@ -689,7 +704,7 @@ def test_too_few_or_too_many_groups_raise_one_concise_error(api: Api, m: int):
             df, formula='Reaction ~ Days + (1 | Subject)', n_samples=8, fit_preprocessor=True
         )
 
-    assert f'{m} groups (supported: 5 to 200)' in str(error.value)
+    assert '3 groups (supported: 5 to 200)' in str(error.value)
     assert 'tiny' not in str(error.value)  # no failure list per submodel
     assert not [w for w in caught if issubclass(w.category, RuntimeWarning)]
 
@@ -1286,7 +1301,7 @@ def test_the_limits_error_of_one_dataset_names_no_row(api: Api):
 
 
 def test_every_dataset_failing_raises_the_first_error_naming_its_dataset(api: Api):
-    dfs = {'x': _sleepstudy(m=3), 'y': _sleepstudy(m=210)}
+    dfs = {'x': _sleepstudy(m=3), 'y': _sleepstudy(m=4)}
 
     with pytest.raises(ValueError, match='3 groups') as error:
         api.sample(dfs, formula=_FORMULA, n_samples=8)
