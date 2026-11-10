@@ -89,7 +89,7 @@ SAFEGUARDS = (
 # the paper figures' colors and layout (prior_sensitivity.py): full text width at a 9 in canvas
 C_MB, C_NUTS = PALETTE[4], PALETTE[3]
 FIG_RC = {'font.size': 11.5, 'axes.titlesize': 11.5, 'axes.labelsize': 11.5, 'legend.fontsize': 10}
-FIG_W, PANEL_H, LEGEND_H = 9.0, 2.8, 0.2
+FIG_W, PANEL_H, LEGEND_H = 9.0, 2.3, 0.2
 
 # log-odds scale: bambi's Bernoulli defaults, with the school SD moved inside the training range;
 # the skeptical prior on `program` puts 5% on OR >= 1.8 (Spiegelhalter et al., 1994)
@@ -531,7 +531,8 @@ class PowerAnalysis:
 
     def figure(self) -> None:
         """Detection rate vs schools, one panel per prior: MB on every trial (line, band of 2
-        Monte Carlo SE), NUTS on the subsample where nuts2 converged (points, 2 SE)."""
+        Monte Carlo SE), NUTS on the subsample where nuts2 converged (points, 2 SE). The legend
+        tells power (solid, filled) from type I error (dashed, hollow)."""
         mb = pd.read_csv(self.outdir / 'mb.csv')
         mb = mb[~mb.skipped]
         path = self.outdir / 'compare.csv'
@@ -563,14 +564,6 @@ class PowerAnalysis:
                         ax.errorbar(
                             p.index, p, yerr=2 * se, fmt='o', color=C_NUTS, mfc=mfc, ms=4.5, lw=1
                         )
-                    if self.lf == 1 and ax is axes[0, -1]:
-                        if effect == null:  # right end, above the 0.05 line
-                            ax.text(self.m[-1], 0.12, 'type I error (OR 1)', ha='right',
-                                    va='center', color='0.25')  # fmt: skip
-                        else:  # below the curve's middle, clear of the NUTS error bars
-                            mid = self.m[len(self.m) // 2]
-                            ax.text(mid, power[mid] - 0.15, f'power (OR {effect:g})', ha='left',
-                                    va='top', color='0.25')  # fmt: skip
                 for level in (0.05, 0.8):
                     ax.axhline(level, color='0.6', lw=0.8, ls=':', zorder=0)
                 if prior is None:
@@ -580,10 +573,21 @@ class PowerAnalysis:
                     title = f'{PRIOR_TITLES[name]} prior, program ~ N(0, {tau:g})'
                 ax.set(title=title, xlabel='schools per trial', xticks=self.m, ylim=(0, 1))
             axes[0, 0].set_ylabel('trials detecting the effect')
+            handles = [
+                Line2D([], [], color=C_MB, lw=1.6),
+                Line2D([], [], color=C_NUTS, marker='o', ls=''),
+            ]
+            labels = ['MB', 'NUTS']
+            if null is not None:  # line style and marker fill tell power from type I error
+                effect = next(e for e in self.effects if e != null)
+                handles += [
+                    Line2D([], [], color='0.4', lw=1.6, marker='o', ms=4.5),
+                    Line2D([], [], color='0.4', lw=1.6, ls='--', marker='o', ms=4.5, mfc='white'),
+                ]
+                labels += [f'power (OR {effect:g})', f'type I error (OR {null:g})']
             fig.legend(
-                [Line2D([], [], color=C_MB, lw=1.6), Line2D([], [], color=C_NUTS, marker='o', ls='')],
-                ['MB, every trial', 'NUTS, subsample'],
-                loc='lower center', ncol=2, frameon=False, handlelength=1.4, columnspacing=1.0,
+                handles, labels, loc='lower center', ncol=len(labels), frameon=False,
+                handlelength=2.2, columnspacing=1.4,
             )  # fmt: skip
             fig.tight_layout(rect=(0, LEGEND_H / (PANEL_H + LEGEND_H), 1, 1))
             out = self.outdir / f'power_{self.name}.pdf'
