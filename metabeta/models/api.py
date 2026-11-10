@@ -475,8 +475,9 @@ class Api:
         set of priors and one preprocessing.  Many datasets return a list, or a dict with the
         same keys, holding one result per dataset as ``sample(df)`` would return it, with its own
         parameter names, scale information and group labels; datasets that need different
-        submodels run in one call.  A dataset that cannot be prepared (outside the checkpoint's
-        limits, a collinear named column, a term or prior name that does not resolve) is skipped:
+        submodels run in one call.  A dataset that cannot be prepared (a family, a number of
+        effects or a minimum size outside the checkpoint's limits, a collinear named column, a
+        term or prior name that does not resolve) is skipped:
         ``None`` takes its place and one warning lists the skipped datasets with their reasons,
         and if every dataset fails the first error is raised with the dataset named.  Unsupported
         formula syntax and a wrong argument type raise at once.  Warnings name datasets by their
@@ -523,7 +524,10 @@ class Api:
         network was trained on (``utils/priors.py``, ``TRAINED_RANGE``) trigger a warning that
         names them and their range ('prior_flag', values in 'prior_outside'): the network
         extrapolates there.  The default priors are Bambi's, with the scales outside that range
-        lowered into it (``API_DEFAULT_SCALES``).  All checks are reported in
+        lowered into it (``API_DEFAULT_SCALES``).  A dataset larger than every submodel's training
+        data (more groups, rows per group or rows) goes to the smallest submodel that fits it
+        otherwise and triggers a warning that names the excess ('size_flag', values in
+        'size_outside').  All checks are reported in
         ``RouterResult.safeguards``.
 
         Every call also stores the posterior predictive and a fit metric (R², AUC or deviance)
@@ -781,6 +785,12 @@ class Api:
         keys = (*TRAINED_RANGE[lf], 'mask_d', 'mask_q')
         outside = outsideTrainedRange({k: batch[k].cpu().numpy() for k in keys if k in batch}, lf)
         safeguards = {**(safeguards or {}), 'prior_flag': outside != '', 'prior_outside': outside}
+        routing = self._submodel_by_id[routes[0]].get('routing', {})
+        rows = range(batch['X'].shape[0])
+        larger = np.array(
+            ['; '.join(_sizeFailures(self._datasetDimensions(batch, i), routing)) for i in rows]
+        )
+        safeguards |= {'size_flag': larger != '', 'size_outside': larger}
         diags = self._computeDiagnostics(proposal, batch, loo=loo)
         return {'proposal': proposal, 'safeguards': safeguards, 'evidence': log_ev, 'diags': diags}
 
@@ -870,6 +880,16 @@ class Api:
                     f'{found}\n'
                     'The network extrapolates there, so the posterior can be off.\n'
                     'Remedy: check against exact MCMC, e.g. NUTS, or a prior inside the range.'
+                )
+        if 'size_flag' in sg:
+            flagged, names = named(np.flatnonzero(sg['size_flag']))
+            if flagged.size:
+                found = '\n'.join(f'  {labels[i]!r}: {sg["size_outside"][i]}' for i in flagged)
+                warn(
+                    f'Data larger than the network was trained on for dataset(s) {names}:\n'
+                    f'{found}\n'
+                    'The network extrapolates there, so the posterior can be off.\n'
+                    'Remedy: check against exact MCMC, e.g. NUTS.'
                 )
         if 'psis_fallback' in sg:
             flagged, names = named(np.flatnonzero(sg['psis_fallback']))
@@ -1747,6 +1767,13 @@ class Api:
             if not failures:
                 return entry, failures_by_submodel
             failures_by_submodel[str(entry['id'])] = failures
+        # no submodel was trained on data this large: the smallest one that fits the dataset
+        # otherwise takes it, and sample flags it ('size_flag')
+        dims = self._datasetDimensions(batch, i)
+        for entry in self.submodels:
+            size = _sizeFailures(dims, entry.get('routing', {}))
+            if set(failures_by_submodel[str(entry['id'])]) <= set(size):
+                return entry, failures_by_submodel
         misfit = self._misfit(batch, i, failures_by_submodel)
         # a batch of one dataset names no row; sample labels its datasets itself
         which = 'the dataset' if batch['X'].shape[0] == 1 else f'dataset {i}'
@@ -1773,17 +1800,17 @@ class Api:
             misfits.append(
                 f"family '{name}' (supported: {supported}); load Api.from_pretrained('{name}')"
             )
-        for label, low, high, min_key, max_key in (
-            ('groups', dims['m'], dims['m'], 'min_m', 'max_m'),
-            ('rows per group', dims['min_n_i'], dims['max_n_i'], 'min_n', 'max_n'),
-            ('rows', dims['n'], dims['n'], None, 'max_n_total'),
-            ('fixed effects', dims['d'], dims['d'], 'min_d', 'max_d'),
-            ('random effects', dims['q'], dims['q'], 'min_q', 'max_q'),
+        # beyond the size maxima (groups, rows per group, rows) a dataset is fitted and flagged
+        for label, low, high, min_key, max_key, hard_max in (
+            ('groups', dims['m'], dims['m'], 'min_m', 'max_m', False),
+            ('rows per group', dims['min_n_i'], dims['max_n_i'], 'min_n', 'max_n', False),
+            ('fixed effects', dims['d'], dims['d'], 'min_d', 'max_d', True),
+            ('random effects', dims['q'], dims['q'], 'min_q', 'max_q', True),
         ):
             lows = [int(v) for e in self.submodels if (v := routeValue(e, min_key)) is not None]
             highs = [int(v) for e in self.submodels if (v := routeValue(e, max_key)) is not None]
             lo, hi = min(lows, default=None), max(highs, default=None)
-            if (lo is not None and low < lo) or (hi is not None and high > hi):
+            if (lo is not None and low < lo) or (hard_max and hi is not None and high > hi):
                 value = low if low == high else f'{low} to {high}'
                 supported = f'up to {hi}' if lo is None else f'{lo} to {hi}'
                 misfits.append(f'{value} {label} (supported: {supported})')
@@ -1799,8 +1826,6 @@ class Api:
         for dim_key, route_key, cmp, sym in (
             ('d', 'max_d', operator.gt, '>'),
             ('q', 'max_q', operator.gt, '>'),
-            ('m', 'max_m', operator.gt, '>'),
-            ('n', 'max_n_total', operator.gt, '>'),
             ('d', 'min_d', operator.lt, '<'),
             ('q', 'min_q', operator.lt, '<'),
             ('m', 'min_m', operator.lt, '<'),
@@ -1809,14 +1834,11 @@ class Api:
             bound = routing.get(route_key)
             if bound is not None and cmp(value, int(bound)):
                 failures.append(f'{dim_key}={value} {sym} {route_key}={bound}')
+        failures += _sizeFailures(dims, routing)
 
         min_n = routing.get('min_n')
         if min_n is not None and dims['min_n_i'] < int(min_n):
             failures.append(f'min_n_i={dims["min_n_i"]} < min_n={min_n}')
-
-        max_n = routing.get('max_n')
-        if max_n is not None and dims['max_n_i'] > int(max_n):
-            failures.append(f'max_n_i={dims["max_n_i"]} > max_n={max_n}')
 
         min_bg_df = routing.get('min_bg_df')
         if min_bg_df is not None:
@@ -2481,6 +2503,17 @@ def _callerFile() -> str:
     while frame.f_back is not None and frame.f_code.co_filename.startswith(INTERNAL_PREFIXES):
         frame = frame.f_back
     return frame.f_code.co_filename
+
+
+def _sizeFailures(dims: Mapping[str, int | None], routing: Mapping[str, Any]) -> list[str]:
+    """Where a dataset is larger than a submodel's training data: more groups (max_m), rows per
+    group (max_n) or rows (max_n_total).  Such a dataset is still fitted, and flagged."""
+    failures = []
+    for dim_key, route_key in (('m', 'max_m'), ('max_n_i', 'max_n'), ('n', 'max_n_total')):
+        bound = routing.get(route_key)
+        if bound is not None and dims[dim_key] > int(bound):
+            failures.append(f'{dim_key}={dims[dim_key]} > {route_key}={bound}')
+    return failures
 
 
 def _listed(labels: list[Any]) -> str:

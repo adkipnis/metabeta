@@ -349,6 +349,28 @@ def test_router_rejects_dataset_outside_training_dimensions(tmp_path: Path):
         router._routeBatch(_batch(d=9, q=3))
 
 
+def test_router_takes_a_dataset_larger_than_every_submodel_was_trained_on(tmp_path: Path):
+    joint_path = tmp_path / 'joint.pt'
+    _write_joint_checkpoint(joint_path)
+    router = Api(joint_path, warmup=False)
+
+    # 250 groups: beyond small's max_m but within medium's, so medium takes it unflagged
+    routes, _ = router._routeBatch(_batch(d=5, q=3, m=250))
+    assert routes == ['medium']
+
+    # beyond every submodel's max_m and max_n_total: the smallest that fits otherwise takes it
+    routes, validation = router._routeBatch(_batch(d=4, q=2, m=400))
+    assert routes == ['small']
+    assert validation[0]['failures_by_submodel']['small'] == [
+        'm=400 > max_m=200',
+        'n=4000 > max_n_total=3000',
+    ]
+
+    # a size excess does not lift the hard limits
+    with pytest.raises(ValueError, match=r'9 fixed effects \(supported: 1 to 8\)$'):
+        router._routeBatch(_batch(d=9, q=3, m=400))
+
+
 def test_router_names_the_failing_row_of_a_batch_of_several_datasets(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_joint_checkpoint(joint_path)

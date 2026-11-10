@@ -112,7 +112,8 @@ A GLMM fit is then a forward pass through the trained networks. Metropolis-Hasti
 <summary><b>What can MetaBeta fit?</b></summary>
 
 - **Models**: Gaussian, Bernoulli (0/1) and Poisson GLMMs with one grouping factor.
-- **Data**: 5 to 200 groups, 5 to 150 rows per group, at most 3,000 rows.
+- **Data**: at least 5 groups and 5 rows per group. The networks were trained on up to 200 groups,
+  150 rows per group and 3,000 rows; larger datasets are fitted with a warning.
 - **Effects**: at most 16 fixed and 5 random effects, intercepts included.
 - **Random slopes**: each must also be a fixed effect.
 - **Enough groups**: at least 4 more groups than fixed effects, and than random-effect variances

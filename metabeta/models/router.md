@@ -217,10 +217,10 @@ Implemented dimension coverage checks:
 
 - Fixed effects: active `d <= max_d`.
 - Random effects: active `q <= max_q`.
-- Groups: `min_m <= m <= max_m` when bounds are known.
-- Group sizes: every active `n_i` satisfies `min_n <= n_i <= max_n` when bounds
-  are known.
-- Total rows: `n <= max_n_total` and `n == ns.sum()` for active groups.
+- Groups: `min_m <= m` when bounds are known; `m > max_m` only flags the dataset.
+- Group sizes: every active `n_i` satisfies `min_n <= n_i` when bounds are known;
+  `n_i > max_n` only flags the dataset.
+- Total rows: `n == ns.sum()` for active groups; `n > max_n_total` only flags the dataset.
 - Between-group degrees of freedom: `m >= max(d, q * (q + 1) // 2) + min_bg_df`
   when `min_bg_df` is known.
 - Within-group degrees of freedom: every active `n_i >= q + min_within_df` when
@@ -309,8 +309,9 @@ dataset order.
 - `[done]` Joint checkpoint preserves model config, data config, and routing metadata.
 - `[partial]` Router loads submodels lazily and leaves them in eval mode.
 - `[done]` Router selects the smallest compatible model for `d/q/m/n_i/n` bands.
-- `[done]` Router rejects datasets outside `max_d`, `max_q`, `max_m`, `max_n_total`, or
-  likelihood family.
+- `[done]` Router rejects datasets outside `max_d`, `max_q` or the likelihood family.
+- `[done]` A dataset beyond `max_m`, `max_n` or `max_n_total` of every submodel goes to the
+  smallest submodel that fits it otherwise; `sample()` flags it (`size_flag`, `size_outside`).
 - `[done]` Router rejects datasets violating `min_bg_df` and `min_within_df`.
 - `[done]` Preprocessed numpy dict from `math__grp_group.npz` converts through formula
   and default priors.
