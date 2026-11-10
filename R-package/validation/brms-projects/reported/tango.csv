@@ -1,0 +1,6 @@
+model,parameter,estimate,error,lower,upper,level
+mAgeBox,b_age,0.69,NA,0.45,0.98,0.95
+mAgeBox,b_datacollectionremoteMunsupervised,1.10,NA,0.66,1.56,0.95
+mAgeBox,b_trialNr,-0.02,NA,-0.05,0.01,0.95
+mAgeBox,b_symmetricPosition,-1.58,NA,-1.87,-1.31,0.95
+mRetestBox,cor_subjID__relidayreliday1__relidayreliday2,0.91,NA,0.69,1.00,0.95

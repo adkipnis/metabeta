@@ -1,0 +1,5 @@
+"model","parameter","status","reported","metabeta","z_mean","sd_ratio","match"
+"model_success_brms","b_Intercept","warned","-3.09 (0.349) [-3.54, -2.65]","-2.475 (0.489) [-2.988, -1.688]",1.76099965374917,1.40024376418054,FALSE
+"model_success_brms","b_age_c","warned","-0.0473 (0.00913) [-0.0589, -0.0358]","-0.04644 (0.0149) [-0.05642, -0.02084]",0.0937999601407442,1.62990229656828,FALSE
+"model_success_brms","b_oxygen_usedTRUE","warned","5.65 (0.457) [5.08, 6.25]","4.083 (0.267) [3.748, 4.365]",-3.4287932014961,0.584204238136398,FALSE
+"model_success_brms","sd_expedition_id__Intercept","warned","3.57 (0.337) [3.16, 4.02]","2.807 (0.235) [2.593, 3.251]",-2.26409597000665,0.696186200599111,FALSE

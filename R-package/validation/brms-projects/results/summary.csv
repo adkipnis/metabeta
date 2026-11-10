@@ -1,0 +1,21 @@
+"project","status","numbers","match","median_abs_z","max_abs_z"
+"kurz_sr2","no warning",40,40,0.03,0.09
+"kurz_dbda","no warning",2,2,0.02,0.03
+"clark","no warning",16,16,0.03,0.37
+"vandeschoot","no warning",26,24,0.08,0.34
+"vandeschoot","not fitted",10,0,NA,NA
+"vandeschoot","warned",8,3,0.07,0.24
+"heiss","warned",4,0,2.01,3.43
+"tal","no warning",8,4,0.16,0.51
+"tal","warned",14,1,0.14,0.53
+"zhu","no warning",18,13,0.08,0.53
+"zhu","not fitted",7,0,NA,NA
+"zhu","warned",10,5,0.09,0.19
+"tango","warned",5,2,0.24,0.35
+"ma","no warning",40,39,0.02,0.38
+"rose","warned",30,11,0.15,0.5
+"haux","no warning",10,10,0.06,0.15
+"haux","not fitted",4,0,NA,NA
+"all","no warning",160,148,0.04,0.53
+"all","not fitted",21,0,NA,NA
+"all","warned",71,22,0.14,3.43
