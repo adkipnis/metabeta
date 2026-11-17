@@ -654,13 +654,13 @@ def sampleRfxConditionalNormal(
     Sigma_inv = choleskySolve(eye.expand_as(L_rfx), L_rfx)  # (b, s, q, q)
 
     # M = σ²_eps V⁻¹ = σ²_eps Σ_rfx⁻¹ + ZᵀZ  (b, m, s, q, q): unlike V⁻¹ itself it stays finite
-    # as σ_eps → 0, where Zᵀr / σ²_eps overflows float32 although the conditional tends to the
+    # as σ_eps -> 0, where Zᵀr / σ²_eps overflows float32 although the conditional tends to the
     # least-squares fit (#57: an IMH chain stuck on a flow draw with σ_eps 2e-19).
     s2e = sigma_eps.pow(2)  # (b, s)
     M = s2e[:, None, :, None, None] * Sigma_inv.unsqueeze(1) + ZtZ.unsqueeze(2)
     # non-finite flow samples (e.g. σ_eps overflowing) can make M non-PD or non-finite; those
     # samples carry zero IS weight anyway (logMarginalLikelihoodNormal fails the same
-    # factorisation -> -inf ll), so a placeholder N(0, I) draw for them never influences
+    # factorization -> -inf ll), so a placeholder N(0, I) draw for them never influences
     # downstream results.
     chol_M, degenerate = safeCholesky(M)  # (b, m, s, q, q), (b, m, s)
 
