@@ -131,7 +131,7 @@ A GLMM fit is then a forward pass through the trained networks. Metropolis-Hasti
 <details>
 <summary><b>Do I need a GPU?</b></summary>
 
-No. A fit takes 0.2 to 1 second on a laptop CPU, and about 0.1 seconds on a fast GPU. Colab's
+No. A fit takes 0.2 to 1 second on a laptop CPU, and about 0.25 seconds on an H100 GPU. Colab's
 free runtimes are slower: one to a few seconds on CPU or T4. To use a GPU, pass `device='cuda'` to
 `Api.from_pretrained`.
 
