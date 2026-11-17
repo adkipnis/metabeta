@@ -392,11 +392,12 @@ def coercePriors(
     d: int,
     q: int,
     likelihood_family: int,
+    y: np.ndarray | None = None,
 ) -> dict[str, np.ndarray]:
     if q > MAX_ROUTER_Q:
         raise ValueError(f'random-effect dimension q must be <= {MAX_ROUTER_Q}')
 
-    values = apiDefaultPriors(d, q, likelihood_family=likelihood_family)
+    values = apiDefaultPriors(d, q, likelihood_family=likelihood_family, y=y)
     if priors is not None:
         values.update({str(key): np.asarray(value) for key, value in priors.items()})
 
@@ -433,8 +434,11 @@ def resolvePriors(
     fixed_names: Sequence[str],
     random_names: Sequence[str],
     likelihood_family: int,
+    y: np.ndarray | None = None,
 ) -> list[tuple[str | None, dict[str, np.ndarray]]]:
-    """Resolve one or more prior specifications to canonical model prior arrays."""
+    """Resolve one or more prior specifications to canonical model prior arrays.  ``y`` is the
+    response of a model whose first fixed effect is the intercept, which the defaults may
+    depend on (apiDefaultPriors)."""
 
     d = len(fixed_names)
     q = len(random_names)
@@ -449,6 +453,7 @@ def resolvePriors(
                 d=d,
                 q=q,
                 likelihood_family=likelihood_family,
+                y=y,
             ),
         )
         for name, prior in variants
@@ -492,12 +497,13 @@ def _resolveSinglePrior(
     d: int,
     q: int,
     likelihood_family: int,
+    y: np.ndarray | None,
 ) -> dict[str, np.ndarray]:
     if prior is None:
-        return coercePriors(None, d=d, q=q, likelihood_family=likelihood_family)
+        return coercePriors(None, d=d, q=q, likelihood_family=likelihood_family, y=y)
 
     canonical = {key: value for key, value in prior.items() if key in CANONICAL_PRIOR_KEYS}
-    values = coercePriors(canonical, d=d, q=q, likelihood_family=likelihood_family)
+    values = coercePriors(canonical, d=d, q=q, likelihood_family=likelihood_family, y=y)
 
     if 'fixed' in prior:
         _applyFixedTermPriors(values, prior['fixed'], fixed_names)

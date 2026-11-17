@@ -166,6 +166,7 @@ the final ordered `X/Z` names.
 Supported prior inputs:
 
 - `None`: Bambi-style defaults, with the scales outside the trained range lowered into it
+  and the Poisson intercept centered at log(mean(y)), clipped to that range
   (`apiDefaultPriors`).
 - Canonical fit-style keys:
   - `nu_ffx`

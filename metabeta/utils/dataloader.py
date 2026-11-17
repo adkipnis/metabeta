@@ -413,10 +413,22 @@ def subsetBatch(batch: dict[str, torch.Tensor], mask: np.ndarray) -> dict[str, t
 
 
 # Per-group tensors carry the group axis at dim 1 (padded to the batch max m); those in
-# _OBS_KEYS also carry the observation axis at dim 2 (padded to the batch max n). Fit
-# tensors follow the '{prefix}_rfx' (B, m, ...) convention (corr_rfx is (B, q, q), not per-group).
-_GROUP_KEYS = ('X', 'Z', 'y', 'ns', 'mask_n', 'mask_m', 'mask_mq', 'rfx')
-_OBS_KEYS = ('X', 'Z', 'y', 'mask_n')
+# _OBS_KEYS also carry the observation axis at dim 2 (padded to the batch max n). Of a fit's
+# tensors only '{tag}_rfx' (B, m, s, q) is per group: '{tag}_sigma_rfx' (B, s, q) and
+# '{tag}_corr_rfx' (B, s, q, q) are not, and neither is corr_rfx (B, q, q).
+_GROUP_KEYS = frozenset(
+    {'ns', 'mask_m', 'mask_mq', 'rfx', 'blup_est', 'blup_var'} | {f'{t}_rfx' for t in FIT_TAGS}
+)
+_OBS_KEYS = frozenset({'X', 'Z', 'y', 'mask_n'})
+_AXIS_NAMES = {1: 'groups', 2: 'observations'}
+
+
+def _paddedAxes(key: str) -> tuple[int, ...]:
+    """The axes of the batch tensor `key` padded to the batch maxima: 1 (groups), 2
+    (observations) or none."""
+    if key in _OBS_KEYS:
+        return (1, 2)
+    return (1,) if key in _GROUP_KEYS else ()
 
 
 def trimBatchPadding(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -428,7 +440,8 @@ def trimBatchPadding(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     to the sub-batch maxima (from mask_n), touching only per-group / per-observation keys,
     so the result equals what collateGrouped would produce for these datasets alone. Raises
     if a dropped region is not entirely zero (a padding-convention violation, never silent).
-    Returns a new dict; nested dicts (e.g. 'stats') and global tensors pass through as-is.
+    Returns a new dict; nested dicts (e.g. 'stats') are trimmed alike, global tensors pass
+    through as-is.
     """
     mask_n = batch.get('mask_n')
     if mask_n is None or not torch.is_tensor(mask_n) or mask_n.ndim != 3:
@@ -438,23 +451,24 @@ def trimBatchPadding(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     n_keep = int(mask_n.sum(dim=-1).max())
     if m_keep >= m_pad and n_keep >= n_pad:
         return batch
+    return _trim(batch, {1: m_keep, 2: n_keep})
 
+
+def _trim(batch: dict[str, Any], sizes: dict[int, int]) -> dict[str, Any]:
     out = dict(batch)
     for key, v in batch.items():
-        if not torch.is_tensor(v) or v.ndim < 2 or v.shape[1] != m_pad:
+        if isinstance(v, dict):
+            out[key] = _trim(v, sizes)
             continue
-        fit_rfx = key.endswith('_rfx') and key != 'corr_rfx' and v.ndim >= 3
-        if key not in _GROUP_KEYS and not fit_rfx:
-            continue
-        if m_keep < m_pad:
-            if bool((v[:, m_keep:] != 0).any()):
-                raise ValueError(f'{key!r}: groups beyond {m_keep} are not padding')
-            v = v[:, :m_keep]
-        if key in _OBS_KEYS and n_keep < n_pad and v.ndim >= 3 and v.shape[2] == n_pad:
-            if bool((v[:, :, n_keep:] != 0).any()):
-                raise ValueError(f'{key!r}: observations beyond {n_keep} are not padding')
-            v = v[:, :, :n_keep]
-        out[key] = v.contiguous()
+        axes = [a for a in _paddedAxes(key) if torch.is_tensor(v) and v.shape[a] > sizes[a]]
+        for axis in axes:
+            if bool((v.narrow(axis, sizes[axis], v.shape[axis] - sizes[axis]) != 0).any()):
+                raise ValueError(
+                    f'{key!r}: {_AXIS_NAMES[axis]} beyond {sizes[axis]} are not padding'
+                )
+            v = v.narrow(axis, 0, sizes[axis])
+        if axes:
+            out[key] = v.contiguous()
     return out
 
 
@@ -474,25 +488,21 @@ def concatBatches(batches: list[dict[str, Any]]) -> dict[str, Any]:
     concatenate, nested dicts recurse, and anything else comes from the first batch."""
     if len(batches) == 1:
         return batches[0]
-    m = max(b['mask_n'].shape[1] for b in batches)
-    n = max(b['mask_n'].shape[2] for b in batches)
-    return _padCat(batches, m, n)
+    sizes = {axis: max(b['mask_n'].shape[axis] for b in batches) for axis in (1, 2)}
+    return _padCat(batches, sizes)
 
 
-def _padCat(batches: list[dict[str, Any]], m: int, n: int) -> dict[str, Any]:
+def _padCat(batches: list[dict[str, Any]], sizes: dict[int, int]) -> dict[str, Any]:
     out = {}
     for key, first in batches[0].items():
         values = [b[key] for b in batches]
         if isinstance(first, dict):
-            out[key] = _padCat(values, m, n)
+            out[key] = _padCat(values, sizes)
         elif isinstance(first, list):
             out[key] = [x for v in values for x in v]
         elif torch.is_tensor(first):
-            fit_rfx = key.endswith('_rfx') and key != 'corr_rfx' and first.ndim >= 3
-            if key in _GROUP_KEYS or fit_rfx:
-                values = [_padTo(v, 1, m) for v in values]
-            if key in _OBS_KEYS:
-                values = [_padTo(v, 2, n) for v in values]
+            for axis in _paddedAxes(key):
+                values = [_padTo(v, axis, sizes[axis]) for v in values]
             out[key] = torch.cat(values)
         else:
             out[key] = first

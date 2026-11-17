@@ -39,12 +39,21 @@ API_DEFAULT_SCALES: dict[int, dict[str, float]] = {
 }
 
 
-def apiDefaultPriors(d: int, q: int, likelihood_family: int = 0) -> dict[str, np.ndarray]:
+def apiDefaultPriors(
+    d: int, q: int, likelihood_family: int = 0, y: np.ndarray | None = None
+) -> dict[str, np.ndarray]:
     """Bambi's defaults (bambiDefaultPriors) with the scales the network was not trained on
-    lowered into its range (API_DEFAULT_SCALES)."""
+    lowered into its range (API_DEFAULT_SCALES).  Given the response ``y`` of a model whose
+    first fixed effect is the intercept, the Poisson intercept is centered at log(mean(y)),
+    clipped to TRAINED_RANGE: at mean 0 with scale 1, counts of mean above about 7 would sit in
+    its tail."""
     out = bambiDefaultPriors(d, q, likelihood_family)
     for key, value in API_DEFAULT_SCALES.get(likelihood_family, {}).items():
         out[key] = np.full_like(out[key], value)
+    if likelihood_family == 2 and y is not None:
+        lo, hi = TRAINED_RANGE[2]['nu_ffx']
+        # all-zero counts take the lower end
+        out['nu_ffx'][0] = np.clip(np.log(max(np.mean(y), np.exp(lo))), lo, hi)
     return out
 
 
@@ -63,7 +72,8 @@ def outsideTrainedRange(hyper: dict[str, np.ndarray], likelihood_family: int) ->
             active = np.asarray(masks[key], dtype=bool)
         else:  # eta_rfx 0 marks uncorrelated random effects
             active = v > 0 if key == 'eta_rfx' else np.ones_like(v, dtype=bool)
-        outside = active & ((v < lo) | (v > hi))
+        # at float32, the batch's precision: a value at a bound rounds past it otherwise
+        outside = active & ((v < np.float32(lo)) | (v > np.float32(hi)))
         for i in np.flatnonzero(outside.any(1)):
             values = ', '.join(f'{x:g}' for x in np.unique(v[i, outside[i]]))
             found[i].append(f'{key} {values} outside [{lo:g}, {hi:g}]')

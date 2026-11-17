@@ -494,6 +494,9 @@ class DataPreprocessor:
     The output dict schema matches the ``.npz`` files expected by the emulator:
     ``X`` (n x d-1, no intercept), ``y``, ``groups``, ``columns``, ``d``,
     ``n``, ``ns``, ``m``, ``y_type``.
+
+    ``count_y`` declares the response counts (a Poisson fit), which detection would read as
+    continuous, and standardize, when no count is 0.
     """
 
     _version = '1'
@@ -508,6 +511,7 @@ class DataPreprocessor:
         max_categories: int = 10,
         min_prevalence: float = 0.05,
         sentinels: list[float] | None = None,
+        count_y: bool = False,
     ):
         self.group_name = group_name
         self.col_miss_threshold = col_miss_threshold
@@ -517,6 +521,7 @@ class DataPreprocessor:
         self.max_categories = max_categories
         self.min_prevalence = min_prevalence
         self.sentinels: list[float] = sentinels if sentinels is not None else [-999]
+        self.count_y = count_y
         self._fitted = False
 
     # ------------------------------------------------------------------
@@ -666,6 +671,14 @@ class DataPreprocessor:
     # Core fit logic (single pass)
     # ------------------------------------------------------------------
 
+    def _yType(self, y: np.ndarray, y_is_binary: bool, y_is_multiclass: bool) -> str:
+        if not self.count_y:
+            return detectYType(y, y_is_binary, y_is_multiclass)
+        finite = y[np.isfinite(y)]
+        if np.any(finite < 0) or np.any(finite != np.round(finite)):
+            raise ValueError('a count response needs non-negative integers')
+        return 'count'
+
     def _audit_core(self, df: pd.DataFrame) -> PreprocessReport:
         df = df.copy()
         df.columns = df.columns.str.lower()
@@ -701,7 +714,7 @@ class DataPreprocessor:
                 y_is_binary = False
             else:
                 y, y_is_binary = coerceTargetToNumeric(y_col)
-            y_type = detectYType(y, y_is_binary, y_is_multiclass)
+            y_type = self._yType(y, y_is_binary, y_is_multiclass)
 
             y_valid = np.isfinite(y)
             if not np.all(y_valid):
@@ -893,7 +906,7 @@ class DataPreprocessor:
                 y_is_binary = False
             else:
                 y, y_is_binary = coerceTargetToNumeric(y_col)
-            self._y_type = detectYType(y, y_is_binary, y_is_multiclass)
+            self._y_type = self._yType(y, y_is_binary, y_is_multiclass)
 
             # remove rows with non-finite y (listwise on the target is non-negotiable)
             y_valid = np.isfinite(y)

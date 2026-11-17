@@ -22,6 +22,7 @@ from scipy import stats
 import torch
 
 from metabeta.models.api import Api
+from metabeta.posthoc.metropolis import LocalMoves
 from test_router import _write_tiny_approximator_checkpoint, _write_two_submodel_checkpoint
 
 
@@ -545,6 +546,24 @@ def test_low_ess_warning_suggests_more_draws_and_points_at_the_call(api: Api):
     assert ess.filename == __file__
 
 
+def test_low_ess_warning_names_the_gate_that_left_a_dataset_unmoved(api: Api):
+    gated = LocalMoves(gate_ess=1)  # below every min ESS, so no dataset moves
+    result, caught = _warningsOf(
+        lambda: api.sample(
+            _sleepstudy(),
+            formula='Reaction ~ Days + (1 + Days | Subject)',
+            n_samples=64,
+            fit_preprocessor=True,
+            random_walk=gated,
+        )
+    )
+
+    assert not result.safeguards['random_walk_ran'][0]
+    (ess,) = [w for w in caught if 'effective sample size' in str(w.message)]
+    assert 'gate_ess' in str(ess.message)
+    assert 'random_walk=True' not in str(ess.message)
+
+
 def test_random_walk_rows_still_warn_with_a_nuts_check(api: Api):
     df = _sleepstudy()
     kwargs = dict(
@@ -573,6 +592,7 @@ def test_random_walk_rows_still_warn_with_a_nuts_check(api: Api):
 def _imhSafeguards(accept: list[float], ess_min: list[float], ran: list[bool]) -> dict:
     accept_rate, ess = np.array(accept), np.array(ess_min)
     return {
+        'refine_method': 'imhMarginal',
         'accept_rate': accept_rate,
         'accept_threshold': 0.1,
         'accept_flag': accept_rate < 0.1,
@@ -624,6 +644,82 @@ def test_default_priors_stay_quiet_and_out_of_range_priors_warn(api: Api):
     assert 'tau_ffx 100 outside [0.0015, 44.35]' in str(prior.message)
     assert 'NUTS' in str(prior.message)
     assert prior.filename == __file__
+
+
+@pytest.fixture(scope='module')
+def poisson_api(tmp_path_factory: pytest.TempPathFactory) -> Api:
+    path: Path = tmp_path_factory.mktemp('api-poisson') / 'joint.pt'
+    torch.manual_seed(0)
+    _write_tiny_approximator_checkpoint(
+        path, max_d=4, max_q=2, likelihood_family=2, analytical_refinement='light'
+    )
+    return Api(path, warmup=False)
+
+
+_COUNT_FORMULA = 'Count ~ Days + (1 | Subject)'
+
+
+def _counts(mean: float) -> pd.DataFrame:
+    return _sleepstudy().assign(Count=np.random.default_rng(0).poisson(mean, 120))
+
+
+def _poissonPrior(api: Api, df: pd.DataFrame, **kwargs) -> np.ndarray:
+    """The prior means of the intercept and the Days slope."""
+    dataset = api.prepareData(
+        df, formula=_COUNT_FORMULA, likelihood_family='poisson', stage='dataset', **kwargs
+    )
+    return dataset['nu_ffx']
+
+
+def test_default_poisson_intercept_is_centered_at_the_log_mean_count(api: Api):
+    df = _counts(20.0)
+    log_mean = np.log(df['Count'].mean())
+
+    np.testing.assert_allclose(_poissonPrior(api, df), [log_mean, 0.0])
+    slope_set = {'fixed': {'Days': {'mu': 0.5}}}
+    np.testing.assert_allclose(_poissonPrior(api, df, priors=slope_set), [log_mean, 0.5])
+
+
+@pytest.mark.parametrize(('mean', 'bound'), [(1e5, 3.71), (0.001, -3.71)])
+def test_default_poisson_intercept_stays_in_the_trained_range(
+    poisson_api: Api, mean: float, bound: float
+):
+    result = poisson_api.sample(
+        _counts(mean), formula=_COUNT_FORMULA, likelihood_family='poisson', n_samples=8
+    )
+
+    assert result.prior_params['nu_ffx'][0, 0] == pytest.approx(bound)
+    assert not result.safeguards['prior_flag'][0]
+
+
+def test_a_set_poisson_intercept_mean_is_kept(api: Api):
+    df = _counts(20.0)
+
+    intercept_set = {'fixed': {'Intercept': {'mu': 0.0}}}
+    np.testing.assert_allclose(_poissonPrior(api, df, priors=intercept_set), [0.0, 0.0])
+    np.testing.assert_allclose(_poissonPrior(api, df, priors={'nu_ffx': [1.0, 0.2]}), [1.0, 0.2])
+
+
+def test_poisson_counts_without_a_zero_stay_counts(api: Api):
+    df = _sleepstudy().assign(Count=np.random.default_rng(0).poisson(20, 120))
+    assert df['Count'].min() > 0
+
+    dataset = api.prepareData(
+        df, formula=_COUNT_FORMULA, likelihood_family='poisson', stage='dataset'
+    )
+
+    np.testing.assert_array_equal(np.sort(dataset['y']), np.sort(df['Count']))
+
+
+def test_a_poisson_fit_refuses_a_response_that_is_not_counts(api: Api):
+    df = _sleepstudy().assign(Count=np.random.default_rng(0).poisson(20, 120) + 0.5)
+    with pytest.raises(ValueError, match='count'):
+        api.prepareData(df, formula=_COUNT_FORMULA, likelihood_family='poisson')
+
+    rng = np.random.default_rng(0)
+    preprocessed = _preprocessed(rng.normal(size=(120, 2)), rng.normal(size=120))
+    with pytest.raises(ValueError, match='count'):
+        api.prepareData(preprocessed, likelihood_family='poisson')
 
 
 def test_data_larger_than_the_training_data_is_fitted_and_warns(api: Api):
@@ -867,6 +963,18 @@ def test_sample_seed_reproduces_the_draws_and_keeps_the_callers_stream(api: Api)
 
     assert torch.equal(torch.rand(3), expected)
     assert torch.equal(seeded.proposal.samples_g, seeded_globally.proposal.samples_g)
+
+
+def test_sample_seed_reproduces_the_first_call_without_warmup(api: Api):
+    cold = Api(api.joint_checkpoint, warmup=False)
+    df, formula = _sleepstudy(), 'Reaction ~ Days + (1 | Subject)'
+
+    first, second = (
+        cold.sample(df, formula=formula, n_samples=64, fit_preprocessor=True, seed=0)
+        for _ in range(2)
+    )
+
+    assert torch.equal(first.proposal.samples_g, second.proposal.samples_g)
 
 
 def test_groupDraws_add_each_group_deviation_to_the_fixed_effect(api: Api):
@@ -1291,6 +1399,25 @@ def test_a_dataset_outside_the_limits_is_skipped_and_the_others_fitted(api: Api)
     assert skipped.filename == __file__
 
 
+def test_a_skipped_dataset_without_an_error_message_is_named_by_its_error_type(
+    api: Api, monkeypatch: pytest.MonkeyPatch
+):
+    dfs = _twoStudies()
+    original = Api.prepareData
+
+    def failing(self, data, **kwargs):
+        if data is dfs[1]:
+            raise ValueError()
+        return original(self, data, **kwargs)
+
+    monkeypatch.setattr(Api, 'prepareData', failing)
+    results, caught = _warningsOf(lambda: api.sample(dfs, formula=_FORMULA, n_samples=8))
+
+    assert results[1] is None
+    (skipped,) = [w for w in caught if 'Skipped' in str(w.message)]
+    assert str(skipped.message).endswith('\n  1: ValueError')
+
+
 def test_the_limits_error_of_one_dataset_names_no_row(api: Api):
     priors = {'a': None, 'b': {'fixed': {'Days': {'tau': 0.5}}}}
 
@@ -1404,7 +1531,7 @@ def test_safeguard_warnings_list_ten_rows_then_the_count(api: Api):
     )
 
     message = _mapWarning(caught)
-    assert 'dataset(s) [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, … 12 in all]:' in message
+    assert 'dataset(s) [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, ... 12 in all]:' in message
     z_values = message.split('posterior SD = ')[1].split(' >')[0]
     assert len(z_values.split(', ')) == 10
 
