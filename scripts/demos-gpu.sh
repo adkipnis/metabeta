@@ -18,10 +18,10 @@
 source "$HOME/.bashrc"
 set -euo pipefail
 
-NOTEBOOK=${1:?usage: sbatch [--partition …] [--qos …] [--constraint …] scripts/demos-gpu.sh <notebook>}
+NOTEBOOK=${1:?usage: sbatch [--partition ...] [--qos ...] [--constraint ...] scripts/demos-gpu.sh <notebook>}
 
 # sbatch runs a spooled copy of this script, so the checkout is the submit directory
 cd "$SLURM_SUBMIT_DIR"
 uv sync
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
-uv run pytest --nbmake "$NOTEBOOK"
+uv run --with pyreadr pytest --nbmake "$NOTEBOOK"
