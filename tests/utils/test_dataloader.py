@@ -358,7 +358,7 @@ def test_trim_batch_padding_shrinks_to_own_maxima():
     # globals and nested stats untouched
     assert out['mask_d'].shape == (2, 3) and out['ffx'].shape == (2, 3)
     assert out['corr_rfx'].shape == (2, 2, 2)
-    assert out['stats'] is batch['stats']
+    assert torch.equal(out['stats']['beta_est'], batch['stats']['beta_est'])
     # values are the leading slices of the originals
     assert torch.equal(out['X'], batch['X'][:, :3, :4])
     assert torch.equal(out['nuts_rfx'], batch['nuts_rfx'][:, :3])
@@ -375,6 +375,53 @@ def test_trim_batch_padding_refuses_nonzero_padding():
     batch['rfx'][0, 5, 0] = 1.0  # a "padding" group that holds data
     with pytest.raises(ValueError):
         trimBatchPadding(batch)
+
+
+def _ownPaddingBatch(ns: list[int], s: int, q: int = 2) -> dict:
+    """One dataset with groups of sizes `ns`, collated at its own padding, with a NUTS fit of
+    `s` draws and analytical stats."""
+    m, n = len(ns), max(ns)
+    mask_n = (torch.arange(n) < torch.tensor(ns)[:, None]).unsqueeze(0)  # (1, m, n)
+    fill = mask_n.float()
+    return {
+        'X': fill.unsqueeze(-1) * torch.randn(1, m, n, 3),
+        'y': fill * torch.randn(1, m, n),
+        'ns': torch.tensor([ns]),
+        'mask_n': mask_n,
+        'mask_m': torch.ones(1, m, dtype=torch.bool),
+        'rfx': torch.randn(1, m, q),
+        'corr_rfx': torch.eye(q).unsqueeze(0),
+        'nuts_rfx': torch.randn(1, m, s, q),
+        'nuts_sigma_rfx': torch.rand(1, s, q),
+        'nuts_corr_rfx': torch.eye(q).expand(1, s, q, q).clone(),
+        'stats': {
+            'beta_est': torch.randn(1, 3),
+            'blup_est': torch.randn(1, m, q),
+            'blup_var': torch.rand(1, m, q),
+        },
+    }
+
+
+def _assertSameBatch(a: dict, b: dict) -> None:
+    assert a.keys() == b.keys()
+    for key in a:
+        if isinstance(a[key], dict):
+            _assertSameBatch(a[key], b[key])
+        else:
+            assert torch.equal(a[key], b[key]), key
+
+
+@pytest.mark.parametrize('s', [3, 4], ids=['fewer-draws-than-groups', 'draws-equal-groups'])
+def test_concatenated_batches_slice_and_trim_back_to_each_batch(s: int):
+    from metabeta.utils.dataloader import concatBatches, sliceBatch, trimBatchPadding
+
+    torch.manual_seed(0)
+    parts = [_ownPaddingBatch([4, 2], s), _ownPaddingBatch([1, 3, 2, 2], s)]
+
+    joined = concatBatches(parts)
+
+    for i, part in enumerate(parts):
+        _assertSameBatch(trimBatchPadding(sliceBatch(joined, i, i + 1)), part)
 
 
 def test_proposal_resize_groups_round_trip():
