@@ -30,6 +30,11 @@ from metabeta.analytical.lmm.gaussian_local import (
 logger = logging.getLogger(__name__)
 
 CLAMP = 20.0
+# A CUDA batch with at most this many padded observations (B·m·n) fits its analytical statistics
+# on the CPU: the fits launch thousands of small kernels, so a GPU waits on the host until a batch
+# fills it. On an H100 with 4 threads of a Xeon 8480+ (Nov 2026), the CPU fitted Bernoulli and
+# Poisson batches up to 12k observations 1.2-1.9x faster, and lost from 18k on.
+CPU_STATS_MAX_OBS = 12_000
 
 
 def _buildSummarizer(cfg: SummarizerConfig, d_input: int) -> nn.Module:
@@ -202,18 +207,16 @@ class Approximator(nn.Module):
     def _dataStatistics(self, data: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         """Compute sufficient statistics: GLS/GLMM β̂, σ̂, BLUPs.
 
-        When map_refine is enabled on CUDA, normal GLMM inputs are moved to CPU
-        before the call and outputs are moved back afterward.  Normal MAP steps
-        (scalar Adam loops, small tensors) run ~1.4x slower on GPU than CPU due
-        to kernel-launch overhead, so CPU+transfer wins by ~29%.  Bernoulli EB
-        uses larger per-group matrix ops that GPU parallelizes well; on H100 the
-        pure-CUDA path is ~14% faster than CPU and ~9% faster than CPU+transfer,
-        so Bernoulli stays on-device.
-
+        A CUDA batch up to CPU_STATS_MAX_OBS padded observations fits on the CPU, and the
+        statistics move back to it. Normal fits on the CPU at every size under 'full'
+        refinement: its larger batches would run faster on CUDA, but their statistics would
+        change, since the iterative fits amplify the devices' float noise up to 0.2 in Psi.
         """
         device = data['X'].device
         map_refine = self.cfg.analytical_refinement == 'full'
-        run_on_cpu = device.type == 'cuda' and map_refine and self.likelihood_family == 0
+        run_on_cpu = device.type == 'cuda' and (
+            data['y'].numel() <= CPU_STATS_MAX_OBS or (map_refine and self.likelihood_family == 0)
+        )
 
         def _c(t: torch.Tensor | None) -> torch.Tensor | None:
             return t.cpu() if (run_on_cpu and t is not None) else t
