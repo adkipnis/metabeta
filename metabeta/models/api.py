@@ -387,12 +387,18 @@ class Api:
                 raise ValueError(f'unsupported router input path suffix: {path.suffix}')
 
         if isinstance(data, pd.DataFrame):
+            # a requested family resolves without the response type
+            poisson = (
+                likelihood_family is not None
+                and resolveLikelihoodFamily(likelihood_family, y_type='count') == 2
+            )
             preprocessed = self._preprocessTabular(
                 data,
                 formula=formula,
                 preprocessor=preprocessor,
                 fit_preprocessor=fit_preprocessor,
                 group_name=group_name,
+                count_y=poisson,
                 dry_run=dry_run,
             )
             if dry_run or stage == 'preprocessed':
@@ -524,10 +530,11 @@ class Api:
         network was trained on (``utils/priors.py``, ``TRAINED_RANGE``) trigger a warning that
         names them and their range ('prior_flag', values in 'prior_outside'): the network
         extrapolates there.  The default priors are Bambi's, with the scales outside that range
-        lowered into it (``API_DEFAULT_SCALES``).  A dataset larger than every submodel's training
-        data (more groups, rows per group or rows) goes to the smallest submodel that fits it
-        otherwise and triggers a warning that names the excess ('size_flag', values in
-        'size_outside').  All checks are reported in
+        lowered into it (``API_DEFAULT_SCALES``) and the Poisson intercept centered at
+        log(mean(y)), clipped to that range, unless ``priors`` sets its mean.  A dataset larger
+        than every submodel's training data (more groups, rows per group or rows) goes to the
+        smallest submodel that fits it otherwise and triggers a warning that names the excess
+        ('size_flag', values in 'size_outside').  All checks are reported in
         ``RouterResult.safeguards``.
 
         Every call also stores the posterior predictive and a fit metric (R², AUC or deviance)
@@ -576,6 +583,9 @@ class Api:
         prepared = self._prepareDatasets(
             labels if container else [0], frames, container, prepare_kwargs
         )
+        # a model's random initialization would draw from the seeded stream on its first use
+        for route in {route for item in prepared.values() for route in item.routes}:
+            self.model(route)
 
         # every stage runs per chunk of at most batch_size rows; a chunk holds whole datasets of
         # one submodel, sorted by size, and is cut inside a dataset only when it alone exceeds
@@ -662,10 +672,11 @@ class Api:
             warnings.warn(text, category, skip_file_prefixes=INTERNAL_PREFIXES)
         if skipped:
             reasons = [
-                f'  {label!r}: {str(exc).splitlines()[0]}' for label, exc in skipped[:LISTED_ROWS]
+                f'  {label!r}: {(str(exc).splitlines() or [type(exc).__name__])[0]}'
+                for label, exc in skipped[:LISTED_ROWS]
             ]
             if len(skipped) > LISTED_ROWS:
-                reasons.append(f'  … {len(skipped)} in all')
+                reasons.append(f'  ... {len(skipped)} in all')
             warnings.warn(
                 f'Skipped {len(skipped)} of {len(labels)} dataset(s) that could not be prepared '
                 '(None in their place):\n' + '\n'.join(reasons),
@@ -846,13 +857,19 @@ class Api:
                 e_vals = ', '.join(f'{ess_min[i]:.0f}' for i in flagged)
                 low = ess_low[ess_min[ess_low] < IMH_ESS_NUTS]
                 caveat = f' (may not suffice for {named(low)[1]})' if low.size else ''
+                # the caller's LocalMoves ran, but its gate left these datasets unmoved
+                walk = (
+                    f'random_walk with gate_ess of at least {sg["ess_threshold"]:g}'
+                    if sg['refine_method'].endswith('+moves')
+                    else 'random_walk=True'
+                )
                 warn(
                     f'Low effective sample size (ESS) for dataset(s) {names}: min ESS '
                     f'{e_vals} < {sg["ess_threshold"]:g}.\n'
                     'The IMH chains repeat few draws, so the intervals can be too narrow. '
                     'Remedies, in order:\n'
                     '  1. more draws (n_samples)\n'
-                    f'  2. random_walk=True{caveat}\n'
+                    f'  2. {walk}{caveat}\n'
                     '  3. exact MCMC, e.g. NUTS'
                 )
             # where the moves ran, one warning for both: the default mode's rows warn here too
@@ -1428,6 +1445,7 @@ class Api:
         preprocessor: DataPreprocessor | str | Path | None,
         fit_preprocessor: bool,
         group_name: str | None,
+        count_y: bool,
         dry_run: bool,
     ) -> dict[str, np.ndarray] | PreprocessReport:
         spec = parseFormula(formula)
@@ -1459,7 +1477,7 @@ class Api:
                 # Without a group name the preprocessor needs every column to detect the group
                 named = {c for c in df.columns for t in terms if t == c or t.startswith(f'{c}_')}
                 df = df[[c for c in df.columns if c in {'y', group_name} | named]]
-            prep = DataPreprocessor(group_name=group_name)
+            prep = DataPreprocessor(group_name=group_name, count_y=count_y)
             if dry_run:
                 return prep.audit(df)
             if not fit_preprocessor:
@@ -1499,6 +1517,10 @@ class Api:
         if y_type == 'multiclass':
             raise ValueError('multiclass targets are not supported by the router')
         likelihood = resolveLikelihoodFamily(likelihood_family, y_type)
+        if likelihood == 2 and y_type != 'count':
+            raise ValueError(
+                f"the 'poisson' family needs a count response, but it was read as {y_type}"
+            )
         if y_type == 'binary' and likelihood == 0:
             warnings.warn(
                 "the outcome is binary (0/1) but fitted with the 'normal' family; for a binary "
@@ -1609,6 +1631,7 @@ class Api:
                 fixed_names=fixed_names,
                 random_names=random_names,
                 likelihood_family=likelihood,
+                y=y if spec.intercept else None,
             )
         ]
 
@@ -2520,7 +2543,7 @@ def _listed(labels: list[Any]) -> str:
     """A list of labels, cut after ``LISTED_ROWS`` with the count."""
     if len(labels) <= LISTED_ROWS:
         return str(labels)
-    return f'{str(labels[:LISTED_ROWS])[:-1]}, … {len(labels)} in all]'
+    return f'{str(labels[:LISTED_ROWS])[:-1]}, ... {len(labels)} in all]'
 
 
 def _priorRow(result: RouterResult, prior_id: int | str) -> int:
