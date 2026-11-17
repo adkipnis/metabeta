@@ -876,9 +876,8 @@ def test_glmm_bernoulli_laplace_eb_auto_gate_smoke():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize('likelihood_family', [1, 2])
-def test_approximator_data_statistics_smoke(likelihood_family):
-    """glmmFull integrates correctly via Approximator._dataStatistics."""
+def _approximator_and_data(likelihood_family, analytical_refinement='light'):
+    """A minimal Approximator and a batch of B=4 simulated datasets for _dataStatistics."""
     from metabeta.models.approximator import Approximator
     from metabeta.utils.config import ApproximatorConfig, SummarizerConfig, PosteriorConfig
 
@@ -908,6 +907,7 @@ def test_approximator_data_statistics_smoke(likelihood_family):
         summarizer_g=s_cfg,
         posterior_l=p_cfg,
         posterior_g=p_cfg,
+        analytical_refinement=analytical_refinement,
     )
     model = Approximator(app_cfg)
 
@@ -934,7 +934,21 @@ def test_approximator_data_statistics_smoke(likelihood_family):
             [int(ds['family_sigma_rfx']) for ds in datasets], dtype=torch.long
         ),
     }
+    if likelihood_family == 0:
+        data['tau_eps'] = torch.as_tensor(
+            [float(ds['tau_eps']) for ds in datasets], dtype=torch.float32
+        )
+        data['family_sigma_eps'] = torch.as_tensor(
+            [int(ds['family_sigma_eps']) for ds in datasets], dtype=torch.long
+        )
+    return model, data
 
+
+@pytest.mark.parametrize('likelihood_family', [1, 2])
+def test_approximator_data_statistics_smoke(likelihood_family):
+    """glmmFull integrates correctly via Approximator._dataStatistics."""
+    B, d, q = 4, 2, 1
+    model, data = _approximator_and_data(likelihood_family)
     stats = model._dataStatistics(data)
 
     assert 'beta_est' in stats
@@ -942,7 +956,24 @@ def test_approximator_data_statistics_smoke(likelihood_family):
     assert 'blup_est' in stats
     assert stats['beta_est'].shape == (B, d)
     assert stats['sigma_rfx_est'].shape == (B, q)
-    assert stats['blup_est'].shape == (B, bt['Xm'].shape[1], q)
+    assert stats['blup_est'].shape == (B, data['X'].shape[1], q)
     assert torch.isfinite(stats['beta_est']).all()
     assert torch.isfinite(stats['sigma_rfx_est']).all()
     assert torch.isfinite(stats['blup_est']).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='requires CUDA')
+@pytest.mark.parametrize('likelihood_family', [0, 1, 2])
+def test_approximator_data_statistics_on_cuda_equal_the_cpu_path(likelihood_family):
+    """A small CUDA batch gets the statistics of the CPU path, returned on CUDA."""
+    from metabeta.models.approximator import CPU_STATS_MAX_OBS
+
+    model, data = _approximator_and_data(likelihood_family, analytical_refinement='full')
+    assert data['y'].numel() <= CPU_STATS_MAX_OBS
+    want = model._dataStatistics(data)
+    got = model.cuda()._dataStatistics({k: v.cuda() for k, v in data.items()})
+
+    assert got.keys() == want.keys()
+    for key, value in want.items():
+        assert got[key].device.type == 'cuda', key
+        torch.testing.assert_close(got[key].cpu(), value, rtol=0, atol=0, equal_nan=True)
