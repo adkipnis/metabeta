@@ -1,6 +1,6 @@
 """Gaussian LMM analytical estimator."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields, replace
 
 import torch
 
@@ -11,6 +11,7 @@ from metabeta.analytical.linalg import (
     _eighWithJitter,
     _gramRank,
     _groupZDiagnostics,
+    _keepRows,
     _maskedMean,
     _maskedMedian,
     _psdClampEigenvalues,
@@ -344,9 +345,15 @@ def _emRefineNormal(
     """EM refinement of Psi, sigma_eps_sq, beta, and BLUPs."""
     N = n_total.float()
     se2_anchor = se2
+    # a dataset stops at the first step that changes its Psi and se2 by less than the
+    # tolerance, and keeps that step's output
+    B = Psi.shape[0]
+    done = torch.zeros(B, device=Psi.device, dtype=torch.bool)
+    n_done = 0
     for _ in range(n_em):
         psi_prev = Psi
         se2_prev = se2
+        gls_prev = gls
 
         # Winsorize BLUPs before M-step outer product: prevents groups with numerically
         # blown BLUPs (GLS near-singularity at high d/q) from spiking Ψ_em.
@@ -411,9 +418,22 @@ def _emRefineNormal(
             beta_mask,
         )
 
-        psi_delta = (Psi - psi_prev).abs().amax(dim=(-2, -1)).amax()
-        se2_delta = (se2 - se2_prev).abs().amax()
-        if psi_delta < 1e-3 and se2_delta < 1e-3:
+        if n_done > 0:
+            Psi = _keepRows(done, psi_prev, Psi)
+            se2 = _keepRows(done, se2_prev, se2)
+            gls = replace(
+                gls,
+                **{
+                    f.name: _keepRows(done, getattr(gls_prev, f.name), getattr(gls, f.name))
+                    for f in fields(gls)
+                },
+            )
+
+        psi_delta = (Psi - psi_prev).abs().amax(dim=(-2, -1))  # (B,)
+        se2_delta = (se2 - se2_prev).abs()  # (B,)
+        done = done | ((psi_delta < 1e-3) & (se2_delta < 1e-3))
+        n_done = int(done.sum())
+        if n_done == B:
             break
 
     return Psi, se2, gls
