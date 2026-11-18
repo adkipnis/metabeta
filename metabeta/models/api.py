@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Hashable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar, overload
 import contextlib
+import itertools
 import math
 import os
 import warnings
@@ -34,8 +35,10 @@ from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.constants import LIKELIHOOD_FAMILIES, hasSigmaEps
 from metabeta.utils.dataloader import (
     Dataloader,
+    chunkRows,
     collateGrouped,
     concatBatches,
+    rowSizes,
     sliceBatch,
     toDevice,
     trimBatchPadding,
@@ -112,8 +115,8 @@ RANDOM_WALK_DEFAULT = {
 # wrapper sits between Api.sample and its caller)
 INTERNAL_PREFIXES = tuple(str(Path(m.__file__).parent) + os.sep for m in (metabeta, torch))
 
-# rows (dataset × prior) per chunk of ``sample`` when ``batch_size`` is None; the CUDA value is
-# measured in #42
+# rows (dataset × prior) per chunk of ``sample`` when ``batch_size`` is None, fewer where the
+# chunk would pass the element budget (``chunkRows``); the CUDA value is measured in #42
 CHUNK_ROWS = {'cpu': 64, 'cuda': 256}
 # warnings list at most this many datasets or rows, then the count
 LISTED_ROWS = 10
@@ -195,6 +198,10 @@ class RouterResult:
     ns: np.ndarray | None = None
     safeguards: dict[str, Any] | None = None
     evidence: dict[str, Any] | None = None
+    # the draws before _rescaleProposal and _restoreFixedOrder, i.e. on the model's standardized
+    # scale and in its layout, from which plotPPD and posteriorPredictive build the posterior
+    # predictive on demand
+    _model_draws: Proposal | None = field(default=None, repr=False)
 
 
 @dataclass
@@ -274,7 +281,8 @@ class Api:
         batch_size:
             Rows (one dataset under one prior) ``sample`` runs at a time through every
             stage, from the network pass to the diagnostics; ``None`` takes 64 rows on CPU
-            and 256 on CUDA.  Lower it if large datasets run out of memory.
+            and 256 on CUDA.  Large datasets run fewer rows at a time, so that a chunk's largest
+            tensor stays within 1 GiB; lower it if they still run out of memory.
         warmup:
             Build every submodel and run one discarded sampling pass on dummy data while
             loading, so the first ``sample`` call is as fast as later ones.  ``False`` loads
@@ -581,9 +589,10 @@ class Api:
         ('size_flag', values in 'size_outside').  All checks are reported in
         ``RouterResult.safeguards``.
 
-        Every call also stores the posterior predictive and a fit metric (R², AUC or deviance)
-        in ``RouterResult.diagnostics``.  ``loo=True`` adds the PSIS-LOO NLL and its Pareto k̂,
-        which cost about as much as the rest of the diagnostics together.
+        Every call also stores a fit metric (R², AUC or deviance) in
+        ``RouterResult.diagnostics``; ``plotPPD`` and ``posteriorPredictive`` build the posterior
+        predictive when called.  ``loo=True`` adds the PSIS-LOO NLL and its Pareto k̂, which cost
+        about as much as the rest of the diagnostics together.
 
         ``evidence=True`` also returns each dataset's log marginal likelihood log p(y) on the raw
         response scale in ``RouterResult.evidence``; the log Bayes factor between two models of
@@ -631,11 +640,11 @@ class Api:
         for route in {route for item in prepared.values() for route in item.routes}:
             self.model(route)
 
-        # every stage runs per chunk of at most batch_size rows; a chunk holds whole datasets of
-        # one submodel, sorted by size, and is cut inside a dataset only when it alone exceeds
-        # the chunk, so a result joins one slice in the common case
+        # every stage runs per chunk of at most batch_size rows of one submodel, sorted by size,
+        # and within the element budget
         order = sorted(prepared, key=lambda label: self._sizeKey(prepared[label]))
-        chunks = _cutChunks(prepared, order, self.batch_size or CHUNK_ROWS[preset])
+        max_rows = self.batch_size or CHUNK_ROWS[preset]
+        chunks = _cutChunks(prepared, order, draws=_poolSize(n_samples, method), max_rows=max_rows)
         pieces: dict[Hashable, list[dict[str, Any]]] = {label: [] for label in prepared}
         results: dict[Hashable, RouterResult] = {}
         n_rows = sum(item.rows for item in prepared.values())
@@ -720,7 +729,8 @@ class Api:
     def _prepareDataset(
         self, data: Any, label: Hashable, prepare_kwargs: dict[str, Any]
     ) -> _Prepared:
-        """One dataset prepared to a batch at its own padding, validated and routed."""
+        """One dataset prepared to a batch at its own padding, validated and routed; the batch
+        stays on the CPU, and ``_chunkBatch`` moves each chunk to the device."""
         batch, metadata, notes = self._prepare(data, **prepare_kwargs)
         if not isinstance(batch, dict) or not isCollatedBatch(batch):
             raise TypeError('sample requires data prepared to batch stage')
@@ -728,7 +738,6 @@ class Api:
         routes, validation = self._routeBatch(batch)
         for entry in validation:
             entry['dataset'] = label
-        batch = toDevice(batch, self.device)
         return _Prepared(label, batch, routes, validation, metadata, notes)
 
     def _sizeKey(self, item: _Prepared) -> tuple[tuple[float, str], int, int]:
@@ -736,18 +745,14 @@ class Api:
         submodel = routingSortKey(self._submodel_by_id[item.routes[0]])
         return submodel, item.batch['mask_n'].shape[1], item.batch['mask_n'].shape[2]
 
-    @staticmethod
     def _chunkBatch(
-        items: dict[Hashable, _Prepared], chunk: list[tuple[Hashable, int, int]]
+        self, items: dict[Hashable, _Prepared], chunk: list[tuple[Hashable, int, int]]
     ) -> dict[str, torch.Tensor]:
-        """A chunk's batch at its own padding: the slices of its datasets' batches, joined.
-        A formula batch is at its own padding already; a slice of collated input (a Dataloader
-        batch) keeps its parent's and shrinks."""
-        return trimBatchPadding(
-            concatBatches(
-                [sliceBatch(items[label].batch, start, end) for label, start, end in chunk]
-            )
-        )
+        """A chunk's batch at its own padding on the device: the slices of its datasets'
+        batches, joined.  A formula batch is at its own padding already; a slice of collated
+        input (a Dataloader batch) keeps its parent's and shrinks."""
+        slices = [sliceBatch(items[label].batch, start, end) for label, start, end in chunk]
+        return toDevice(trimBatchPadding(concatBatches(slices)), self.device)
 
     def _assembleResult(
         self, item: _Prepared, pieces: list[dict[str, Any]], prepare_kwargs: dict[str, Any]
@@ -756,7 +761,13 @@ class Api:
         batch = item.batch
         out = _joinRows(pieces)
         proposal = out['proposal'].resizeGroups(batch['mask_n'].shape[1])
-        diags = self._finishDiagnostics(proposal, batch, out['diags'])
+        # the rescaling and the reordering below replace these tensors and leave them intact
+        model_draws = Proposal(
+            {'global': {'samples': proposal.samples_g}, 'local': {'samples': proposal.samples_l}},
+            has_sigma_eps=proposal.has_sigma_eps,
+            d_corr=proposal.d_corr,
+        )
+        diags = self._finishDiagnostics(batch, out['diags'])
         self._rescaleProposal(proposal, batch)
         prior_params: dict[str, np.ndarray] = {
             key: batch[key].float().cpu().numpy()
@@ -784,6 +795,7 @@ class Api:
             ns=batch['ns'].cpu().numpy() if 'ns' in batch else None,
             safeguards=safeguards,
             evidence=out['evidence'],
+            _model_draws=model_draws,
         )
 
     def _sampleChunk(
@@ -803,12 +815,9 @@ class Api:
         evidence, MAP check and per-row diagnostics.  Returns the chunk's proposal and its
         per-row numbers and flags; ``_joinRows`` concatenates them and ``_warnSafeguards``
         turns the flags into warnings."""
-        # IMH consumes the first `burnin` steps of each chain, so over-draw the flow
-        # pool to hand back exactly n_samples post-burn-in draws; both refinements redraw
-        # the rfx from their conditional, so the local posterior is skipped for them
-        pool = n_samples
-        if method == 'imh':
-            pool = IMH_N_CHAINS * (math.ceil(n_samples / IMH_N_CHAINS) + IMH_BURNIN)
+        # both refinements redraw the rfx from their conditional, so the local posterior is
+        # skipped for them
+        pool = _poolSize(n_samples, method)
         proposal, stats = self._runRouted(batch, routes, n_samples=pool, local=method is None)
         safeguards: dict[str, Any] = {}
         if method is not None:
@@ -1198,10 +1207,8 @@ class Api:
         }
 
     @staticmethod
-    def _finishDiagnostics(
-        proposal: Proposal, batch: dict[str, torch.Tensor], diags: dict[str, Any]
-    ) -> dict[str, Any]:
-        """The posterior predictive of the whole and the fit aggregates over its rows."""
+    def _finishDiagnostics(batch: dict[str, torch.Tensor], diags: dict[str, Any]) -> dict[str, Any]:
+        """The fit aggregates over the whole's rows."""
         lf = int(batch['likelihood_family'].flatten()[0].item())
         b = int(batch['X'].shape[0])
         label = {0: 'R²', 1: 'AUC', 2: 'Deviance'}[lf]
@@ -1209,7 +1216,6 @@ class Api:
         out = {
             'fit': agg(diags['fit_vals']),
             'fit_label': label if b == 1 else f'Mean {label}',
-            'pp': _predictive.getPosteriorPredictive(proposal, batch, likelihood_family=lf),
         }
         if 'loo_nll_vals' in diags:
             out |= {'loo_nll': agg(diags['loo_nll_vals']), 'pareto_k': agg(diags['pareto_k_vals'])}
@@ -1465,7 +1471,7 @@ class Api:
             return
         lf = int(batch['likelihood_family'].flatten()[0].item())
         if hasSigmaEps(lf):
-            proposal.rescale(batch['sd_y'])
+            proposal.rescale(batch['sd_y'].to(proposal.samples_g.device))
 
     def _preprocessTabular(
         self,
@@ -2079,14 +2085,12 @@ class Api:
         """
         from metabeta.plotting.predictive import plotPPD as _plotPPD
 
-        if result.diagnostics is None or result.batch is None:
-            raise ValueError('result has no posterior predictive; call sample() first')
-        pp = result.diagnostics['pp']
-        b = int(result.batch['y'].shape[0])
+        pp, batch = _posteriorPredictive(result)
+        b = int(batch['y'].shape[0])
         prior_ids = _renamedArg('indices', indices, 'prior_ids', prior_ids)
         rows = range(b) if prior_ids is None else [_priorRow(result, p) for p in prior_ids]
         with _seeded(seed):
-            _plotPPD(pp, result.batch, indices=list(rows), plot_dir=plot_dir)
+            _plotPPD(pp, batch, indices=list(rows), plot_dir=plot_dir)
 
     def plotParameters(
         self,
@@ -2301,11 +2305,10 @@ class Api:
         Both are in the data's units, with the rows grouped as the model sees them rather than
         in the data's order.  ``seed`` works as in ``sample``.
         """
-        if result.diagnostics is None or result.batch is None:
-            raise ValueError('result has no posterior predictive; call sample() first')
+        pp, batch = _posteriorPredictive(result)
         bi = _priorRow(result, prior_id)
         with _seeded(seed):
-            y_rep = result.diagnostics['pp'].sample()[bi][_rowMask(result, bi)]  # (n, S)
+            y_rep = pp.sample()[bi][batch['mask_n'][bi].bool()]  # (n, S)
         return _observedY(result, bi).cpu().numpy(), _toDataUnits(result, y_rep).cpu().numpy()
 
     def bayesFactor(self, result: RouterResult, reference: RouterResult) -> pd.DataFrame:
@@ -2484,28 +2487,46 @@ def _asContainer(data: Any) -> list[Hashable] | None:
 
 
 def _cutChunks(
-    items: dict[Hashable, _Prepared], order: list[Hashable], chunk_rows: int
+    items: dict[Hashable, _Prepared], order: list[Hashable], *, draws: int, max_rows: int
 ) -> list[list[tuple[Hashable, int, int]]]:
-    """Chunks of at most ``chunk_rows`` rows over the items in ``order``, as (label, start, end)
-    slices.  A chunk never mixes submodels, and a cut falls on an item boundary unless one
-    item alone has more rows than a chunk."""
+    """Chunks over the items' rows in ``order`` as (label, start, end) slices, cut by
+    ``chunkRows``: a chunk never mixes submodels, and a dataset's rows may span chunks."""
     chunks: list[list[tuple[Hashable, int, int]]] = []
-    route, rows = None, 0  # the open chunk's submodel and rows
-    for label in order:
-        item = items[label]
-        if item.rows > chunk_rows:
-            chunks += [
-                [(label, start, min(start + chunk_rows, item.rows))]
-                for start in range(0, item.rows, chunk_rows)
-            ]
-            route, rows = None, chunk_rows
-        elif rows + item.rows > chunk_rows or item.routes[0] != route:
-            chunks.append([(label, 0, item.rows)])
-            route, rows = item.routes[0], item.rows
-        else:
-            chunks[-1].append((label, 0, item.rows))
-            rows += item.rows
+    for _, run in itertools.groupby(order, key=lambda label: items[label].routes[0]):
+        labels = list(run)
+        rows = [(label, i) for label in labels for i in range(items[label].rows)]
+        sizes = [rowSizes(items[label].batch['mask_n']) for label in labels]
+        m = np.concatenate([m_i for m_i, _ in sizes])
+        n = np.concatenate([n_i for _, n_i in sizes])
+        for start, end in chunkRows(m, n, draws=draws, max_rows=max_rows):
+            chunk = []
+            for label, cells in itertools.groupby(rows[start:end], key=lambda row: row[0]):
+                index = [i for _, i in cells]
+                chunk.append((label, index[0], index[-1] + 1))
+            chunks.append(chunk)
     return chunks
+
+
+def _poolSize(n_samples: int, method: str | None) -> int:
+    """Flow draws per row: IMH consumes the first ``IMH_BURNIN`` steps of each chain, so it
+    over-draws the pool to hand back exactly ``n_samples`` post-burn-in draws."""
+    if method == 'imh':
+        return IMH_N_CHAINS * (math.ceil(n_samples / IMH_N_CHAINS) + IMH_BURNIN)
+    return n_samples
+
+
+def _posteriorPredictive(
+    result: RouterResult,
+) -> tuple[torch.distributions.Distribution, dict[str, torch.Tensor]]:
+    """A result's posterior predictive on the model's standardized scale, and its batch on the
+    draws' device."""
+    if result._model_draws is None or result.batch is None:
+        raise ValueError('result has no posterior predictive; call sample() first')
+    draws = result._model_draws
+    # a copy: toDevice moves the tensors of the dict it gets
+    batch = toDevice(dict(result.batch), draws.samples_g.device)
+    lf = int(batch['likelihood_family'].flatten()[0].item())
+    return _predictive.getPosteriorPredictive(draws, batch, likelihood_family=lf), batch
 
 
 def _sliceRows(out: Any, start: int, end: int) -> Any:
