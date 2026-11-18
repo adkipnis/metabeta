@@ -63,6 +63,10 @@ from metabeta.utils.families import POISSON_ETA_CLIP_MAX
 from metabeta.utils.linalg import choleskySolve
 from metabeta.utils.results import Proposal
 
+# IS² draws per group of the exact GLMM target (pseudo-marginal IMH, IS weights):
+# sd(log p̂(y|θ)) ≈ 0.08 median / <= 0.5 q90 at K = 8 (experiments/posthoc/is2_tuning.py)
+IS2_N_INNER = 8
+
 AGQ_N_BACKTRACK = (
     30  # step halvings of the AGQ reference's mode search (see logMarginalLikelihoodAGQ)
 )
@@ -828,3 +832,16 @@ class LaplaceImportanceSampler(ImportanceSampler):
             # downstream evaluation treats missing 'weights' as uniform
             proposal.is_results = {k: v for k, v in proposal.is_results.items() if k != 'weights'}
         return proposal
+
+
+def exactImportanceSampler(
+    data: dict[str, Tensor], likelihood_family: int, **kwargs
+) -> ImportanceSampler:
+    """Importance weights on the exact rfx-marginalized posterior, the IMH chain's default
+    target: the closed-form marginal with the conditional rfx redraw (Normal) or unbiased IS²
+    estimates with ``IS2_N_INNER`` draws per group (GLMMs). ``kwargs`` go to the sampler."""
+    if likelihood_family == 0:
+        return ImportanceSampler(data, marginal=True, rb_redraw=True, **kwargs)
+    return LaplaceImportanceSampler(
+        data, likelihood_family=likelihood_family, n_inner=IS2_N_INNER, **kwargs
+    )
