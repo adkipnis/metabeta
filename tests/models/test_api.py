@@ -4,6 +4,7 @@ Every test goes through `Api` on the tiny-Approximator joint checkpoint, never a
 """
 
 import dataclasses
+import functools
 import inspect
 import logging
 import os
@@ -23,6 +24,7 @@ import torch
 
 from metabeta.models.api import Api
 from metabeta.posthoc.metropolis import LocalMoves
+from metabeta.utils.dataloader import chunkRows
 from test_router import _write_tiny_approximator_checkpoint, _write_two_submodel_checkpoint
 
 
@@ -1270,8 +1272,9 @@ def test_chunked_call_matches_the_unchunked_call(api: Api):
     mean_whole = whole.proposal.ffx.mean(dim=-2)
     sd = whole.proposal.ffx.std(dim=-2)
     assert ((mean_parts - mean_whole).abs() < 0.25 * sd + 1e-6).all()  # ≈ 5 standard errors
-    pp = parts.diagnostics['pp'].mean
-    assert pp.shape == whole.diagnostics['pp'].mean.shape
+    assert 'pp' not in parts.diagnostics  # built on demand
+    y_rep = api.posteriorPredictive(parts, prior_id=4, seed=0)[1]
+    assert y_rep.shape == api.posteriorPredictive(whole, prior_id=4, seed=0)[1].shape
 
 
 def test_warnings_fire_once_per_type_after_all_chunks(api: Api):
@@ -1315,6 +1318,32 @@ def test_progress_bar_shows_only_for_more_than_one_chunk(api: Api, capsys: pytes
     Api(api.joint_checkpoint, warmup=False, batch_size=2).sample(df, **kwargs)
     err = capsys.readouterr().err
     assert '/5 [' in err and 'dataset/s' in err
+
+
+def test_chunks_stay_within_the_element_budget(api: Api, monkeypatch: pytest.MonkeyPatch):
+    # the largest dataset's rows (12 groups of 10) fit two to a chunk, at the IMH pool of 164
+    budget = 2 * 12 * 10 * 164
+    monkeypatch.setattr(
+        'metabeta.models.api.chunkRows', functools.partial(chunkRows, max_elements=budget)
+    )
+    passes = []
+    run = Api._runRouted
+
+    def recording(self, batch, routes, *, n_samples, **kwargs):
+        passes.append((*batch['mask_n'].shape, n_samples))
+        return run(self, batch, routes, n_samples=n_samples, **kwargs)
+
+    monkeypatch.setattr(Api, '_runRouted', recording)
+    dfs = [_sleepstudy(m=12), _sleepstudy(m=8, n_i=6, seed=2), _sleepstudy(m=6, seed=3)]
+
+    results = api.sample(dfs, formula=_FORMULA, priors=_priorGrid(3), n_samples=64)
+
+    assert [b for b, _, _, _ in passes] == [3, 3, 2, 1]  # by size; the largest spans two
+    for b, m, n, pool in passes:
+        assert pool == 164 and b * m * n * pool <= budget
+    for result, df in zip(results, dfs):
+        assert result.proposal.samples_g.shape[:2] == (3, 64)
+        assert result.proposal.rfx.shape[1] == df['Subject'].nunique()
 
 
 @_BAR_SHOWS
@@ -1375,7 +1404,8 @@ def test_a_list_or_dict_of_dataframes_returns_one_result_per_dataset(api: Api):
             assert torch.equal(result.batch['y'], alone.batch['y'])
             assert result.ns.shape == alone.ns.shape
             assert result.diagnostics['fit_label'] == 'R²'
-            assert result.diagnostics['pp'].mean.shape == alone.diagnostics['pp'].mean.shape
+            y_rep = api.posteriorPredictive(result)[1]
+            assert y_rep.shape == api.posteriorPredictive(alone)[1].shape
             mean, mean_alone = result.proposal.ffx.mean(dim=-2), alone.proposal.ffx.mean(dim=-2)
             sd = alone.proposal.ffx.std(dim=-2)
             assert ((mean - mean_alone).abs() < 0.25 * sd + 1e-6).all()  # ≈ 5 standard errors
@@ -1670,7 +1700,7 @@ def test_a_dataset_with_more_priors_than_the_chunk_keeps_all_its_rows(api: Api):
         assert result.evidence['log_evidence'].shape == (5,)
         assert result.diagnostics['fit_label'] == 'Mean R²'
         assert result.diagnostics['loo_nll_vals'].shape == (5,)
-        assert result.diagnostics['pp'].mean.shape[0] == 5
+        assert api.posteriorPredictive(result, prior_id=4)[1].shape[1] == 64
     for result, df in zip(one, dfs):
         assert result.proposal.samples_g.shape[0] == 1
         assert result.diagnostics['fit_label'] == 'R²'
