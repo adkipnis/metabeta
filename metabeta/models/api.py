@@ -23,10 +23,12 @@ from metabeta.datasets.preprocessor import DataPreprocessor, PreprocessReport
 from metabeta.evaluation import predictive as _predictive
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.evidence import tEvidence
-from metabeta.posthoc.importance import ImportanceSampler
-from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
+from metabeta.posthoc.laplace_glmm import exactImportanceSampler
 from metabeta.posthoc.metropolis import (
-    IS2_N_INNER,
+    IMH_ACCEPT_WARN,
+    IMH_BURNIN,
+    IMH_ESS_WARN,
+    IMH_N_CHAINS,
     LocalMoves,
     MetropolisSampler,
     suggestPoolSize,
@@ -44,7 +46,6 @@ from metabeta.utils.dataloader import (
     trimBatchPadding,
 )
 from metabeta.utils.priors import TRAINED_RANGE, outsideTrainedRange
-from metabeta.utils.psis import psislw
 from metabeta.utils.results import Proposal, concatProposalsBatch
 from metabeta.utils.api import (
     JOINT_CHECKPOINT_VERSION,
@@ -96,13 +97,8 @@ REQUIRED_BATCH_KEYS = (
 PSIS_K_THRESHOLD = 0.7
 MAP_Z_THRESHOLD = 5.0
 MIN_SAFEGUARD_SAMPLES = 64
-# IMH refinement: chain layout and the acceptance level below which the flow-posterior
-# gap is large
-IMH_N_CHAINS = 4
-IMH_BURNIN = 25
-IMH_ACCEPT_WARN = 0.1
-IMH_ESS_WARN = 150
-# below it the random-walk moves are least likely to close the gap (the warning says so)
+# IMH min ESS below which the random-walk moves are least likely to close the gap (the warning
+# says so); the IMH chain layout and flag thresholds live in posthoc/metropolis.py
 IMH_ESS_NUTS = 10
 # sample(random_walk=True): random-walk moves after the IMH on the datasets IMH_ESS_WARN flags.
 # A CPU step costs in proportion to chains × IS² draws per group, a GPU step barely, so the GPU
@@ -135,14 +131,6 @@ ROUTING_LIMITS = (
 K = TypeVar('K', bound=Hashable)
 # a warning about the data found while preparing it, as data: (category, message)
 Note = tuple[type[Warning], str]
-
-
-def imhFlagged(accept_rate: np.ndarray, ess_min: np.ndarray) -> np.ndarray:
-    """(B,) the datasets an IMH warning names, with or without the random-walk moves: mean
-    acceptance below ``IMH_ACCEPT_WARN`` or min bulk ESS below ``IMH_ESS_WARN``.  The moves
-    change a warning's text, not whether it fires (#53); the evaluation scripts count the
-    Api's flags with this function."""
-    return (accept_rate < IMH_ACCEPT_WARN) | (ess_min < IMH_ESS_WARN)
 
 
 def mapZScores(
@@ -1311,25 +1299,9 @@ class Api:
         if method == 'imh':
             return self._refineIMH(proposal, batch, lf=lf, n_samples=n_samples, moves=moves)
 
-        if lf == 0:
-            sampler = ImportanceSampler(
-                batch,
-                marginal=True,
-                rb_redraw=True,
-                corr_prior=True,
-                pareto=True,
-                k_threshold=k_threshold,
-                likelihood_family=lf,
-            )
-        else:
-            sampler = LaplaceImportanceSampler(
-                batch,
-                corr_prior=True,
-                pareto=True,
-                k_threshold=k_threshold,
-                likelihood_family=lf,
-                n_inner=IS2_N_INNER,  # the exact posterior, as the IMH chain's target
-            )
+        sampler = exactImportanceSampler(
+            batch, lf, corr_prior=True, pareto=True, k_threshold=k_threshold
+        )
         B = proposal.samples_g.shape[0]
         proposal = sampler(proposal)
         psis_k = proposal.is_results['pareto_k'].detach().float().cpu().numpy().copy()
@@ -1364,27 +1336,12 @@ class Api:
     ) -> tuple[Proposal, dict[str, Any]]:
         """IMH-refine the flow posterior; see ``_refineAndCheck`` for the contract."""
         sampler = MetropolisSampler(
-            batch,
-            n_chains=IMH_N_CHAINS,
-            n_steps=proposal.n_samples // IMH_N_CHAINS,
-            burnin=IMH_BURNIN,
-            mode='marginal' if lf == 0 else 'laplace',
-            likelihood_family=lf,
-            # GLMMs: pseudo-marginal chain (unbiased IS² weights), i.e. the exact posterior
-            n_inner=0 if lf == 0 else IS2_N_INNER,
-            moves=moves,
+            batch, n_steps=proposal.n_samples // IMH_N_CHAINS, likelihood_family=lf, moves=moves
         )
         proposal, diag = sampler(proposal)
-        accept, ess, ran, rw_accept = (
-            diag[k] for k in ('accept_rate', 'ess', 'moved', 'move_accept')
-        )
-        pool_k = psislw(diag['log_w'].cpu().double().numpy())[1]
-        B = accept.shape[0]
-        ran, ess = ran.numpy(), ess.numpy()  # ess (B, D_g): the IMH chains', NaN = padding
-        with warnings.catch_warnings():
-            warnings.simplefilter('ignore', RuntimeWarning)  # all-NaN rows
-            ess_min = np.nanmin(ess, axis=1)
-
+        imh = {k: v.detach().cpu().numpy() for k, v in proposal.is_results.items()}
+        proposal.is_results = {}  # forwarded below
+        B = proposal.samples_g.shape[0]
         # the pool was over-drawn by the burn-in; trim to exactly n_samples
         idx = (
             torch.arange(n_samples, device=proposal.samples_g.device)
@@ -1393,23 +1350,20 @@ class Api:
         )
         proposal.subset(idx)
 
-        a_bar = accept.mean(dim=1)
-        suggested = suggestPoolSize(accept)
-        flag = (a_bar < IMH_ACCEPT_WARN).cpu().numpy()
-        ess_flag = ess_min < IMH_ESS_WARN
+        a_bar, ess_min = imh['imh_accept_rate'].astype(np.float32), imh['imh_ess_min']
         return proposal, {
             'refine_method': ('imhMarginal' if lf == 0 else 'imhPM') + ('+moves' if moves else ''),
-            'accept_rate': a_bar.detach().float().cpu().numpy().copy(),
+            'accept_rate': a_bar,
             'accept_threshold': IMH_ACCEPT_WARN,
-            'accept_flag': flag,
-            'suggested_n_samples': suggested.detach().cpu().numpy().copy(),
-            'ess': ess,
+            'accept_flag': a_bar < IMH_ACCEPT_WARN,
+            'suggested_n_samples': suggestPoolSize(diag['accept_rate']).cpu().numpy(),
+            'ess': diag['ess'].numpy(),  # (B, D_g): the IMH chains', NaN = padding
             'ess_min': ess_min,
             'ess_threshold': IMH_ESS_WARN,
-            'ess_flag': ess_flag,
-            'random_walk_ran': ran,
-            'random_walk_accept': rw_accept.numpy(),
-            'psis_k': pool_k,
+            'ess_flag': ess_min < IMH_ESS_WARN,
+            'random_walk_ran': imh['imh_moved'],
+            'random_walk_accept': diag['move_accept'].numpy(),
+            'psis_k': imh['imh_pool_k'],
         }
 
     def _mapConsistency(

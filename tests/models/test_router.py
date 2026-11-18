@@ -1387,6 +1387,7 @@ def test_router_evidence_is_opt_in_and_flags_k_hat(tmp_path: Path):
 
 def test_router_evidence_flags_the_flow_pool_k_hat(tmp_path: Path):
     import metabeta.models.api as api_module
+    import metabeta.posthoc.metropolis as metropolis_module
 
     joint_path = tmp_path / 'joint.pt'
     _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2, analytical_refinement='light')
@@ -1404,7 +1405,7 @@ def test_router_evidence_flags_the_flow_pool_k_hat(tmp_path: Path):
 
     t_ok = {'log_ev': np.zeros(1), 'k': np.zeros(1), 'eff': np.ones(1)}
     with (
-        mock.patch.object(api_module, 'psislw', badPool),
+        mock.patch.object(metropolis_module, 'psislw', badPool),
         mock.patch.object(api_module, 'tEvidence', return_value=t_ok),
         pytest.warns(UserWarning, match=r'Evidence reliability .* = 2\.00 > 0\.7\)'),
     ):
