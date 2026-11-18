@@ -7,9 +7,10 @@ evaluateRegime and the oracle grid are skipped).
 CLI defaults except 4000 draws and no latency cache: oracle_posterior.evaluateRegime scores
 every method against the generating parameters, real_posterior.evaluateReal scores MB, its
 refinement, ADVI and PF against the nuts2 reference, pooled and per parameter block. Their
-tables are written as the two scripts write them, and both draw MB from one cache. Then
-full_real_diagnostics.diagnose runs on every dataset: the safeguards the Api reports (IMH
-acceptance, min ESS, pool k-hat against its thresholds), from a batch-of-one run as in the Api.
+tables are written as the two scripts write them, and both draw MB from one cache. Then the
+safeguards the Api reports (IMH acceptance, min ESS, pool k-hat against its thresholds) are read
+per dataset from the default refinement of every dataset, which stores them (the cache
+evaluateRegime filled, keyed by its capacity mask).
 
 ``collect`` lays the per-cell outputs out as grids per family and kind of data. Its only
 statistic is real_posterior's median ± MAD over datasets, applied to the per-block values it
@@ -29,12 +30,18 @@ from pathlib import Path
 import numpy as np
 from tabulate import tabulate
 
-from metabeta.models.api import IMH_ACCEPT_WARN, IMH_ESS_WARN, PSIS_K_THRESHOLD
-from metabeta.utils.dataloader import Collection
+from metabeta.models.api import PSIS_K_THRESHOLD
+from metabeta.posthoc.metropolis import IMH_ACCEPT_WARN, IMH_ESS_WARN
 from metabeta.utils.device import setDevice
 from metabeta.utils.experiments import DATA_DIR, REPO_ROOT, RESULTS_DIR
 from metabeta.utils.logger import setupLogging
-from metabeta.utils.posterior_eval import loadModel, posthocDefaults
+from metabeta.utils.posterior_eval import (
+    loadModel,
+    loadOrRefine,
+    loadOrSampleMB,
+    posthocDefaults,
+)
+from metabeta.utils.preprocessing import rescaleData
 from metabeta.utils.sampling import setSeed
 
 sys.path.insert(0, str(REPO_ROOT / 'scripts'))
@@ -43,7 +50,7 @@ sys.path.insert(0, str(REPO_ROOT / 'experiments' / 'simulation'))
 import oracle_posterior  # noqa: E402
 import real_posterior  # noqa: E402
 from build_ckpt import BEST_SEEDS, _ckpt_dir  # noqa: E402
-from full_real_diagnostics import diagnose  # noqa: E402
+from full_real_diagnostics import safeguards  # noqa: E402
 from group_budget_real_sets import SOURCES  # noqa: E402
 from group_budget_real_sets import cellTag as realTag  # noqa: E402
 from group_budget_sets import CELLS, EXT_CELLS, SIZE, cellTag  # noqa: E402
@@ -131,11 +138,30 @@ def run(cfg: argparse.Namespace) -> None:
     real_posterior.saveTables({SIZE: real_rows}, OUT_DIR, stem, PREFIX)
 
     setSeed(cfg.seed)
-    col = Collection(data_path, max_d=mcfg.max_d, max_q=mcfg.max_q)
+    batch, _, _, cap_mask = oracle_posterior.loadRegimeBatch(data_path, mcfg.max_d, mcfg.max_q)
+    proposal, _ = loadOrSampleMB(
+        model, batch, data_path, ckpt, PREFIX, N_SAMPLES, cfg.batch_size, cfg.seed, device, cap_mask
+    )
+    proposal.rescale(batch['sd_y'])
+    (method,) = methods
+    refined, _ = loadOrRefine(
+        method,
+        proposal,
+        rescaleData(batch),
+        data_path,
+        ckpt,
+        PREFIX,
+        N_SAMPLES,
+        cfg.seed,
+        lf,
+        True,
+        cap_mask,
+        cfg.batch_size,
+        device=device,
+    )
     with out['diagnostics'].open('w') as f:
-        for i in range(len(col)):
-            info, _, _ = diagnose(model, lf, col, i, N_SAMPLES)
-            line = json.dumps({'data_id': data_id, 'index': i, **info})
+        for i, info in zip(np.flatnonzero(cap_mask), safeguards(refined, method)):
+            line = json.dumps({'data_id': data_id, 'index': int(i), **info})
             print(line, flush=True)
             f.write(line + '\n')
 
@@ -216,7 +242,7 @@ def collectFamily(family: str, kind: str) -> str:
             )
         )
     parts += [
-        f'## Safeguards (full_real_diagnostics.diagnose; flags: acceptance < {IMH_ACCEPT_WARN}, '
+        f'## Safeguards (stored by the refinement; flags: acceptance < {IMH_ACCEPT_WARN}, '
         f'min ESS < {IMH_ESS_WARN}, pool k-hat > {PSIS_K_THRESHOLD})\n\n'
         + md(
             diag,
