@@ -33,7 +33,13 @@ from tqdm import tqdm
 from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler, weightsTag
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
-from metabeta.posthoc.metropolis import IS2_N_INNER, LocalMoves, MetropolisSampler
+from metabeta.posthoc.metropolis import (
+    IMH_BURNIN,
+    IMH_N_CHAINS,
+    IS2_N_INNER,
+    LocalMoves,
+    MetropolisSampler,
+)
 from metabeta.utils.dataloader import chunkRows, rowSizes, sliceBatch, toDevice, trimBatchPadding
 from metabeta.utils.device import synchronizeDevice
 from metabeta.utils.evaluation import EvaluationSummary
@@ -72,11 +78,25 @@ IMH_MOVES = {
 }
 IMH_METHODS = ('imhMarginal', 'imhGlobal', 'imhLaplace', 'imhPM', *IMH_MOVES)   # MetropolisSampler
 SUPPORTED_METHODS = SNIS_METHODS + LAPLACE_METHODS + IMH_METHODS
+# the IMH methods on another target than the exact one (imhMarginal: Normal, imhPM: GLMMs)
+IMH_MODES = {'imhGlobal': 'global', 'imhLaplace': 'laplace'}
 
-# IMH pool geometry: n_chains × (n_samples // n_chains) proposals, mirroring
-# experiments/posthoc/ablation.py's runIMH settings.
-IMH_N_CHAINS = 4
-IMH_BURNIN = 25
+
+def imhDiagnostics(
+    proposal: Proposal,
+    method: str,
+    keys: tuple[str, ...] = ('accept_rate', 'ess_min', 'moved', 'flag'),
+) -> dict[str, np.ndarray]:
+    """The IMH diagnostics ``keys`` that ``method``'s refinement stored per dataset
+    (MetropolisSampler.__call__, 'imh_' + key; 'pool_k' is the fifth). A cache written before
+    they were stored raises."""
+    missing = [k for k in keys if f'imh_{k}' not in proposal.is_results]
+    if missing:
+        raise KeyError(
+            f'{method}: the refined proposal lacks the IMH diagnostics {missing}; refine it again '
+            f'(METABETA_REFRESH_METHODS={method})'
+        )
+    return {k: proposal.is_results[f'imh_{k}'].cpu().numpy() for k in keys}
 
 
 def posthocDefaults(lf: int) -> list[str]:
@@ -94,7 +114,7 @@ def validMethods(methods: list[str], lf: int) -> list[str]:
     valid: list[str] = []
     for m in methods:
         base = IMH_MOVES[m][0] if m in IMH_MOVES else m
-        if base in ('isMarginal', 'imhGlobal') and lf != 0:
+        if base in ('isMarginal', 'imhMarginal', 'imhGlobal') and lf != 0:
             logger.warning('Skipping %s: Normal-only (lf=%d)', m, lf)
         elif base in LAPLACE_METHODS + ('imhLaplace', 'imhPM') and lf == 0:
             logger.warning('Skipping %s: GLMM-only, Normal uses the exact marginal', m)
@@ -387,18 +407,10 @@ def _refineChunk(
 
     if method in IMH_METHODS:
         method, moves = IMH_MOVES.get(method, (method, None))
-        if method == 'imhGlobal' and lf != 0:
-            raise ValueError(
-                'imhGlobal is Normal-only; non-Normal imhMarginal already uses laplace'
-            )
+        if method in ('imhMarginal', 'imhGlobal') and lf != 0:
+            raise ValueError(f'{method} is Normal-only (lf=0); use imhPM')
         if method in ('imhLaplace', 'imhPM') and lf == 0:
             raise ValueError(f'{method} is for GLMMs (lf != 0); use imhMarginal')
-        if method in ('imhLaplace', 'imhPM'):
-            mode = 'laplace'
-        elif method == 'imhGlobal':
-            mode = 'global'
-        else:
-            mode = 'marginal' if lf == 0 else 'laplace'
         n_steps = base.samples_g.shape[1] // IMH_N_CHAINS
         if n_steps <= IMH_BURNIN:
             raise ValueError(
@@ -407,16 +419,9 @@ def _refineChunk(
             )
         pool = _sliceSamples(base, IMH_N_CHAINS * n_steps)
         sampler = MetropolisSampler(
-            batch,
-            n_chains=IMH_N_CHAINS,
-            n_steps=n_steps,
-            burnin=IMH_BURNIN,
-            mode=mode,
-            likelihood_family=lf,
-            n_inner=IS2_N_INNER if method == 'imhPM' else 0,
-            moves=moves,
+            batch, n_steps=n_steps, mode=IMH_MODES.get(method), likelihood_family=lf, moves=moves
         )
-        p_out, _ = sampler(pool)
+        p_out, _ = sampler(pool)  # carries the IMH diagnostics in is_results
         return p_out
 
     raise ValueError(f'unknown refinement method: {method}')

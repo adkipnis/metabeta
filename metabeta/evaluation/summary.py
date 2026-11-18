@@ -12,7 +12,7 @@ from metabeta.utils.evaluation import (
     dictMean,
 )
 from metabeta.utils.results import Proposal
-from metabeta.utils.dataloader import trimBatchPadding
+from metabeta.utils.dataloader import sliceBatch, trimBatchPadding
 from metabeta.evaluation.point import getPointEstimates, getRMSE, getCorrelation
 from metabeta.evaluation.intervals import (
     ALPHAS,
@@ -53,10 +53,6 @@ def _t(label: str, t0: float) -> float:
     """Log elapsed time since t0 and return current time."""
     logger.debug('  %-30s %.2fs', label, time.perf_counter() - t0)
     return time.perf_counter()
-
-
-def _sliceData(data: dict[str, torch.Tensor], start: int, end: int) -> dict[str, torch.Tensor]:
-    return {k: v[start:end] if torch.is_tensor(v) else v for k, v in data.items()}
 
 
 def getSummary(
@@ -112,7 +108,7 @@ def getSummary(
         end = min(start + chunk, b)
         tqdm.write(f'  predictive checks: {end}/{b} datasets', end='\r')
         # trim the chunk to its own padding; the (chunk, m, n, s) tensors below scale with it
-        d_c = trimBatchPadding(_sliceData(data, start, end))
+        d_c = trimBatchPadding(sliceBatch(data, start, end))
         p_c = proposal.slice_b(start, end).resizeGroups(d_c['mask_n'].shape[1])
 
         tc = time.perf_counter()

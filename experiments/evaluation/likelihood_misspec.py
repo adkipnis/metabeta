@@ -44,12 +44,10 @@ from metabeta.utils.sampling import setSeed
 from metabeta.utils.experiments import DATA_DIR, RESULTS_DIR, REPO_ROOT
 from metabeta.utils.fits import fitPath
 from metabeta.utils.results import Proposal
-from metabeta.posthoc.metropolis import bulkEss
 from metabeta.utils.posterior_eval import (
     IMH_METHODS,
-    IMH_MOVES,
-    IMH_N_CHAINS,
     fit2proposal,
+    imhDiagnostics,
     loadModel,
     loadOrComputeSummary,
     loadOrRefine,
@@ -264,14 +262,11 @@ def collectCondition(
         out[f'{m}:loo'][finite[m]] = summary.per_dataset.loo_nll.float().numpy()
         out[f'{m}:delta_nll'] = out[f'{m}:loo'] - nuts_loo
         if m in IMH_METHODS:
-            out[f'{m}:accept'] = proposal.is_results['imh_accept_rate'].double().numpy()
-            # the RW gate's statistic, the IMH chains' min bulk ESS: the +moves draws no longer
-            # hold those chains (a moved dataset holds the RW chains instead)
-            out[f'{m}:ess_min'] = (
-                np.full(B, np.nan)
-                if m in IMH_MOVES
-                else np.nanmin(bulkEss(proposal.samples_g, IMH_N_CHAINS).numpy(), axis=1)
-            )
+            # the IMH chains' min ESS is the moves' gate statistic; '+moves' runs store it too
+            imh = imhDiagnostics(proposal, m)
+            out[f'{m}:accept'] = imh['accept_rate'].astype(np.float64)
+            for k in ('ess_min', 'moved', 'flag'):
+                out[f'{m}:{k}'] = imh[k]
         entries[METHOD_LABELS.get(m, m)] = keptEntries(proposal)
     if extra is not None:
         out.update(extra(proposals, proposal_nuts, batch))

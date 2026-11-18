@@ -1,12 +1,10 @@
-"""IMH safeguards of MB on one whole real dataset beyond the checkpoints' routing limits.
+"""IMH safeguards of MB on one whole real dataset beyond the checkpoints' training sizes.
 
-The Api refuses datasets outside a checkpoint's limits (groups, rows per group, total rows).
 This script calls the network directly, as ``real_posterior.py`` does, on a set of
 ``experiments/simulation/full_real_sets.py``: the raw flow, then the family's default
-refinement (presets.yaml ``posthoc``), run as in ``posterior_eval._refineChunk`` but keeping
-the IMH diagnostics that the evaluation discards. Acceptance, minimum ESS and the k-hat of the
-pool weights are flagged with the Api's thresholds. Writes the diagnostics and the global
-draws of both posteriors to ``--out``.
+refinement (presets.yaml ``posthoc``, ``posterior_eval.refineProposal``), whose IMH stores its
+diagnostics. Acceptance, minimum ESS and the k-hat of the pool weights are flagged with the
+Api's thresholds. Writes the diagnostics and the global draws of both posteriors to ``--out``.
 
 ``--source`` runs the same diagnostics on every subsample of that source dataset in a
 real-world test set, within the limits, to tell a hard dataset from too many groups or rows;
@@ -28,21 +26,18 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from metabeta.models.api import IMH_ACCEPT_WARN, IMH_ESS_WARN, PSIS_K_THRESHOLD
-from metabeta.posthoc.metropolis import IS2_N_INNER, MetropolisSampler
-from metabeta.utils.dataloader import Collection, collateGrouped, trimBatchPadding
+from metabeta.models.api import PSIS_K_THRESHOLD
+from metabeta.posthoc.metropolis import IMH_ACCEPT_WARN, IMH_ESS_WARN
+from metabeta.utils.dataloader import Collection, collateGrouped
 from metabeta.utils.experiments import DATA_DIR
 from metabeta.utils.posterior_eval import (
-    IMH_BURNIN,
-    IMH_MOVES,
-    IMH_N_CHAINS,
-    _sliceSamples,
+    imhDiagnostics,
     loadModel,
     posthocDefaults,
+    refineProposal,
     sampleMB,
 )
 from metabeta.utils.preprocessing import rescaleData
-from metabeta.utils.psis import psislw
 from metabeta.utils.results import Proposal
 from metabeta.utils.sampling import setSeed
 
@@ -61,6 +56,24 @@ def setup() -> argparse.Namespace:
 # fmt: on
 
 
+def safeguards(refined: Proposal, method: str) -> list[dict]:
+    """Per dataset, the IMH diagnostics ``method``'s refinement stored and the Api's flags."""
+    d = imhDiagnostics(refined, method, ('accept_rate', 'ess_min', 'moved', 'pool_k'))
+    return [
+        {
+            'method': method,
+            'accept_rate': float(d['accept_rate'][i]),
+            'accept_flag': bool(d['accept_rate'][i] < IMH_ACCEPT_WARN),
+            'ess_min': float(d['ess_min'][i]),
+            'ess_flag': bool(d['ess_min'][i] < IMH_ESS_WARN),
+            'moves_ran': bool(d['moved'][i]),
+            'psis_k_pool': float(d['pool_k'][i]),
+            'psis_k_flag': bool(d['pool_k'][i] > PSIS_K_THRESHOLD),
+        }
+        for i in range(len(d['moved']))
+    ]
+
+
 def diagnose(
     model, lf: int, col: Collection, i: int, n_samples: int
 ) -> tuple[dict, Proposal, Proposal]:
@@ -74,45 +87,12 @@ def diagnose(
 
     # refine in the rescaled space, as real_posterior.evaluateReal does
     proposal.rescale(batch['sd_y'])
-    batch = rescaleData(batch)
     (method,) = posthocDefaults(lf)
-    base, moves = IMH_MOVES[method]
-    chunk = trimBatchPadding(batch)
-    n_steps = n_samples // IMH_N_CHAINS
-    pool = _sliceSamples(
-        proposal.slice_b(0, 1).resizeGroups(chunk['mask_n'].shape[1]), IMH_N_CHAINS * n_steps
-    )
     t0 = time.perf_counter()
-    sampler = MetropolisSampler(
-        chunk,
-        n_chains=IMH_N_CHAINS,
-        n_steps=n_steps,
-        burnin=IMH_BURNIN,
-        mode='marginal' if lf == 0 else 'laplace',
-        likelihood_family=lf,
-        n_inner=IS2_N_INNER if base == 'imhPM' else 0,
-        moves=moves,
-    )
-    refined, diag = sampler(pool)
+    refined = refineProposal(method, proposal, rescaleData(batch), lf, batch_size=1)
     t_refine = time.perf_counter() - t0
-
-    accept = float(diag['accept_rate'].mean())
-    ess_min = float(np.nanmin(diag['ess'].numpy()))
-    k_pool = float(psislw(diag['log_w'].cpu().double().numpy())[1][0])
-    info = {
-        'method': method,
-        'flow_s': t_flow,
-        'refine_s': t_refine,
-        'accept_rate': accept,
-        'accept_flag': accept < IMH_ACCEPT_WARN,
-        'ess_min': ess_min,
-        'ess_flag': ess_min < IMH_ESS_WARN,
-        'moves_ran': bool(diag['moved'][0]),
-        'move_accept': float(np.nanmean(diag['move_accept'].numpy())),
-        'psis_k_pool': k_pool,
-        'psis_k_flag': k_pool > PSIS_K_THRESHOLD,
-    }
-    return info, proposal, refined
+    (info,) = safeguards(refined, method)
+    return {**info, 'flow_s': t_flow, 'refine_s': t_refine}, proposal, refined
 
 
 def main() -> None:

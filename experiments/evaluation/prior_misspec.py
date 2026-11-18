@@ -38,7 +38,8 @@ from pathlib import Path
 import numpy as np
 from tabulate import tabulate
 
-from metabeta.models.api import IMH_ACCEPT_WARN, IMH_ESS_NUTS, IMH_ESS_WARN
+from metabeta.models.api import IMH_ESS_NUTS
+from metabeta.posthoc.metropolis import IMH_ACCEPT_WARN, IMH_ESS_WARN
 from metabeta.utils.device import setDevice
 from metabeta.utils.experiments import RESULTS_DIR, REPO_ROOT
 from metabeta.utils.logger import setupLogging
@@ -101,16 +102,16 @@ def renderDiagnosticsMd(
 ) -> str:
     """IMH acceptance and the share of datasets the Api's two IMH warnings flag, per condition.
 
-    Over all datasets, since neither check reads NUTS. The ESS columns stay empty on the +moves
-    row, whose draws no longer hold the IMH chains; its gate read the same statistic on its own
-    chain. Below IMH_ESS_NUTS the Api's warning adds that the random-walk moves may not suffice.
+    Over all datasets, since neither check reads NUTS. The ESS is the IMH chains' on the +moves
+    row too, the moves' gate statistic, and the flag is the one each run stored. Below
+    IMH_ESS_NUTS the Api's warning adds that the random-walk moves may not suffice.
     """
     rows = []
     for tag, agree in pooled.items():
         for m in methods:
             if f'{m}:accept' not in agree:
                 continue
-            accept, ess = agree[f'{m}:accept'], agree[f'{m}:ess_min']
+            accept, ess, flag = (agree[f'{m}:{k}'] for k in ('accept', 'ess_min', 'flag'))
             low_accept, low_ess = accept < IMH_ACCEPT_WARN, ess < IMH_ESS_WARN
             has_ess = not np.isnan(ess).all()
             rows.append(
@@ -121,7 +122,7 @@ def renderDiagnosticsMd(
                     f'{np.median(accept):.2f}',
                     f'{100 * low_accept.mean():.0f}',
                     f'{100 * low_ess.mean():.0f}' if has_ess else '-',
-                    f'{100 * (low_accept | low_ess).mean():.0f}' if has_ess else '-',
+                    f'{100 * flag.mean():.0f}',
                     f'{100 * (ess < IMH_ESS_NUTS).mean():.0f}' if has_ess else '-',
                 ]
             )
