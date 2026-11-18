@@ -1191,7 +1191,8 @@ def test_router_sample_returns_valid_proposal(tmp_path: Path):
     assert len(result.validation) == 1
     assert result.proposal.samples_g.shape[0] == 1
     assert result.proposal.n_samples == 5
-    assert 'pp' in result.diagnostics
+    y, y_rep = router.posteriorPredictive(result)
+    assert y_rep.shape == (len(y), 5)
     assert 'loo_nll' not in result.diagnostics
 
 

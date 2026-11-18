@@ -34,7 +34,7 @@ from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler, weightsTag
 from metabeta.posthoc.laplace_glmm import LaplaceImportanceSampler
 from metabeta.posthoc.metropolis import IS2_N_INNER, LocalMoves, MetropolisSampler
-from metabeta.utils.dataloader import sliceBatch, toDevice, trimBatchPadding
+from metabeta.utils.dataloader import chunkRows, rowSizes, sliceBatch, toDevice, trimBatchPadding
 from metabeta.utils.device import synchronizeDevice
 from metabeta.utils.evaluation import EvaluationSummary
 from metabeta.utils.results import Proposal, concatProposalsBatch
@@ -422,13 +422,6 @@ def _refineChunk(
     raise ValueError(f'unknown refinement method: {method}')
 
 
-# Largest (datasets × groups × observations × proposals) tensor a refinement chunk may
-# materialise: 2^28 float32 elements = 1 GiB. The Laplace pass keeps ~8 such tensors alive,
-# so this bounds its peak near 10 GB; the guard rarely triggers (chunks whose padded group
-# count and observation count are both large) and only reduces the dataset sub-batch.
-REFINE_MAX_ELEMENTS = 2**28
-
-
 def refineProposal(
     method: str,
     base: Proposal,
@@ -436,55 +429,29 @@ def refineProposal(
     lf: int,
     batch_size: int,
     device: torch.device | str = 'cpu',
-    max_elements: int = REFINE_MAX_ELEMENTS,
 ) -> Proposal:
     """Refine the (rescaled) MB proposal ``base`` in the (rescaled) ``batch`` space.
 
-    Sub-batched over datasets in chunks of ``batch_size``: the marginal likelihood
-    materialises a (b, max_m, max_n, s) tensor, so processing the whole batch at once OOMs
-    on large (m, n) regimes. Each dataset's PSIS/softmax normalisation and MH chain are
-    per-dataset independent, so chunking is exact.
+    Sub-batched over datasets in chunks of at most ``batch_size`` that stay within the
+    element budget (``chunkRows``): the marginal likelihood materialises a (b, max_m, max_n, s)
+    tensor, so processing the whole batch at once OOMs on large (m, n) regimes. Each dataset's
+    PSIS/softmax normalisation and MH chain are per-dataset independent, so chunking is exact.
 
     ``device`` is where the weights and chains are computed: each chunk (data and proposal)
     is moved there and the refined chunk comes back on the CPU, so ``base``/``batch`` stay
     where they are. The Laplace and marginal likelihood passes are embarrassingly parallel
     over (dataset, group, proposal), so the GPU that sampled the flow is the natural place.
-
-    ``max_elements`` bounds the padded (b, m, n, s) tensors of one chunk: a chunk above it is
-    refined in smaller dataset sub-batches (each trimmed to its own padding again), which
-    changes memory but not the per-dataset arithmetic.
     """
     # each chunk is trimmed to its own group/observation padding (the split-wide padding of
     # `batch` is 3-4x larger on the test splits and every Laplace tensor scales with it); the
     # merged result is padded back to the batch's group count
-    B = base.samples_g.shape[0]
-    m_pad = batch['mask_n'].shape[1]
+    m, n = rowSizes(batch['mask_n'])
     chunks: list[Proposal] = []
-    for start in range(0, B, max(batch_size, 1)):
-        end = min(start + batch_size, B)
+    for start, end in chunkRows(m, n, draws=base.n_samples, max_rows=max(batch_size, 1)):
         chunk = trimBatchPadding(sliceBatch(batch, start, end))
         base_chunk = base.slice_b(start, end).resizeGroups(chunk['mask_n'].shape[1])
-        b, m, n = chunk['mask_n'].shape[:3]
-        sub = _subBatchSize(b, m, n, base.n_samples, max_elements)
-        if sub < b:  # over budget: recurse with a smaller sub-batch (re-trims each piece)
-            logger.debug(
-                'refine chunk %d-%d (m=%d, n=%d) split into sub-batches of %d',
-                start,
-                end,
-                m,
-                n,
-                sub,
-            )
-            chunks.append(refineProposal(method, base_chunk, chunk, lf, sub, device, max_elements))
-        else:
-            chunks.append(_refineOnDevice(method, base_chunk, chunk, lf, device))
-    return concatProposalsBatch(chunks).resizeGroups(m_pad)
-
-
-def _subBatchSize(b: int, m: int, n: int, s: int, max_elements: int) -> int:
-    """Datasets per sub-batch so that b' × m × n × s <= max_elements (at least 1)."""
-    per_dataset = max(m * n * s, 1)
-    return max(1, min(b, max_elements // per_dataset))
+        chunks.append(_refineOnDevice(method, base_chunk, chunk, lf, device))
+    return concatProposalsBatch(chunks).resizeGroups(batch['mask_n'].shape[1])
 
 
 def _refineOnDevice(

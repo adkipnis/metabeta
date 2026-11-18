@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 import torch
 
-from metabeta.utils.dataloader import Collection, Dataloader
+from metabeta.utils.dataloader import Collection, Dataloader, chunkRows
 from metabeta.utils.fits import saveFits
 
 
@@ -451,3 +451,23 @@ def test_proposal_resize_groups_round_trip():
     assert dropped.samples_l.shape == (b, 2, s, q)
     assert torch.equal(dropped.samples_l, samples_l[:, :2])
     assert torch.equal(p.samples_l, samples_l)
+
+
+def test_chunkRows_fills_each_chunk_up_to_the_row_cap_or_the_element_budget():
+    rng = np.random.default_rng(0)
+    m, n = rng.integers(1, 60, 200), rng.integers(1, 40, 200)
+    draws, max_rows, budget = 10, 16, 20_000  # some rows alone exceed the budget
+
+    chunks = chunkRows(m, n, draws=draws, max_rows=max_rows, max_elements=budget)
+
+    def elements(start: int, end: int) -> int:
+        return (end - start) * m[start:end].max() * n[start:end].max() * draws
+
+    assert [start for start, _ in chunks] == [0] + [end for _, end in chunks[:-1]]
+    assert chunks[-1][1] == len(m)
+    assert any(end - start == 1 and elements(start, end) > budget for start, end in chunks)
+    for start, end in chunks:
+        assert end - start <= max_rows
+        assert end - start == 1 or elements(start, end) <= budget
+        if end < len(m):  # the next row would pass a limit
+            assert end - start == max_rows or elements(start, end + 1) > budget
