@@ -15,6 +15,8 @@ from metabeta.analytical.glmm.irls import _poissonMeanDerivative
 from metabeta.analytical.linalg import (
     _adaptiveRidge,
     _adaptiveRidgeBm,
+    _clipRowGradNorm_,
+    _keepRows,
     _psdClampEigenvalues,
     _safeSolve,
 )
@@ -34,7 +36,9 @@ __all__ = [
 
 _POISSON_LAPLACE_EB_DEFAULTS = {
     'poisson_laplace_eb_steps': 24,
-    'poisson_laplace_eb_inner': 4,
+    # 2 Newton steps per mode cut 14% of a fit's ops, and the statistics on the sampled test
+    # sets stay within 2% NRMSE of 4 steps (better on the huge set)
+    'poisson_laplace_eb_inner': 2,
     'poisson_laplace_eb_final': 6,
     'poisson_laplace_eb_lr': 0.05,
     'poisson_laplace_eb_blup_fallback_beta_jump': 0.0,
@@ -2512,9 +2516,12 @@ def refinePoissonLaplaceEb(
     optimizer = torch.optim.Adam([beta, log_sigma], lr=lr)
     min_log_sigma = math.log(1e-4)
     final_log_cap = math.log(sigma_max)
-    best_loss = float('inf')
-    stale_steps = 0
-    n_steps_run = 0
+    # each dataset stops on its own: at its step budget, after 3 steps without improving its
+    # loss (from half the steps on), or at its last finite step
+    active = torch.ones(B, device=device, dtype=torch.bool)
+    best_loss = torch.full((B,), float('inf'), device=device, dtype=torch.float64)
+    stale_steps = torch.zeros(B, device=device, dtype=torch.long)
+    steps_run = torch.zeros(B, device=device, dtype=dtype)
     if n_steps_fast is not None and n_steps_fast_max_d is not None:
         if mask_d is None:
             d_count = torch.full((B,), d, device=device, dtype=torch.long)
@@ -2532,14 +2539,6 @@ def refinePoissonLaplaceEb(
 
     with torch.enable_grad():
         for step in range(n_steps):
-            active_step = None
-            if step_budget is not None:
-                active_step = step < step_budget
-                if not bool(active_step.any()):
-                    break
-                beta_prev = beta.detach().clone()
-                log_sigma_prev = log_sigma.detach().clone()
-
             optimizer.zero_grad(set_to_none=True)
             log_sigma_step = log_sigma.clamp(min=min_log_sigma, max=final_log_cap)
             blups, H, active_q_step = _poissonLaplaceModeDiag(
@@ -2573,30 +2572,33 @@ def refinePoissonLaplaceEb(
                 mask_d,
                 sigma_log_jacobian,
             )
-            if active_step is None:
-                loss = -target.sum()
-            else:
-                loss = -(target * active_step.to(dtype)).sum()
-            if not torch.isfinite(loss):
+            active = active & target.isfinite()
+            n_active = int(active.sum())
+            if n_active == 0:
                 break
+            if n_active < B:
+                beta_prev, log_sigma_prev = beta.detach().clone(), log_sigma.detach().clone()
+            loss = -torch.where(active, target, 0.0).sum()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_([beta, log_sigma], max_norm=10.0)
+            _clipRowGradNorm_([beta, log_sigma], max_norm=10.0)
             optimizer.step()
-            n_steps_run = step + 1
-            loss_value = float(loss.detach().item())
-            if loss_value < best_loss - 1e-4:
-                best_loss = loss_value
-                stale_steps = 0
-            else:
-                stale_steps += 1
+            steps_run = steps_run + active.to(dtype)
+            row_loss = -target.detach().double()  # float64, as the .item() it replaces
+            improved = row_loss < best_loss - 1e-4
+            best_loss = torch.where(improved, row_loss, best_loss)
+            stale_steps = torch.where(improved, 0, stale_steps + 1)
             with torch.no_grad():
                 beta.clamp_(-_POISSON_BETA_CLAMP, _POISSON_BETA_CLAMP)
                 log_sigma.clamp_(min_log_sigma, final_log_cap)
                 log_sigma.masked_fill_(~active_q, min_log_sigma)
-                if active_step is not None:
-                    beta.copy_(torch.where(active_step[:, None], beta, beta_prev))
-                    log_sigma.copy_(torch.where(active_step[:, None], log_sigma, log_sigma_prev))
-            if step >= max(n_steps // 2, 1) and stale_steps >= 3:
+                if n_active < B:
+                    beta.copy_(_keepRows(~active, beta_prev, beta))
+                    log_sigma.copy_(_keepRows(~active, log_sigma_prev, log_sigma))
+            if step >= max(n_steps // 2, 1):
+                active = active & (stale_steps < 3)
+            if step_budget is not None:
+                active = active & (step + 1 < step_budget)
+            if not bool(active.any()):
                 break
 
     with torch.no_grad():
@@ -2758,11 +2760,7 @@ def refinePoissonLaplaceEb(
     out['Psi_lap'] = _psdClampEigenvalues(Psi_lap, _POISSON_PSI_EIG_CAP)
     if return_diagnostics:
         out['laplace_eb_accept'] = accept.to(dtype)
-        if step_budget is None:
-            eb_steps = torch.full((B,), float(n_steps_run), device=device, dtype=dtype)
-        else:
-            eb_steps = step_budget.clamp(max=n_steps_run).to(dtype)
-        out['laplace_eb_steps'] = eb_steps
+        out['laplace_eb_steps'] = steps_run
         out['laplace_eb_target'] = final_target
         out['laplace_eb_base_target'] = base_target
         out['laplace_eb_blup_fallback'] = blup_fallback.to(dtype)
