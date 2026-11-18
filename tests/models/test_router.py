@@ -355,16 +355,18 @@ def test_router_takes_a_dataset_larger_than_every_submodel_was_trained_on(tmp_pa
     router = Api(joint_path, warmup=False)
 
     # 250 groups: beyond small's max_m but within medium's, so medium takes it unflagged
-    routes, _ = router._routeBatch(_batch(d=5, q=3, m=250))
+    routes, validation = router._routeBatch(_batch(d=5, q=3, m=250))
     assert routes == ['medium']
+    assert validation[0]['size_outside'] == ''
+    assert validation[0]['failures_by_submodel'] == {
+        'small': ['d=5 > max_d=4', 'q=3 > max_q=2', 'm=250 > max_m=200']
+    }
 
     # beyond every submodel's max_m and max_n_total: the smallest that fits otherwise takes it
     routes, validation = router._routeBatch(_batch(d=4, q=2, m=400))
     assert routes == ['small']
-    assert validation[0]['failures_by_submodel']['small'] == [
-        'm=400 > max_m=200',
-        'n=4000 > max_n_total=3000',
-    ]
+    assert validation[0]['size_outside'] == 'm=400 > max_m=200; n=4000 > max_n_total=3000'
+    assert 'small' not in validation[0]['failures_by_submodel']
 
     # a size excess does not lift the hard limits
     with pytest.raises(ValueError, match=r'9 fixed effects \(supported: 1 to 8\)$'):
@@ -621,12 +623,11 @@ def test_router_rejects_sigma_eps_prior_for_non_gaussian(tmp_path: Path):
     }
 
     with pytest.raises(ValueError, match='sigma_eps prior is only valid'):
-        with pytest.warns(RuntimeWarning, match='near-constant'):
-            router.prepareData(
-                preprocessed,
-                formula='y ~ x1 + x2 + (1 + x1 | group)',
-                priors={'sigma_eps': {'sigma': 1.0}},
-            )
+        router.prepareData(
+            preprocessed,
+            formula='y ~ x1 + x2 + (1 + x1 | group)',
+            priors={'sigma_eps': {'sigma': 1.0}},
+        )
 
 
 def test_router_rejects_empty_prior_list(
@@ -958,8 +959,8 @@ def test_router_warns_unstandardized_continuous_y(tmp_path: Path):
     # y with large mean -> unstandardized
     bad['y'] = bad['y'] + 100.0
 
-    with pytest.warns(RuntimeWarning, match='unstandardized'):
-        router._validateBatchFormat(bad)
+    ((category, message),) = router._validateBatchFormat(bad)
+    assert category is RuntimeWarning and 'unstandardized' in message
 
 
 def test_router_warns_near_constant_columns(tmp_path: Path):
@@ -1089,17 +1090,28 @@ def _write_tiny_approximator_checkpoint(
 
 
 def _write_two_submodel_checkpoint(
-    path: Path, *, likelihood_family: int = 0, analytical_refinement: str = 'light'
+    path: Path,
+    *,
+    likelihood_family: int = 0,
+    analytical_refinement: str = 'light',
+    wide_refinement: str | None = None,
 ) -> None:
     """Two tiny submodels with weights, 'tiny' for 1 to 4 fixed effects and 'tiny-8' for 5 to
     8, so datasets of one formula can route to different submodels (unlike
-    ``_write_joint_checkpoint``, whose weights are empty)."""
-    kwargs = dict(
-        max_q=2, likelihood_family=likelihood_family, analytical_refinement=analytical_refinement
-    )
+    ``_write_joint_checkpoint``, whose weights are empty).  'tiny-8' takes
+    ``wide_refinement`` if given, else ``analytical_refinement``."""
+    kwargs = dict(max_q=2, likelihood_family=likelihood_family)
     submodels = [
-        _tiny_submodel('tiny', min_d=1, max_d=4, **kwargs),
-        _tiny_submodel('tiny-8', min_d=5, max_d=8, **kwargs),
+        _tiny_submodel(
+            'tiny', min_d=1, max_d=4, analytical_refinement=analytical_refinement, **kwargs
+        ),
+        _tiny_submodel(
+            'tiny-8',
+            min_d=5,
+            max_d=8,
+            analytical_refinement=wide_refinement or analytical_refinement,
+            **kwargs,
+        ),
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
     torch.save({'_version': 1, 'submodels': submodels}, path)
@@ -1393,10 +1405,11 @@ def test_router_evidence_flags_the_flow_pool_k_hat(tmp_path: Path):
     with (
         mock.patch.object(api_module, 'psislw', badPool),
         mock.patch.object(api_module, 'tEvidence', return_value=t_ok),
-        pytest.warns(UserWarning, match='Evidence reliability check failed'),
+        pytest.warns(UserWarning, match=r'Evidence reliability .* = 2\.00 > 0\.7\)'),
     ):
         ev = router.sample(batch, n_samples=64, evidence=True).evidence
     assert ev['psis_flag'].all() and ev['psis_k'][0] == 0.0 and ev['pool_psis_k'][0] == 2.0
+    assert ev['psis_k_max'][0] == 2.0
 
 
 def test_estimate_without_local_rejects_glmm_without_analytical_stats(tmp_path: Path):
