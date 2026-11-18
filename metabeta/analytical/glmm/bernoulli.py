@@ -10,6 +10,8 @@ from metabeta.analytical.constants import _BERNOULLI_PSI_EIG_CAP
 from metabeta.analytical.linalg import (
     _adaptiveRidge,
     _adaptiveRidgeBm,
+    _clipRowGradNorm_,
+    _keepRows,
     _psdClampEigenvalues,
     _psdProject,
     _pseudoInverse,
@@ -499,7 +501,9 @@ def refineBernoulliLaplaceEb(
     final_log_cap = math.log(sigma_max)
     best_loss = float('inf')
     stale_steps = 0
-    n_steps_run = 0
+    # a dataset whose target turns non-finite stops at its last finite step, the others go on
+    active = torch.ones(B, device=device, dtype=torch.bool)
+    steps_run = torch.zeros(B, device=device, dtype=dtype)
 
     with torch.enable_grad():
         for step in range(n_steps):
@@ -538,13 +542,17 @@ def refineBernoulliLaplaceEb(
                 mask_d,
                 sigma_log_jacobian,
             )
-            loss = -target.sum()
-            if not torch.isfinite(loss):
+            active = active & target.isfinite()
+            n_active = int(active.sum())
+            if n_active == 0:
                 break
+            if n_active < B:
+                beta_prev, log_sigma_prev = beta.detach().clone(), log_sigma.detach().clone()
+            loss = -torch.where(active, target, 0.0).sum()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_([beta, log_sigma], max_norm=10.0)
+            _clipRowGradNorm_([beta, log_sigma], max_norm=10.0)
             optimizer.step()
-            n_steps_run = step + 1
+            steps_run = steps_run + active.to(dtype)
             if early_stop:
                 # the .item() forces a device sync; only pay for it when its bookkeeping is read
                 loss_value = float(loss.detach().item())
@@ -557,6 +565,9 @@ def refineBernoulliLaplaceEb(
                 beta.clamp_(-20.0, 20.0)
                 log_sigma.clamp_(min_log_sigma, final_log_cap)
                 log_sigma.masked_fill_(~active_q, min_log_sigma)
+                if n_active < B:
+                    beta.copy_(_keepRows(~active, beta_prev, beta))
+                    log_sigma.copy_(_keepRows(~active, log_sigma_prev, log_sigma))
             if (
                 early_stop
                 and step >= max(n_steps // 2, 1)
@@ -731,7 +742,7 @@ def refineBernoulliLaplaceEb(
     out['Psi_lap'] = _psdClampEigenvalues(Psi_lap, _BERNOULLI_PSI_EIG_CAP)
     if return_diagnostics:
         out['laplace_eb_accept'] = accept.to(dtype)
-        out['laplace_eb_steps'] = torch.full((B,), float(n_steps_run), device=device, dtype=dtype)
+        out['laplace_eb_steps'] = steps_run
         out['laplace_eb_target'] = final_target
         out['laplace_eb_base_target'] = base_target
         out['laplace_eb_blup_fallback'] = blup_fallback.to(dtype)
@@ -821,6 +832,7 @@ def refineBernoulliNagqSrfx(
 
         elig1 = nagq1_eligible.to(dtype=dtype)
         optimizer1 = torch.optim.Adam([log_s2], lr=lr)
+        active = nagq1_eligible  # a dataset with a non-finite LML stops at its last finite step
 
         with torch.enable_grad():
             for _ in range(n_steps):
@@ -845,14 +857,20 @@ def refineBernoulliNagqSrfx(
                     + 0.5 * math.log(2.0)
                     - 0.5 * H_g.clamp(min=1e-8).log()
                 )
-                lml = ((lml_g * mask_m).sum(-1) * elig1).sum()
-                if not torch.isfinite(lml):
+                lml_b = (lml_g * mask_m).sum(-1) * elig1
+                active = active & lml_b.isfinite()
+                n_active = int(active.sum())
+                if n_active == 0:
                     break
-                (-lml).backward()
-                torch.nn.utils.clip_grad_norm_([log_s2], max_norm=5.0)
+                if n_active < B:
+                    log_s2_prev = log_s2.detach().clone()
+                (-torch.where(active, lml_b, 0.0).sum()).backward()
+                _clipRowGradNorm_([log_s2], max_norm=5.0)
                 optimizer1.step()
                 with torch.no_grad():
                     log_s2.clamp_(math.log(1e-4), math.log(20.0))
+                    if n_active < B:
+                        log_s2.copy_(_keepRows(~active, log_s2_prev, log_s2))
 
         s2_final = log_s2.detach().exp()
         for b in nagq1_eligible.nonzero(as_tuple=True)[0].tolist():
@@ -902,6 +920,8 @@ def refineBernoulliNagqSrfx(
 
         eye_q_act = torch.eye(q_act, device=device, dtype=dtype)
         optimizer_mv = torch.optim.Adam([log_s2_e], lr=lr)
+        # a dataset with a non-finite LML or gradient stops at its last finite step
+        active_e = torch.ones(n_elig, device=device, dtype=torch.bool)
 
         with torch.enable_grad():
             for _ in range(n_steps):
@@ -949,16 +969,23 @@ def refineBernoulliNagqSrfx(
                     - 0.5 * log_det_Hg
                 )
 
-                lml_mv = (lml_g_e * mask_m_e).sum()
-                if not torch.isfinite(lml_mv):
+                lml_e = (lml_g_e * mask_m_e).sum(-1)
+                active_e = active_e & lml_e.isfinite()
+                if not bool(active_e.any()):
                     break
-                (-lml_mv).backward()
-                if log_s2_e.grad is not None and not log_s2_e.grad.isfinite().all():
+                (-torch.where(active_e, lml_e, 0.0).sum()).backward()
+                active_e = active_e & log_s2_e.grad.isfinite().all(dim=-1)
+                n_active = int(active_e.sum())
+                if n_active == 0:
                     break
-                torch.nn.utils.clip_grad_norm_([log_s2_e], max_norm=5.0)
+                if n_active < n_elig:
+                    log_s2_e_prev = log_s2_e.detach().clone()
+                _clipRowGradNorm_([log_s2_e], max_norm=5.0)
                 optimizer_mv.step()
                 with torch.no_grad():
                     log_s2_e.clamp_(math.log(1e-4), math.log(20.0))
+                    if n_active < n_elig:
+                        log_s2_e.copy_(_keepRows(~active_e, log_s2_e_prev, log_s2_e))
 
         # Fall back to initial values wherever optimization diverged
         log_s2_safe = torch.where(log_s2_e.detach().isfinite(), log_s2_e.detach(), log_s2_e_init)
