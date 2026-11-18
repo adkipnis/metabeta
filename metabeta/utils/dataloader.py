@@ -447,11 +447,49 @@ def trimBatchPadding(batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     if mask_n is None or not torch.is_tensor(mask_n) or mask_n.ndim != 3:
         return batch
     m_pad, n_pad = mask_n.shape[1], mask_n.shape[2]
-    m_keep = int(mask_n.any(dim=-1).sum(dim=1).max())
-    n_keep = int(mask_n.sum(dim=-1).max())
+    m_keep, n_keep = (int(size.max()) for size in rowSizes(mask_n))
     if m_keep >= m_pad and n_keep >= n_pad:
         return batch
     return _trim(batch, {1: m_keep, 2: n_keep})
+
+
+def rowSizes(mask_n: torch.Tensor) -> tuple[np.ndarray, np.ndarray]:
+    """Each row's own padding, as trimBatchPadding keeps it: its groups with data and its
+    largest group, both (B,)."""
+    m = mask_n.any(dim=-1).sum(dim=1)
+    n = mask_n.sum(dim=-1).amax(dim=1)
+    return m.cpu().numpy(), n.cpu().numpy()
+
+
+# Largest padded (rows × groups × observations × draws) tensor a chunk may build: 2^28 float32
+# elements = 1 GiB. The Laplace pass keeps ~8 such tensors alive, so this bounds its peak near
+# 10 GB.
+CHUNK_ELEMENTS = 2**28
+
+
+def chunkRows(
+    m: np.ndarray,
+    n: np.ndarray,
+    *,
+    draws: int,
+    max_rows: int,
+    max_elements: int = CHUNK_ELEMENTS,
+) -> list[tuple[int, int]]:
+    """Consecutive chunks [start, end) over rows of ``m`` groups and ``n`` observations in the
+    largest group (``rowSizes``), each of at most ``max_rows`` rows whose padded
+    rows × m × n × ``draws`` tensor, at the chunk's own padding, holds at most ``max_elements``.
+    A row alone over the budget is a chunk of its own."""
+    chunks: list[tuple[int, int]] = []
+    start, m_pad, n_pad = 0, 0, 0
+    for row, (m_i, n_i) in enumerate(zip(m.tolist(), n.tolist())):
+        m_pad, n_pad = max(m_pad, m_i), max(n_pad, n_i)
+        rows = row - start + 1
+        if row > start and (rows > max_rows or rows * m_pad * n_pad * draws > max_elements):
+            chunks.append((start, row))
+            start, m_pad, n_pad = row, m_i, n_i
+    if len(m):
+        chunks.append((start, len(m)))
+    return chunks
 
 
 def _trim(batch: dict[str, Any], sizes: dict[int, int]) -> dict[str, Any]:
