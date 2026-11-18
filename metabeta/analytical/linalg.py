@@ -17,6 +17,23 @@ def _expandBatchMask(mask: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
     return mask
 
 
+def _keepRows(keep: torch.Tensor, old: torch.Tensor, new: torch.Tensor) -> torch.Tensor:
+    """Rows of the batch (leading dim) with keep=True take old, the others new."""
+    return torch.where(_expandBatchMask(keep, old), old, new)
+
+
+def _clipRowGradNorm_(params: list[torch.Tensor], max_norm: float) -> None:
+    """torch.nn.utils.clip_grad_norm_ per row of the batch (leading dim of every param), so a
+    dataset's optimizer step does not depend on its batch-mates' gradients."""
+    grads = [p.grad for p in params]
+    B = grads[0].shape[0]
+    norms = torch.stack([torch.linalg.vector_norm(g.reshape(B, -1), dim=1) for g in grads])
+    total = torch.linalg.vector_norm(norms, dim=0)  # (B,)
+    coef = torch.clamp(max_norm / (total + 1e-6), max=1.0)
+    for g in grads:
+        g.mul_(_expandBatchMask(coef, g))
+
+
 def _safeSolve(A: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     """torch.linalg.solve with escalating ridge fallback for singular batches.
 
