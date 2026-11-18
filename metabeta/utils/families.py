@@ -459,6 +459,43 @@ def _llPoisson(
 _LIKELIHOOD_LL = (_llNormal, _llBernoulli, _llPoisson)
 
 
+def _rfxPrecision(
+    sigma_rfx: torch.Tensor,  # (b, s, q)
+    sigma_eps: torch.Tensor,  # (b, s)
+    ZtZ: torch.Tensor,  # (b, m, q, q)
+    L_corr: torch.Tensor | None,  # (b, s, q, q)
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """The rfx posterior precision of a Normal model, shared by the marginal and both
+    conditionals so that weights and draws use one factor.
+
+    Returns the Cholesky factor of the σ²_eps-scaled precision M = σ²_eps Σ_rfx⁻¹ + ZᵀZ per group
+    (b, m, s, q, q), log det Σ_rfx (b, s) and the degenerate states (b, m, s). Unlike
+    Σ_rfx⁻¹ + ZᵀZ / σ²_eps, M stays finite as σ_eps -> 0 (#57). Its jitter σ²_eps 1e-6 I is 1e-6
+    on the unscaled precision. A state is degenerate where M is not finite or does not factor:
+    it has zero posterior mass, and its factor is the identity so that solves stay finite.
+
+    Σ_rfx is diag(σ_rfx²), or D L_corr L_corrᵀ D with D = diag(σ_rfx) when L_corr is given;
+    σ_rfx is clamped at 1e-6, since the flow can underflow to 0.
+    """
+    sigma_rfx = sigma_rfx.clamp(min=1e-6)
+    q = sigma_rfx.shape[-1]
+    eye = torch.eye(q, dtype=sigma_rfx.dtype, device=sigma_rfx.device)
+    if L_corr is None:
+        Sigma_inv = torch.diag_embed(1.0 / sigma_rfx.pow(2))  # (b, s, q, q)
+        log_det_Sigma = 2.0 * sigma_rfx.log().sum(-1)  # (b, s)
+    else:
+        L_Sigma = sigma_rfx.unsqueeze(-1) * L_corr  # (b, s, q, q): D @ L_corr
+        Sigma_inv = choleskySolve(eye.expand_as(L_Sigma), L_Sigma)
+        diag_corr = L_corr.diagonal(dim1=-2, dim2=-1).clamp(min=1e-8)
+        log_det_Sigma = 2.0 * (sigma_rfx.log() + diag_corr.log()).sum(-1)
+    s2e = sigma_eps.pow(2)[:, None, :, None, None]  # (b, 1, s, 1, 1)
+    M = s2e * (Sigma_inv.unsqueeze(1) + 1e-6 * eye) + ZtZ.unsqueeze(2)  # (b, m, s, q, q)
+    chol, info = torch.linalg.cholesky_ex(M)
+    degenerate = (info != 0) | ~torch.isfinite(M).all(-1).all(-1)  # (b, m, s)
+    chol = torch.where(degenerate[..., None, None], eye, chol)
+    return chol, log_det_Sigma, degenerate
+
+
 def logMarginalLikelihoodNormal(
     ffx: torch.Tensor,  # (b, s, d)
     sigma_rfx: torch.Tensor,  # (b, s, q)
@@ -476,11 +513,11 @@ def logMarginalLikelihoodNormal(
     of the n_i×n_i marginal covariance directly:
 
         V_i = Z_i Σ_rfx Z_i^T + σ²_eps I_{n_i}
-        M_i = Σ_rfx^{-1} + Z_i^T Z_i / σ²_eps           (q×q)
-        log det V_i = log det M_i + log det Σ_rfx + n_i log σ²_eps
-        r_i^T V_i^{-1} r_i = (‖r_i‖² − h_i^T M_i^{-1} h_i / σ²_eps) / σ²_eps
+        M_i = σ²_eps Σ_rfx^{-1} + Z_i^T Z_i             (q×q, _rfxPrecision)
+        log det V_i = log det M_i + log det Σ_rfx + (n_i − q) log σ²_eps
+        r_i^T V_i^{-1} r_i = (‖r_i‖² − h_i^T M_i^{-1} h_i) / σ²_eps
 
-    where r_i = y_i − X_i β and h_i = Z_i^T r_i.
+    where r_i = y_i − X_i β and h_i = Z_i^T r_i. Degenerate states get −inf.
 
     Σ_rfx is diag(σ_rfx²) by default; pass L_corr (from unconstrainedToCholesky)
     for the correlated case Σ_rfx = D L_corr L_corrᵀ D with D = diag(σ_rfx).
@@ -489,8 +526,8 @@ def logMarginalLikelihoodNormal(
     the 2026-07 posthoc ablation.
 
     Padded q-dimensions (inactive rfx) contribute zero net log-det because the
-    Z_i column is zero, making the padded diagonal of M_i equal to 1/σ²_rfx,
-    which exactly cancels the corresponding term in log det Σ_rfx. This holds
+    Z_i column is zero, making the padded diagonal of M_i equal to σ²_eps/σ²_rfx,
+    which exactly cancels the corresponding terms in log det Σ_rfx and q log σ²_eps. This holds
     in the correlated case too: masked z_corr entries make the padded rows of
     L_corr identity rows.
 
@@ -509,102 +546,25 @@ def logMarginalLikelihoodNormal(
     # valid observations per group
     n_i = mask_n.squeeze(-1).sum(dim=-1).float()   # (b, m)
 
-    # clamp sigma_rfx away from zero: flow can underflow to 0, which makes
-    # both Sigma_inv and log(sigma_rfx) numerically degenerate.
-    sigma_rfx = sigma_rfx.clamp(min=1e-6)
-
-    # Σ_rfx^{-1} and log det Σ_rfx  ->  (b, s, q, q), (b, s)
-    s2e = sigma_eps.pow(2)                                          # (b, s)
-    if L_corr is None:
-        s2r_inv = 1.0 / sigma_rfx.pow(2)                            # (b, s, q)
-        Sigma_inv = torch.diag_embed(s2r_inv)                       # (b, s, q, q)
-        log_det_Sigma = 2.0 * sigma_rfx.log().sum(-1)               # (b, s)
-    else:
-        q = L_corr.shape[-1]
-        L_Sigma = sigma_rfx.unsqueeze(-1) * L_corr                  # (b, s, q, q): D @ L_corr
-        eye = torch.eye(q, dtype=L_Sigma.dtype, device=L_Sigma.device)
-        Sigma_inv = choleskySolve(eye.expand_as(L_Sigma), L_Sigma)
-        diag_corr = L_corr.diagonal(dim1=-2, dim2=-1).clamp(min=1e-8)
-        log_det_Sigma = 2.0 * (sigma_rfx.log() + diag_corr.log()).sum(-1)
-
-    # M_i = Σ_rfx^{-1} + Z_i^T Z_i / σ²_eps  ->  (b, m, s, q, q)
-    M = Sigma_inv.unsqueeze(1) + ZtZ.unsqueeze(2) / s2e[:, None, :, None, None]
-
-    # Cholesky factorisation of M - jitter diagonal for numerical stability.
-    # Use cholesky_ex to avoid hard failures; bad elements get -inf log-likelihood.
-    jitter = 1e-6 * torch.eye(M.shape[-1], dtype=M.dtype, device=M.device)
-    chol_M, info = torch.linalg.cholesky_ex(M + jitter)            # (b, m, s, q, q)
-    chol_ok = info == 0                                           # (b, m, s)
-
+    chol_M, log_det_Sigma, degenerate = _rfxPrecision(sigma_rfx, sigma_eps, ZtZ, L_corr)
     log_det_M = 2.0 * chol_M.diagonal(dim1=-2, dim2=-1).log().sum(-1)  # (b, m, s)
-    log_det_M = torch.where(chol_ok, log_det_M, log_det_M.new_tensor(torch.inf))
 
     # h^T M^{-1} h via Cholesky solve
     M_inv_h = choleskySolve(h.unsqueeze(-1), chol_M).squeeze(-1)  # (b, m, s, q)
     hMh = (h * M_inv_h).sum(-1)                                    # (b, m, s)
 
-    # log det V_i = log det M_i + log det Σ_rfx + n_i log σ²_eps
-    # (padded dims of log_det_Sigma cancel with M's padded diagonal)
-    log_s2e = s2e.log()                              # (b, s)
-    log_det_V = (
-        log_det_M + log_det_Sigma[:, None, :] + n_i[:, :, None] * log_s2e[:, None, :]
-    )  # (b, m, s)
-
-    # quadratic form
-    s2e_bms = s2e[:, None, :]                        # (b, 1, s)
-    quad = (rtr - hMh / s2e_bms) / s2e_bms          # (b, m, s)
+    # log det V_i (padded dims of log_det_Sigma cancel with M's padded diagonal)
+    s2e = sigma_eps.pow(2)[:, None, :]               # (b, 1, s)
+    n_free = n_i[:, :, None] - Z.shape[-1]           # (b, m, 1)
+    log_det_V = log_det_M + log_det_Sigma[:, None, :] + n_free * s2e.log()  # (b, m, s)
 
     # per-group log-likelihood
+    quad = (rtr - hMh) / s2e                        # (b, m, s)
     ll_i = -0.5 * (n_i[:, :, None] * math.log(2.0 * math.pi) + log_det_V + quad)
+    ll_i = torch.where(degenerate, -math.inf, ll_i)
 
     # sum over valid groups
-    return (ll_i * mask_m).sum(dim=1)  # (b, s)
-
-
-def safeCholesky(
-    M: torch.Tensor,  # (..., q, q)
-    jitter: float = 1e-6,
-    max_tries: int = 3,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Batched Cholesky that never raises: jitter escalation, then eigh repair.
-
-    Symmetrize, retry with scale-aware jitter (×10 per round), eigenvalue-floor
-    repair via eigh, and as a last resort the identity. Non-finite or identity-fallback
-    elements are flagged in the returned ``degenerate`` mask (..., ) - callers
-    must treat their factors as placeholders, not approximations of M.
-    """
-    q = M.shape[-1]
-    eye = torch.eye(q, dtype=M.dtype, device=M.device)
-    finite = torch.isfinite(M).all(-1).all(-1)  # (...,)
-    M = torch.where(finite[..., None, None], 0.5 * (M + M.mT), eye)
-    scale = M.diagonal(dim1=-2, dim2=-1).abs().mean(-1).clamp(min=1.0)  # (...,)
-
-    attempt = M + jitter * eye
-    chol, info = torch.linalg.cholesky_ex(attempt)
-    bad = info != 0
-    for i in range(max_tries):
-        if not bad.any():
-            break
-        jit = (jitter * scale * 10.0**i)[..., None, None] * eye
-        attempt = torch.where(bad[..., None, None], attempt + jit, attempt)
-        chol, info = torch.linalg.cholesky_ex(attempt)
-        bad = info != 0
-
-    if bad.any():
-        # eigenvalue-floor repair, only on the still-failing elements
-        flat = attempt.reshape(-1, q, q)
-        idx = bad.reshape(-1).nonzero().squeeze(-1)
-        sub = flat[idx]
-        vals, vecs = torch.linalg.eigh(0.5 * (sub + sub.mT))
-        floor = (jitter * scale.reshape(-1)[idx]).unsqueeze(-1)
-        repaired = vecs @ torch.diag_embed(vals.clamp(min=floor)) @ vecs.mT
-        flat[idx] = 0.5 * (repaired + repaired.mT)
-        chol, info = torch.linalg.cholesky_ex(flat.reshape(M.shape))
-        bad = info != 0
-        if bad.any():
-            chol = torch.where(bad[..., None, None], eye.expand_as(chol), chol)
-
-    return chol, bad | ~finite
+    return torch.where(mask_m.bool(), ll_i, 0.0).sum(dim=1)  # (b, s)
 
 
 def sampleRfxConditionalNormal(
@@ -641,43 +601,24 @@ def sampleRfxConditionalNormal(
     ZtZ = torch.einsum('bmnq,bmnr->bmqr', Z_m, Z_m)  # (b, m, q, q)
     Ztr = torch.einsum('bmnq,bmns->bmsq', Z_m, r)    # (b, m, s, q)
 
-    # Σ_rfx Cholesky factor L such that Σ_rfx = L @ Lᵀ
-    sigma_rfx_c = sigma_rfx.clamp(min=1e-6)
-    if L_corr is not None:
-        L_rfx = sigma_rfx_c.unsqueeze(-1) * L_corr  # (b, s, q, q): D @ L_corr
-    else:
-        L_rfx = torch.diag_embed(sigma_rfx_c)       # (b, s, q, q) diagonal
-
-    # Σ_rfx⁻¹ via Cholesky solve
-    q = L_rfx.shape[-1]
-    eye = torch.eye(q, device=L_rfx.device, dtype=L_rfx.dtype)
-    Sigma_inv = choleskySolve(eye.expand_as(L_rfx), L_rfx)  # (b, s, q, q)
-
-    # M = σ²_eps V⁻¹ = σ²_eps Σ_rfx⁻¹ + ZᵀZ  (b, m, s, q, q): unlike V⁻¹ itself it stays finite
-    # as σ_eps -> 0, where Zᵀr / σ²_eps overflows float32 although the conditional tends to the
-    # least-squares fit (#57: an IMH chain stuck on a flow draw with σ_eps 2e-19).
-    s2e = sigma_eps.pow(2)  # (b, s)
-    M = s2e[:, None, :, None, None] * Sigma_inv.unsqueeze(1) + ZtZ.unsqueeze(2)
-    # non-finite flow samples (e.g. σ_eps overflowing) can make M non-PD or non-finite; those
-    # samples carry zero IS weight anyway (logMarginalLikelihoodNormal fails the same
-    # factorization -> -inf ll), so a placeholder N(0, I) draw for them never influences
-    # downstream results.
-    chol_M, degenerate = safeCholesky(M)  # (b, m, s, q, q), (b, m, s)
+    # M = σ²_eps V⁻¹ (b, m, s, q, q): unlike V⁻¹ itself it stays finite as σ_eps -> 0, where
+    # Zᵀr / σ²_eps overflows float32 although the conditional tends to the least-squares fit (#57:
+    # an IMH chain stuck on a flow draw with σ_eps 2e-19). Degenerate states carry zero weight in
+    # logMarginalLikelihoodNormal, which fails the same factor, so their zero draw never enters a
+    # result.
+    chol_M, _, degenerate = _rfxPrecision(sigma_rfx, sigma_eps, ZtZ, L_corr)
 
     # Posterior mean: μ = V (Zᵀr / σ²_eps) = M⁻¹ Zᵀr
-    rhs = Ztr  # (b, m, s, q)
-    if degenerate.any():
-        rhs = torch.where(degenerate[..., None], torch.zeros_like(rhs), rhs)
-    post_mean = choleskySolve(rhs.unsqueeze(-1), chol_M).squeeze(-1)  # (b, m, s, q)
+    post_mean = choleskySolve(Ztr.unsqueeze(-1), chol_M).squeeze(-1)  # (b, m, s, q)
 
     # Sample: rfx = μ + σ_eps chol_M⁻ᵀ z  where z ~ N(0, I)
     # chol_M is Chol(M) and V = σ²_eps M⁻¹, so Chol(V) = σ_eps chol_M⁻ᵀ (upper-triangular solve)
     z = torch.randn_like(post_mean).unsqueeze(-1)  # (b, m, s, q, 1)
     unit = torch.linalg.solve_triangular(chol_M.mT, z, upper=True).squeeze(-1)  # (b, m, s, q)
-    noise_sd = torch.where(degenerate, 1.0, sigma_eps[:, None, :])  # (b, m, s)
-    rfx_centered = noise_sd[..., None] * unit  # (b, m, s, q)
+    rfx = post_mean + sigma_eps[:, None, :, None] * unit  # (b, m, s, q)
+    rfx = torch.where(degenerate[..., None], 0.0, rfx)
 
-    return (post_mean + rfx_centered) * mask_m.unsqueeze(-1).float()  # (b, m, s, q)
+    return rfx * mask_m.unsqueeze(-1).float()  # (b, m, s, q)
 
 
 def sampleFfxConditionalNormal(
@@ -701,13 +642,13 @@ def sampleFfxConditionalNormal(
     the V_j of logMarginalLikelihoodNormal, Woodbury per group):
 
         P = Σ_j X_jᵀ V_j⁻¹ X_j + diag(1/τ²),   μ = P⁻¹ (Σ_j X_jᵀ V_j⁻¹ y_j + ν/τ²),
-        X_jᵀ V_j⁻¹ A = (X_jᵀ A − X_jᵀ Z_j M_j⁻¹ Z_jᵀ A / σ²_eps) / σ²_eps.
+        X_jᵀ V_j⁻¹ A = (X_jᵀ A − X_jᵀ Z_j M_j⁻¹ Z_jᵀ A) / σ²_eps,   M_j = σ²_eps Σ_rfx⁻¹ + Z_jᵀ Z_j.
 
     Under the Student-t prior that Gaussian serves as an independence-MH proposal for the exact
     conditional, whose ratio reduces to the prior ratio p_t(ffx*) p_N(ffx) / (p_t(ffx) p_N(ffx*)).
-    At σ_eps near 0 the Woodbury terms cancel and rounding can leave M or P indefinite; such
-    states keep the current draw, as on rejection (#57). Computed in float64. Returns (ffx (b, s, d),
-    accepted (b, s) bool).
+    At σ_eps near 0 the Woodbury terms cancel and rounding can leave P indefinite; such states
+    and degenerate ones (_rfxPrecision) keep the current draw, as on rejection (#57). Computed in
+    float64. Returns (ffx (b, s, d), accepted (b, s) bool).
     """
     dtype = torch.float64
     b, s, d = ffx.shape
@@ -722,20 +663,13 @@ def sampleFfxConditionalNormal(
     ZtZ, Zty = Z_m.mT @ Z_m, Z_m.mT @ y_m  # (b, m, q, q), (b, m, q, 1)
     m = X.shape[1]
 
-    s_rfx = sigma_rfx.to(dtype).clamp(min=1e-6)
-    eye_q = torch.eye(q, dtype=dtype, device=X.device)
-    if L_corr is None:
-        Sigma_inv = torch.diag_embed(1.0 / s_rfx.pow(2))  # (b, s, q, q)
-    else:
-        L_Sigma = s_rfx.unsqueeze(-1) * L_corr.to(dtype)
-        Sigma_inv = choleskySolve(eye_q.expand_as(L_Sigma), L_Sigma)
+    L = None if L_corr is None else L_corr.to(dtype)
+    chol_M, _, degenerate = _rfxPrecision(sigma_rfx.to(dtype), sigma_eps.to(dtype), ZtZ, L)
     inv_s2e = (1.0 / sigma_eps.to(dtype).pow(2))[:, None, :, None, None]  # (b, 1, s, 1, 1)
-    M = Sigma_inv[:, None] + ZtZ[:, :, None] * inv_s2e  # (b, m, s, q, q)
-    chol_M, info_M = torch.linalg.cholesky_ex(M + 1e-6 * eye_q)  # info_M (b, m, s)
     Minv_ZtX = choleskySolve(XtZ.mT[:, :, None].expand(b, m, s, q, d), chol_M)  # (b, m, s, q, d)
     Minv_Zty = choleskySolve(Zty[:, :, None].expand(b, m, s, q, 1), chol_M)  # (b, m, s, q, 1)
-    G = (XtX[:, :, None] - XtZ[:, :, None] @ Minv_ZtX * inv_s2e) * inv_s2e  # (b, m, s, d, d)
-    g = (Xty[:, :, None] - XtZ[:, :, None] @ Minv_Zty * inv_s2e) * inv_s2e  # (b, m, s, d, 1)
+    G = (XtX[:, :, None] - XtZ[:, :, None] @ Minv_ZtX) * inv_s2e  # (b, m, s, d, d)
+    g = (Xty[:, :, None] - XtZ[:, :, None] @ Minv_Zty) * inv_s2e  # (b, m, s, d, 1)
     mm = mask_m.to(dtype)[:, :, None, :, None]  # (b, m, 1, 1, 1)
     G, g = (G * mm).sum(1), (g * mm).sum(1).squeeze(-1)  # (b, s, d, d), (b, s, d)
 
@@ -746,7 +680,7 @@ def sampleFfxConditionalNormal(
     pair = active.unsqueeze(-1) & active.unsqueeze(-2)  # (b, 1, d, d)
     P = G * pair + torch.diag_embed(prec.expand(b, s, d))
     L_P, info_P = torch.linalg.cholesky_ex(P)
-    factored = (info_P == 0) & (info_M == 0).all(1)  # (b, s)
+    factored = (info_P == 0) & ~degenerate.any(1)  # (b, s)
     L_P = torch.where(factored[..., None, None], L_P, torch.eye(d, dtype=dtype, device=X.device))
     mean = choleskySolve(((g + nu * prec) * active).unsqueeze(-1), L_P).squeeze(-1)
     z = torch.randn_like(mean)
