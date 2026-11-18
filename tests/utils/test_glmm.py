@@ -809,7 +809,7 @@ def test_glmm_bernoulli_laplace_eb_default_preset_matches_explicit_kwargs():
         bt['n_total'],
         bernoulli_laplace_eb=True,
         bernoulli_laplace_eb_steps=24,
-        bernoulli_laplace_eb_inner=4,
+        bernoulli_laplace_eb_inner=2,
         bernoulli_laplace_eb_final=8,
         bernoulli_laplace_eb_lr=0.05,
         bernoulli_laplace_eb_beta_output_cap=3.0,
@@ -977,3 +977,67 @@ def test_approximator_data_statistics_on_cuda_equal_the_cpu_path(likelihood_fami
     for key, value in want.items():
         assert got[key].device.type == 'cuda', key
         torch.testing.assert_close(got[key].cpu(), value, rtol=0, atol=0, equal_nan=True)
+
+
+# ---------------------------------------------------------------------------
+# 6. Per-dataset stopping: a dataset's statistics ignore its batch-mates
+# ---------------------------------------------------------------------------
+
+
+def _mixedBatch(likelihood_family):
+    """glmm's inputs for six datasets of mixed size at one padding, with the priors of the MAP
+    refiners; the last two datasets use only the random intercept. In float64: the iterative
+    fits amplify the batch-size-dependent noise of the kernels to 1e-3 in float32 and up to
+    1e-7 in float64 (MKL), while main's batch couplings moved statistics by 4e-3 to 0.3."""
+    rng = np.random.default_rng(SEED + 6)
+    d, q = 3, 2
+    shapes = [(4, 6), (6, 25), (8, 12), (12, 40), (5, 18), (10, 8)]  # (m, n per group)
+    datasets = [_gen_dataset(rng, d, q, likelihood_family, m=m, n_per_group=n) for m, n in shapes]
+    bt = _collate(datasets, d, q)
+    B = len(datasets)
+    mask_q = torch.ones(B, q)
+    mask_q[-2:, 1] = 0.0
+    bt['Zm'][-2:, ..., 1] = 0.0
+
+    def stacked(key, dtype=torch.float32):
+        return torch.as_tensor(np.stack([np.asarray(ds[key]) for ds in datasets]), dtype=dtype)
+
+    inputs = {
+        **bt,
+        'mask_q': mask_q,
+        'mask_d': torch.ones(B, d),
+        'eta_rfx': torch.tensor([0.0, 1.0] * (B // 2)),
+        'nu_ffx': stacked('nu_ffx'),
+        'tau_ffx': stacked('tau_ffx'),
+        'family_ffx': stacked('family_ffx', torch.long),
+        'tau_rfx': stacked('tau_rfx'),
+        'family_sigma_rfx': stacked('family_sigma_rfx', torch.long),
+    }
+    if likelihood_family == 0:
+        inputs['tau_eps'] = stacked('tau_eps')
+        inputs['family_sigma_eps'] = stacked('family_sigma_eps', torch.long)
+    return {k: v.double() if v.is_floating_point() else v for k, v in inputs.items()}
+
+
+@pytest.mark.parametrize('likelihood_family', [0, 1, 2])
+def test_glmm_dataset_alone_equals_its_row_in_a_batch(likelihood_family):
+    """Every loop of the full refinement path stops and clips per dataset, so a dataset fitted
+    alone gets the statistics of its row in a batch fit at the same padding."""
+    inputs = _mixedBatch(likelihood_family)
+    B = inputs['Xm'].shape[0]
+    batch = glmm(**inputs, likelihood_family=likelihood_family)
+
+    for b in range(B):
+        alone = glmm(
+            **{k: v[b : b + 1] for k, v in inputs.items()}, likelihood_family=likelihood_family
+        )
+        for key, value in alone.items():
+            if torch.is_tensor(value) and value.shape[:1] == (1,):
+                torch.testing.assert_close(
+                    value,
+                    batch[key][b : b + 1],
+                    rtol=1e-5,
+                    atol=1e-7,
+                    equal_nan=True,
+                    msg=lambda m, key=key, b=b: f'{key}, dataset {b}: {m}',
+                )
