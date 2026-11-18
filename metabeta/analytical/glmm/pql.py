@@ -30,6 +30,7 @@ from metabeta.analytical.linalg import (
     _adaptiveRidge,
     _adaptiveRidgeBm,
     _eighWithJitter,
+    _keepRows,
     _psdClampEigenvalues,
     _psdProject,
     _pseudoInverse,
@@ -537,7 +538,7 @@ def _lmmGlmm(
     dict with keys: beta_est, beta_wg, sigma_rfx_est, blup_est, blup_var,
                     bhat, resid_g, phi_pearson, psi_0, Psi_pql, Psi_lap, mean_Hg_inv
     """
-    _, _, _, d = Xm.shape
+    B, _, _, d = Xm.shape
     family = _pqlFamilyConfig(likelihood_family)
 
     # Stage 0/1: pooled GLM, overdispersion scale, b̂_OLS, and Ψ̂_PQL.
@@ -580,12 +581,14 @@ def _lmmGlmm(
     beta_gls, Psi_lap = _sanitizePassInputs(beta_gls, Psi_lap, family, uncorr)
 
     # Passes 2-max_passes: warm start, ridge-regularized Ψ̂_Lap, until convergence.
-    # Each pass refines (β, b̂_g, Ψ̂_Lap) jointly. Early exit when the 95th-percentile
-    # change across the batch is below tolerance - avoids running all max_passes when a
-    # few pathological datasets (small m) never satisfy the strict amax criterion.
+    # Each pass refines (β, b̂_g, Ψ̂_Lap) jointly. A dataset stops at the first pass that
+    # changes its β and diag(Ψ̂_Lap) by less than the tolerance, and keeps that pass's output.
+    done = torch.zeros(B, device=Xm.device, dtype=torch.bool)
+    n_done = 0
     for _ in range(max_passes - 1):
         beta_prev = beta_gls
         psi_diag_prev = Psi_lap.diagonal(dim1=-2, dim2=-1)
+        state_prev = (beta_gls, Psi_lap, blups, Kg_inv, mean_Hg_inv, resid_gls, blup_kh_var)
 
         Psi_inv = _ridgeInv(Psi_lap, psi_0_floor)
         pql_pass = _pqlPass(beta_gls, Psi_inv, pass_ctx, bg_init=blups)
@@ -597,10 +600,17 @@ def _lmmGlmm(
         resid_gls = pql_pass.resid_gls
         blup_kh_var = pql_pass.blup_kh_var
         beta_gls, Psi_lap = _sanitizePassInputs(beta_gls, Psi_lap, family, uncorr)
+        if n_done > 0:
+            state = (beta_gls, Psi_lap, blups, Kg_inv, mean_Hg_inv, resid_gls, blup_kh_var)
+            beta_gls, Psi_lap, blups, Kg_inv, mean_Hg_inv, resid_gls, blup_kh_var = (
+                _keepRows(done, old, new) for old, new in zip(state_prev, state)
+            )
 
         d_beta = (beta_gls - beta_prev).abs().amax(dim=-1)                               # (B,)
         d_psi = (Psi_lap.diagonal(dim1=-2, dim2=-1) - psi_diag_prev).abs().amax(dim=-1)  # (B,)
-        if torch.quantile(d_beta, 0.95) < 1e-3 and torch.quantile(d_psi, 0.95) < 1e-3:
+        done = done | ((d_beta < 1e-3) & (d_psi < 1e-3))
+        n_done = int(done.sum())
+        if n_done == B:
             break
 
     # ------------------------------------------------------------------

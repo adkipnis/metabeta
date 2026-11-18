@@ -8,6 +8,8 @@ from torch.nn import functional as F
 from metabeta.analytical.linalg import (
     _adaptiveRidge,
     _adaptiveRidgeBm,
+    _clipRowGradNorm_,
+    _keepRows,
     _safeSolve,
 )
 from metabeta.analytical.lmm.lmm import _normalGlsAndBlups
@@ -868,7 +870,11 @@ def refineNormalMapSrfx(
     log_sigma_eps = (
         stats['sigma_eps_est'].squeeze(-1).detach().clamp(min=1e-4, max=20.0).log().clone()
     ).requires_grad_(True)
-    optimizer = torch.optim.Adam([log_sigma_rfx, beta, log_sigma_eps], lr=lr)
+    params = [log_sigma_rfx, beta, log_sigma_eps]
+    optimizer = torch.optim.Adam(params, lr=lr)
+    B = beta.shape[0]
+    # a dataset whose target turns non-finite stops at its last finite step, the others go on
+    active = torch.ones(B, device=beta.device, dtype=torch.bool)
     with torch.enable_grad():
         for _ in range(n_steps):
             optimizer.zero_grad(set_to_none=True)
@@ -892,16 +898,23 @@ def refineNormalMapSrfx(
                 mask_d,
                 mask_q,
             ).squeeze(1)
-            loss = -target.sum()
-            if not torch.isfinite(loss):
+            active = active & target.isfinite()
+            n_active = int(active.sum())
+            if n_active == 0:
                 break
+            if n_active < B:
+                prev = [p.detach().clone() for p in params]
+            loss = -torch.where(active, target, 0.0).sum()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_([beta, log_sigma_rfx, log_sigma_eps], max_norm=10.0)
+            _clipRowGradNorm_([beta, log_sigma_rfx, log_sigma_eps], max_norm=10.0)
             optimizer.step()
             with torch.no_grad():
                 beta.clamp_(-20.0, 20.0)
                 log_sigma_rfx.clamp_(math.log(1e-4), math.log(20.0))
                 log_sigma_eps.clamp_(math.log(1e-4), math.log(20.0))
+                if n_active < B:
+                    for p, p_prev in zip(params, prev):
+                        p.copy_(_keepRows(~active, p_prev, p))
 
     sigma_rfx = log_sigma_rfx.detach().exp()
     sigma_eps_map = log_sigma_eps.detach().exp()
