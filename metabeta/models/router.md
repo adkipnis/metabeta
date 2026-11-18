@@ -218,6 +218,9 @@ Implemented dimension coverage checks:
 
 - Fixed effects: active `d <= max_d`.
 - Random effects: active `q <= max_q`.
+- Hard and soft limits: one table (`ROUTING_LIMITS` in `api.py`) drives both the per-submodel
+  check and the error naming the checkpoint's range. A minimum or a hard maximum rules a
+  submodel out; a soft maximum only flags the dataset (`size_outside` in its validation entry).
 - Groups: `min_m <= m` when bounds are known; `m > max_m` only flags the dataset.
 - Group sizes: every active `n_i` satisfies `min_n <= n_i` when bounds are known;
   `n_i > max_n` only flags the dataset.
@@ -247,6 +250,9 @@ Implemented validation checks (beyond the existing basic checks):
 - `[done]` Continuous target `y` is approximately standardized (warning when not).
 - `[done]` Near-constant predictor columns warn when `std < 0.01` (design-time).
 - `[done]` High-correlation predictor pairs warn when `|r| > 0.95` (design-time).
+- `[done]` These three warnings are notes, returned as data by preparation: `prepareData` emits
+  them at once, `sample` emits them once per message after sampling, with the datasets that
+  raised them on the last line. A library's warnings (e.g. pandas) pass through untouched.
 - `[done]` Stats values are finite before sampling; malformed stats raise.
 
 Still TODO:
@@ -287,6 +293,12 @@ Validation reports now include prior metadata when available:
 - `prior_index`
 - `dataset` (the dict key or list index; 0 for a single dataset)
 - `prior_name`
+
+Each entry also records where its row lies outside what its submodel was trained on, '' where
+inside: `size_outside` (the excess over the soft maxima) and `prior_outside` (hyperparameters
+outside `TRAINED_RANGE`). `route`, `forward`, `log_prob` and `sample` warn from these; `forward`,
+`log_prob` and `sample` also store them in `RouterResult.safeguards` (`size_flag`, `prior_flag`).
+`failures_by_submodel` lists the submodels passed over, with their failures.
 
 Posterior samples should keep the existing `Proposal` shape conventions. If
 submodels have different padded `d/q`, outputs must be unpadded to active dataset

@@ -591,7 +591,12 @@ def test_random_walk_rows_still_warn_with_a_nuts_check(api: Api):
 
 def _imhSafeguards(accept: list[float], ess_min: list[float], ran: list[bool]) -> dict:
     accept_rate, ess = np.array(accept), np.array(ess_min)
+    inside = np.full(len(accept), '')  # every row in the trained size and prior range
     return {
+        'prior_flag': inside != '',
+        'prior_outside': inside,
+        'size_flag': inside != '',
+        'size_outside': inside,
         'refine_method': 'imhMarginal',
         'accept_rate': accept_rate,
         'accept_threshold': 0.1,
@@ -636,10 +641,12 @@ def test_default_priors_stay_quiet_and_out_of_range_priors_warn(api: Api):
     )
     default, caught = _warningsOf(lambda: api.sample(df, **kwargs))
     assert not default.safeguards['prior_flag'][0]
+    assert default.validation[0]['prior_outside'] == ''
     assert not [w for w in caught if 'trained on' in str(w.message)]
 
     wide, caught = _warningsOf(lambda: api.sample(df, priors={'tau_ffx': [1.0, 100.0]}, **kwargs))
     assert wide.safeguards['prior_flag'][0]
+    assert wide.validation[0]['prior_outside'] == 'tau_ffx 100 outside [0.0015, 44.35]'
     (prior,) = [w for w in caught if 'trained on' in str(w.message)]
     assert 'tau_ffx 100 outside [0.0015, 44.35]' in str(prior.message)
     assert 'NUTS' in str(prior.message)
@@ -728,6 +735,7 @@ def test_data_larger_than_the_training_data_is_fitted_and_warns(api: Api):
     )
     large, caught = _warningsOf(lambda: api.sample(_sleepstudy(m=210, n_i=5), **kwargs))
     assert large.safeguards['size_flag'][0]
+    assert large.validation[0]['size_outside'] == 'm=210 > max_m=200'
     (size,) = [w for w in caught if 'larger than the network' in str(w.message)]
     assert 'm=210 > max_m=200' in str(size.message)
     assert 'NUTS' in str(size.message)
@@ -736,6 +744,19 @@ def test_data_larger_than_the_training_data_is_fitted_and_warns(api: Api):
     small, caught = _warningsOf(lambda: api.sample(_sleepstudy(), **kwargs))
     assert not small.safeguards['size_flag'][0]
     assert not [w for w in caught if 'larger than the network' in str(w.message)]
+
+
+@pytest.mark.parametrize('call', ['route', 'forward', 'log_prob'])
+def test_routed_calls_flag_data_larger_than_the_training_data(api: Api, call: str):
+    large = _sleepstudy(m=210, n_i=5)
+
+    result, caught = _warningsOf(lambda: getattr(api, call)(large, formula=_FORMULA))
+
+    (size,) = [w for w in caught if 'larger than the network' in str(w.message)]
+    assert 'm=210 > max_m=200' in str(size.message)
+    assert size.filename == __file__
+    if call != 'route':
+        assert result.safeguards['size_flag'][0]
 
 
 @pytest.mark.parametrize(
@@ -1123,15 +1144,8 @@ _FORMULA = 'Reaction ~ Days + (1 | Subject)'
         ),
         (
             lambda api: api.posteriorSummary(
-                # a collated batch without the metadata a formula batch carries
-                api.sample(
-                    {
-                        k: v
-                        for k, v in api.prepareData(_sleepstudy(), formula=_FORMULA).items()
-                        if k != '_router_metadata'
-                    },
-                    n_samples=8,
-                )
+                # a collated batch carries no scale information
+                api.sample(api.prepareData(_sleepstudy(), formula=_FORMULA), n_samples=8)
             ),
             'requires scale_info',
         ),
@@ -1403,14 +1417,14 @@ def test_a_skipped_dataset_without_an_error_message_is_named_by_its_error_type(
     api: Api, monkeypatch: pytest.MonkeyPatch
 ):
     dfs = _twoStudies()
-    original = Api.prepareData
+    original = Api._prepare
 
     def failing(self, data, **kwargs):
         if data is dfs[1]:
             raise ValueError()
         return original(self, data, **kwargs)
 
-    monkeypatch.setattr(Api, 'prepareData', failing)
+    monkeypatch.setattr(Api, '_prepare', failing)
     results, caught = _warningsOf(lambda: api.sample(dfs, formula=_FORMULA, n_samples=8))
 
     assert results[1] is None
@@ -1459,33 +1473,84 @@ def test_empty_containers_and_non_dataframe_elements_raise(api: Api, data, error
         api.sample(data, formula=_FORMULA, n_samples=8)
 
 
-def test_preparation_warnings_fire_once_per_message_naming_the_datasets(api: Api):
+def _binaryStudies() -> list[pd.DataFrame]:
+    """Two studies whose response is 0/1, which the Normal checkpoint fits with a hint."""
     dfs = _twoStudies()
     for df in dfs:
         df['Reaction'] = (df['Reaction'] > df['Reaction'].median()).astype(int)
+    return dfs
+
+
+def test_preparation_warnings_fire_once_per_message_naming_the_datasets(api: Api):
+    dfs = _binaryStudies()
 
     _, caught = _warningsOf(
         lambda: api.sample(dfs, formula=_FORMULA, n_samples=8, likelihood_family='normal')
     )
+    _, alone = _warningsOf(
+        lambda: api.sample(dfs[0], formula=_FORMULA, n_samples=8, likelihood_family='normal')
+    )
 
     (hint,) = [w for w in caught if "'bernoulli'" in str(w.message)]
-    assert str(hint.message).startswith('dataset(s) [0, 1]: ')
+    assert str(hint.message).startswith('the outcome is binary')
+    assert str(hint.message).endswith('\nIn dataset(s) [0, 1].')
     assert hint.filename == __file__
+    (hint,) = [w for w in alone if "'bernoulli'" in str(w.message)]
+    assert 'dataset(s)' not in str(hint.message)
 
 
-def test_a_library_warning_raised_while_preparing_keeps_its_origin(api: Api, monkeypatch):
+def test_a_message_filter_silences_a_preparation_warning(api: Api):
+    dfs = _binaryStudies()
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always')
+        warnings.filterwarnings('ignore', message='the outcome is binary')
+        api.sample(dfs, formula=_FORMULA, n_samples=8, likelihood_family='normal')
+
+    assert not [w for w in caught if "'bernoulli'" in str(w.message)]
+
+
+def _pandasWarns(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Preparation raises a DeprecationWarning from pandas, as a pandas call would."""
     original = Api._preprocessTabular
 
     def noisy(self, *args, **kwargs):
-        warnings.warn_explicit('pandas says', DeprecationWarning, pd.__file__, 1)
+        warnings.warn_explicit('pandas says', DeprecationWarning, pd.__file__, 1, 'pandas')
         return original(self, *args, **kwargs)
 
     monkeypatch.setattr(Api, '_preprocessTabular', noisy)
+
+
+def test_a_library_warning_raised_while_preparing_keeps_its_origin(api: Api, monkeypatch):
+    _pandasWarns(monkeypatch)
     _, caught = _warningsOf(lambda: api.sample(_twoStudies(), formula=_FORMULA, n_samples=8))
 
     noise = [w for w in caught if str(w.message) == 'pandas says']
     assert len(noise) == 2  # neither grouped nor prefixed: not metabeta's to rewrite
     assert all(w.filename == pd.__file__ and w.category is DeprecationWarning for w in noise)
+
+
+def test_a_module_filter_silences_a_library_warning_raised_while_preparing(api: Api, monkeypatch):
+    _pandasWarns(monkeypatch)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter('always')
+        warnings.filterwarnings('ignore', module='pandas')
+        api.sample(_twoStudies(), formula=_FORMULA, n_samples=8)
+
+    assert not [w for w in caught if str(w.message) == 'pandas says']
+
+
+def test_prepareData_warns_at_the_call_and_returns_the_batch_alone(api: Api):
+    df = _binaryStudies()[0]
+
+    batch, caught = _warningsOf(
+        lambda: api.prepareData(df, formula=_FORMULA, likelihood_family='normal')
+    )
+
+    (hint,) = [w for w in caught if "'bernoulli'" in str(w.message)]
+    assert hint.filename == __file__
+    assert not [key for key in batch if key.startswith('_router_metadata')]
 
 
 def _theWarning(caught: list[warnings.WarningMessage], lead: str) -> str:
@@ -1640,6 +1705,30 @@ def test_datasets_routed_to_different_submodels_run_in_one_call(tmp_path: Path):
         assert all(name.startswith('Treatment_') for name in result.param_names['ffx'][2:])
         assert len(api.posteriorDraws(result).columns) == len(result.param_names['ffx']) + 2
     assert all(w.filename == __file__ for w in caught)
+
+
+def test_submodels_with_and_without_analytical_statistics_run_in_one_call(tmp_path: Path):
+    path = tmp_path / 'joint.pt'
+    torch.manual_seed(0)
+    _write_two_submodel_checkpoint(path, wide_refinement='none')  # tiny-8: no MAP check
+    api = Api(path, warmup=False)
+    rng = np.random.default_rng(1)
+    dfs = {
+        'two': _sleepstudy(Treatment=rng.choice(['a', 'b'], 120)),
+        'six': _sleepstudy(Treatment=rng.choice(list('abcdef'), 120)),
+    }
+    kwargs = dict(formula='Reaction ~ Days + Treatment + (1 | Subject)', n_samples=64)
+
+    for order in (['two', 'six'], ['six', 'two']):
+        results, caught = _warningsOf(
+            lambda: api.sample({k: dfs[k] for k in order}, map_z_threshold=0.0, **kwargs)
+        )
+        assert "MAP check failed for dataset(s) ['two']:" in _mapWarning(caught), order
+
+    assert np.isnan(results['six'].safeguards['map_z'][0])
+    assert not results['six'].safeguards['map_z_flag'][0]
+    assert 'MAP z' not in _footer(api.posteriorSummary(results['six']))
+    assert 'MAP z' in _footer(api.posteriorSummary(results['two']))
 
 
 def test_sample_documents_containers_the_skip_rule_and_seed():
