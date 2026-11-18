@@ -290,3 +290,70 @@ def test_normal_moves_land_sigma_eps_and_beta_from_a_pool_beyond_its_support():
     for (mean, sd), (want_mean, want_sd) in zip(got['moves'], want):
         assert abs(mean - want_mean) < 0.2 * want_sd
         assert abs(sd / want_sd - 1) < 0.2
+
+
+# ---------------------------------------------------------------------------
+# Stored IMH diagnostics and the flag rule
+# ---------------------------------------------------------------------------
+
+
+def test_imh_flag_rule():
+    """Low acceptance or low min ESS flags a dataset, each on its own."""
+    from metabeta.posthoc.metropolis import IMH_ACCEPT_WARN, IMH_ESS_WARN, imhFlagged
+
+    accept = torch.tensor([0.05, 0.5, 0.5, IMH_ACCEPT_WARN])
+    ess_min = torch.tensor([500.0, 100.0, 500.0, IMH_ESS_WARN], dtype=torch.float64)
+    assert imhFlagged(accept, ess_min).tolist() == [True, True, False, False]
+
+
+@pytest.mark.parametrize('gate', [None, 150.0])
+def test_sampler_stores_its_diagnostics_per_dataset(gate):
+    """The refined proposal carries acceptance, the IMH chains' min ESS, whether the moves ran
+    and the flag. Without moves the draws are the IMH chains, so their min ESS is the stored
+    one; a pool far beyond the posterior's sigma_eps is flagged, and the moves gated at the
+    warning's ESS run there."""
+    from metabeta.posthoc.metropolis import LocalMoves, MetropolisSampler, imhFlagged
+
+    data = _normalProblem()
+    m = data['X'].shape[1]
+    moves = None if gate is None else LocalMoves(gate_ess=gate)
+    torch.manual_seed(5)
+    sampler = MetropolisSampler(data, n_steps=200, mode='marginal', moves=moves)
+    out, diag = sampler(_wrongPool(800, m, 0.3))
+    r = out.is_results
+    assert set(r) == {'imh_accept_rate', 'imh_ess_min', 'imh_moved', 'imh_flag', 'imh_pool_k'}
+    assert all(t.shape == (1,) for t in r.values())
+    assert r['imh_moved'].tolist() == [gate is not None]
+    assert torch.equal(r['imh_flag'], imhFlagged(r['imh_accept_rate'].cpu(), r['imh_ess_min']))
+    assert r['imh_flag'].all() and float(r['imh_ess_min'][0]) < 150
+    if gate is None:
+        assert torch.equal(
+            r['imh_ess_min'], bulkEss(out.samples_g, 4).nan_to_num(math.inf).amin(-1)
+        )
+    assert torch.isfinite(r['imh_pool_k']).all()
+
+
+def test_exact_target_for_normal_data_is_the_marginal():
+    """Without a mode, the IMH and the IS weights target the exact rfx-marginalized posterior:
+    for Normal data the closed-form marginal, with the rfx redrawn from their conditional."""
+    from metabeta.posthoc.importance import ImportanceSampler
+    from metabeta.posthoc.laplace_glmm import exactImportanceSampler
+    from metabeta.posthoc.metropolis import MetropolisSampler
+
+    data = _normalProblem()
+    m = data['X'].shape[1]
+    outs = []
+    for kwargs in ({}, {'mode': 'marginal'}):
+        torch.manual_seed(5)
+        outs.append(MetropolisSampler(data, n_steps=100, **kwargs)(_wrongPool(400, m, 0.1))[0])
+    assert torch.equal(outs[0].samples_g, outs[1].samples_g)
+    assert torch.equal(outs[0].rfx, outs[1].rfx)
+    outs = []
+    for sampler in (
+        exactImportanceSampler(data, 0, pareto=True),
+        ImportanceSampler(data, marginal=True, rb_redraw=True, pareto=True),
+    ):
+        torch.manual_seed(5)
+        outs.append(sampler(_wrongPool(400, m, 0.1)))
+    assert torch.equal(outs[0].is_results['weights'], outs[1].is_results['weights'])
+    assert torch.equal(outs[0].rfx, outs[1].rfx)

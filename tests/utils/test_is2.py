@@ -10,7 +10,9 @@ from torch import distributions as D
 from torch.nn import functional as F
 
 from metabeta.posthoc.laplace_glmm import (
+    IS2_N_INNER,
     LaplaceImportanceSampler,
+    exactImportanceSampler,
     laplaceRfxModes,
     logMarginalLikelihoodAGQ,
     logMarginalLikelihoodIS2,
@@ -625,3 +627,26 @@ def test_agq_and_pseudo_marginal_imh_run_on_accelerator(device):
     )
     out, _ = sampler(proposal)
     assert out.rfx.device.type == device and torch.isfinite(out.rfx).all()
+
+
+def test_exact_target_for_glmms_is_the_pseudo_marginal():
+    """Without a mode, the IMH and the IS weights target the exact GLMM posterior through
+    unbiased IS² estimates with IS2_N_INNER draws per group."""
+    data = _tinyBernoulli()
+    m = data['X'].shape[1]
+    outs = []
+    for kwargs in ({}, {'mode': 'laplace', 'n_inner': IS2_N_INNER}):
+        torch.manual_seed(3)
+        sampler = MetropolisSampler(data, n_steps=100, likelihood_family=1, **kwargs)
+        outs.append(sampler(_gaussianProposal(4 * 100, m, 0.6, 1.2, 1.5))[0])
+    assert torch.equal(outs[0].samples_g, outs[1].samples_g)
+    assert torch.equal(outs[0].rfx, outs[1].rfx)
+    outs = []
+    for sampler in (
+        exactImportanceSampler(data, 1, pareto=True),
+        LaplaceImportanceSampler(data, likelihood_family=1, n_inner=IS2_N_INNER, pareto=True),
+    ):
+        torch.manual_seed(3)
+        outs.append(sampler(_gaussianProposal(400, m, 0.6, 1.2, 1.5)))
+    assert torch.equal(outs[0].is_results['weights'], outs[1].is_results['weights'])
+    assert torch.equal(outs[0].rfx, outs[1].rfx)

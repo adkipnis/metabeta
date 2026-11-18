@@ -8,7 +8,8 @@ ridge in Normal models).  IMH uses the flow as proposal in a Markov chain, accep
 with ratio w(θ') / w(θ).  Unlike IS, degenerate proposals are corrected by rejection rather
 than by collapsed weights, and the chain is guaranteed to target the correct posterior.
 
-Three modes differ in how rfx (local params) are handled:
+Three modes differ in how rfx (local params) are handled; mode=None (the default) picks the
+exact target, 'marginal' for Normal and 'laplace' with IS² weights for GLMMs:
 
   'global'
       log_w = log p(y|θ_g, θ_l) + log p(θ_g) − log q_g
@@ -118,7 +119,7 @@ its target estimate and (GLMMs) its Laplace factors and IS² rfx draw, so the ch
 exact. `n_chains` chains start at random kept states (re-evaluated with the moves' own
 estimator), burn in for a number of steps that grows with the number of active global
 dimensions, then record every `thin`-th state. Only datasets whose IMH min bulk ESS falls below
-`gate_ess` are moved (Api.sample(random_walk=True) gates at its IMH_ESS_WARN). Supported for
+`gate_ess` are moved (Api.sample(random_walk=True) gates at IMH_ESS_WARN). Supported for
 mode='marginal' and mode='laplace'.
 
 Beyond the flow's support: the start refresh (Normal data)
@@ -137,7 +138,6 @@ posterior invariant, so the chain stays exact. The mode start matters far out: f
 SDs each slice iteration only halves the distance on average.
 """
 
-import argparse
 import math
 import time
 from dataclasses import dataclass
@@ -149,9 +149,9 @@ from scipy.special import ndtri
 from scipy.stats import rankdata
 from torch import Tensor
 
-from metabeta.models.approximator import Approximator
 from metabeta.posthoc.importance import ImportanceSampler
 from metabeta.posthoc.laplace_glmm import (
+    IS2_N_INNER,
     LaplaceImportanceSampler,
     refreshRfxIS2,
     sampleRfxLaplace,
@@ -159,7 +159,7 @@ from metabeta.posthoc.laplace_glmm import (
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.dataloader import subsetBatch
 from metabeta.utils.families import sampleFfxConditionalNormal, sampleRfxConditionalNormal
-from metabeta.utils.preprocessing import rescaleData
+from metabeta.utils.psis import psislw
 from metabeta.utils.regularization import (
     constrainGlobals,
     corrLowerToUnconstrained,
@@ -171,16 +171,19 @@ from metabeta.utils.results import Proposal
 
 Mode = Literal['global', 'marginal', 'joint', 'laplace']
 
-# IS² draws per group of the pseudo-marginal chain (mode='laplace', n_inner > 0; 'imhPM'):
-# sd(log p̂(y|θ)) ≈ 0.08 median / <= 0.5 q90 at K = 8 (experiments/posthoc/is2_tuning.py)
-IS2_N_INNER = 8
-
 # Effective-draw target from the pool-size sweep: the pseudo-marginal chain's FFX
 # calibration error decays ≈ (ā·s)^−0.4, so 700 accepted draws is a practical floor (the
 # hardest regimes keep improving beyond it). Suggested pool sizes aim for it.
 N_EFF_TARGET = 700
 SUGGEST_MIN = 1_000
 SUGGEST_MAX = 16_000
+
+# Chain layout: IMH_N_CHAINS chains, each discarding its first IMH_BURNIN steps
+IMH_N_CHAINS = 4
+IMH_BURNIN = 25
+# The flag rule (imhFlagged): below either level the flow-posterior gap is large
+IMH_ACCEPT_WARN = 0.1
+IMH_ESS_WARN = 150
 
 # random-walk proposal scale 2.38 / sqrt(D) (Roberts & Rosenthal, 2001)
 RWM_SCALE = 2.38
@@ -320,6 +323,13 @@ def suggestPoolSize(
     return s.clamp(min=SUGGEST_MIN, max=SUGGEST_MAX).long()
 
 
+def imhFlagged(accept_rate: Tensor, ess_min: Tensor) -> Tensor:
+    """(b,) the datasets an IMH run flags, with or without the random-walk moves: mean
+    acceptance below ``IMH_ACCEPT_WARN`` or the IMH chains' min bulk ESS below ``IMH_ESS_WARN``.
+    The moves change a warning's text, not whether it fires (#53). Takes tensors or arrays."""
+    return (accept_rate < IMH_ACCEPT_WARN) | (ess_min < IMH_ESS_WARN)
+
+
 def bulkEss(samples: Tensor, n_chains: int) -> Tensor:
     """Rank-normalized split-chain bulk ESS (Vehtari et al., 2021) per dataset and dimension.
 
@@ -367,16 +377,22 @@ class MetropolisSampler:
     def __init__(
         self,
         data: dict[str, Tensor],
-        n_chains: int = 4,
+        n_chains: int = IMH_N_CHAINS,
         n_steps: int = 250,
-        burnin: int = 25,
-        mode: Mode = 'marginal',
+        burnin: int = IMH_BURNIN,
+        mode: Mode | None = None,  # None: the exact target, 'marginal' or 'laplace' with IS²
         likelihood_family: int = 0,
         eps: float = 1e-12,
         n_eff_target: int | None = N_EFF_TARGET,  # None disables the pool-size suggestion
-        n_inner: int = 0,  # 'laplace' only: IS² draws per group; > 0 makes the chain pseudo-marginal
+        # 'laplace' only: IS² draws per group; > 0 makes the chain pseudo-marginal. None:
+        # IS2_N_INNER on the exact GLMM target, else 0
+        n_inner: int | None = None,
         moves: LocalMoves | None = None,  # random-walk moves after the IMH (None: off)
     ) -> None:
+        if mode is None:
+            mode = 'marginal' if likelihood_family == 0 else 'laplace'
+            n_inner = IS2_N_INNER if n_inner is None and likelihood_family != 0 else n_inner
+        n_inner = n_inner or 0
         if n_inner > 0 and mode != 'laplace':
             raise ValueError("n_inner (pseudo-marginal IS² weights) requires mode='laplace'")
         if mode == 'marginal' and likelihood_family != 0:
@@ -805,7 +821,10 @@ class MetropolisSampler:
         Returns
         -------
         proposal_out : Proposal
-            Post-burnin samples; n_chains * (n_steps - burnin) samples per dataset.
+            Post-burnin samples; n_chains * (n_steps - burnin) samples per dataset. Its
+            ``is_results`` hold, per dataset, 'imh_accept_rate', 'imh_ess_min' (the IMH chains'
+            min bulk ESS over the globals, NaN without an estimate), 'imh_moved', 'imh_flag'
+            (``imhFlagged``) and 'imh_pool_k' (the PSIS k̂ of the pool's weights).
         diagnostics : dict
             'accept_rate' (b, n_chains) - fraction of proposals accepted post-burnin.
             'log_w' (b, n_chains * n_steps) - the pool's log importance weights under the target.
@@ -838,10 +857,12 @@ class MetropolisSampler:
         # the ESS stays the IMH chains' (the gate's statistic): the move chains are hundreds of
         # short chains, whose bulk ESS stays near their number even when they do not move
         ess = bulkEss(sg_out, self.n_chains)  # (b, D_g)
+        ess_min = ess.nan_to_num(nan=math.inf).amin(-1)
+        ess_min = torch.where(ess_min.isinf(), math.nan, ess_min)  # NaN: no dimension estimated
         moved = torch.zeros(ess.shape[0], dtype=torch.bool)
         move_accept = torch.full((ess.shape[0],), float('nan'), dtype=torch.float64)
         if self.moves is not None:
-            moved = ess.nan_to_num(nan=math.inf).amin(-1) < self.moves.gate_ess
+            moved = ess_min < self.moves.gate_ess
             if moved.any():
                 sg_out, state, accept = self._applyMoves(self.moves, proposal, sg_out, state, moved)
                 move_accept[moved] = accept.cpu().double()
@@ -860,8 +881,17 @@ class MetropolisSampler:
             'local': {'samples': sl_out, 'log_prob': sl_out.new_zeros(b, m, s_out)},
         }
         out = Proposal(proposed, has_sigma_eps=proposal.has_sigma_eps, d_corr=d_corr)
-        # per-dataset IMH acceptance; after local moves it can no longer be read off the draws
-        out.is_results['imh_accept_rate'] = accept_rate.mean(-1)
+        # per dataset; after the local moves the IMH chains are gone from the draws, so these
+        # can no longer be read off them
+        a_bar = accept_rate.mean(-1)
+        out.is_results = {
+            'imh_accept_rate': a_bar,
+            'imh_ess_min': ess_min,  # the IMH chains' (the moves' gate statistic)
+            'imh_moved': moved,
+            'imh_flag': imhFlagged(a_bar.cpu(), ess_min),
+            # PSIS k̂ of the pool's weights; the evidence check reuses it
+            'imh_pool_k': torch.from_numpy(psislw(log_w.detach().cpu().double().numpy())[1]),
+        }
         if self.n_inner > 0:
             # pseudo-marginal chain: a rejected step repeats the state's rfx, which left the rfx
             # under-covered at low acceptance (large/huge ablation); an iterated-SIR move given
@@ -897,58 +927,3 @@ class MetropolisSampler:
         if self.n_eff_target is not None:
             diagnostics['suggested_n_samples'] = suggestPoolSize(accept_rate, self.n_eff_target)
         return out, diagnostics
-
-
-# ---------------------------------------------------------------------------
-# Top-level convenience function
-# ---------------------------------------------------------------------------
-
-
-def runIMH(
-    model: Approximator,
-    data: dict[str, torch.Tensor],
-    cfg: argparse.Namespace,
-) -> tuple[Proposal, dict]:
-    """Draw a flow proposal and correct it with IMH.
-
-    cfg fields
-    ----------
-    n_chains       : int  - number of independent chains (default 4)
-    n_steps        : int  - steps per chain including burnin (default 250)
-    imh_burnin     : int  - burnin steps to discard (default 25)
-    imh_mode       : str  - 'global' | 'marginal' | 'joint' | 'laplace'
-                     defaults to 'marginal' for Normal, 'laplace' otherwise
-    imh_n_eff_target : int | None - effective-draw target for the advisory per-dataset
-                     pool-size suggestion returned in the diagnostics (default 700,
-                     the sweep-calibrated value; None disables). Inference always
-                     runs at n_chains × n_steps regardless.
-    rescale        : bool
-    likelihood_family : int
-
-    'marginal' and 'laplace' redraw the rfx from their conditional at the accepted globals,
-    so the flow's local posterior is skipped for them (Approximator.estimate(local=False)).
-    """
-    lf = getattr(cfg, 'likelihood_family', 0)
-    n_chains = getattr(cfg, 'n_chains', 4)
-    n_steps = getattr(cfg, 'n_steps', 250)
-    burnin = getattr(cfg, 'imh_burnin', 25)
-    n_eff_target = getattr(cfg, 'imh_n_eff_target', N_EFF_TARGET)
-    default_mode = 'marginal' if lf == 0 else 'laplace'
-    mode: Mode = getattr(cfg, 'imh_mode', default_mode)
-
-    proposal = model.estimate(data, n_samples=n_chains * n_steps, local=mode in ('global', 'joint'))
-
-    if cfg.rescale:
-        proposal.rescale(data['sd_y'])
-        data = rescaleData(data)
-
-    sampler = MetropolisSampler(
-        data,
-        n_chains=n_chains,
-        n_steps=n_steps,
-        burnin=burnin,
-        mode=mode,
-        likelihood_family=lf,
-        n_eff_target=n_eff_target,
-    )
-    return sampler(proposal)
