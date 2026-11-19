@@ -2,6 +2,7 @@
 conjugate dual sampleRfxConditionalNormal."""
 
 import math
+from pathlib import Path
 
 import pytest
 
@@ -10,6 +11,7 @@ from torch import distributions as D
 
 from metabeta.utils.families import (
     logMarginalLikelihoodNormal,
+    sampleFfxConditionalNormal,
     sampleRfxConditionalNormal,
 )
 from metabeta.utils.regularization import unconstrainedToCholesky
@@ -262,9 +264,11 @@ def test_ffx_conditional_keeps_padded_dims():
 
 
 def test_ffx_conditional_keeps_states_whose_precision_does_not_factor():
-    """At sigma_eps near zero the Woodbury terms of the precision cancel and rounding leaves it
-    indefinite; those states keep their draw, the others are drawn (issue #57: the random-walk
-    moves' start refresh raised under priors far outside the trained range)."""
+    """At sigma_eps near zero the Woodbury terms of the precision cancel, and rounding may leave
+    it indefinite; those states keep their draw, the others are drawn (issue #57: the random-walk
+    moves' start refresh raised under priors far outside the trained range). Whether rounding
+    breaks the factor varies with sigma_eps and the platform, so states may or may not be kept
+    here; test_degenerate_state_has_zero_mass_in_all_three keeps one for sure."""
     from metabeta.utils.families import sampleFfxConditionalNormal
 
     g = torch.Generator().manual_seed(0)
@@ -285,7 +289,7 @@ def test_ffx_conditional_keeps_states_whose_precision_does_not_factor():
     assert torch.isfinite(draw).all()
     assert bool(accepted[0, 0]) and not torch.equal(draw[0, 0], ffx[0, 0])
     kept = ~accepted[0]
-    assert kept.any() and torch.equal(draw[0, kept], ffx[0, kept])
+    assert torch.equal(draw[0, kept], ffx[0, kept])
 
 
 def test_ffx_conditional_student_prior_targets_the_t_posterior():
@@ -331,3 +335,63 @@ def test_ffx_conditional_student_prior_targets_the_t_posterior():
     assert 0.1 < sum(acc[-50:]) / 50 < 0.9  # the correction rejects some draws
     assert abs(ffx.mean().item() - want_mean) < 0.1 * want_sd
     assert abs(ffx.std().item() / want_sd - 1) < 0.1
+
+
+# ---------------------------------------------------------------------------
+# The three Normal functions share one random-effect precision
+# ---------------------------------------------------------------------------
+
+GOLDEN = Path(__file__).parent / 'data' / 'normal_golden.pt'
+
+
+def _runNormal(t: dict, sigma_eps: torch.Tensor, L_corr: torch.Tensor | None) -> dict:
+    """The marginal and both conditionals on the golden inputs, each sampler after seed 0."""
+    base = (t['sigma_rfx'], sigma_eps, t['y'], t['X'], t['Z'], t['mask_n'], t['mask_m'])
+    ll = logMarginalLikelihoodNormal(t['ffx'], *base, L_corr=L_corr)
+    torch.manual_seed(0)
+    rfx = sampleRfxConditionalNormal(t['ffx'], *base, L_corr=L_corr)
+    torch.manual_seed(0)
+    ffx, acc = sampleFfxConditionalNormal(
+        t['ffx'], *base, t['nu_ffx'], t['tau_ffx'], t['family_ffx'], t['mask_d'], L_corr=L_corr
+    )
+    return {'ll': ll, 'rfx': rfx, 'ffx': ffx, 'acc': acc}
+
+
+@pytest.mark.parametrize('label', ['diag', 'corr'])
+def test_normal_functions_match_their_recorded_outputs(label):
+    """Outputs recorded at ef6e107e, before the three functions shared one precision helper:
+    in-range inputs (padded observations, group, ffx and rfx dims, a Student-t prior) give the
+    same marginal and the same draws under one seed, up to float32 noise. Against float64, float32
+    errs by up to 6e-6 in the correlated draws and 1.5e-4 in a marginal of 155 on one platform,
+    and the fixture comes from another (Mac vs Linux CI), so the tolerance covers twice that."""
+    golden = torch.load(GOLDEN)
+    t, want = golden['inputs'], golden['outputs']
+    got = _runNormal(t, t['sigma_eps'], None if label == 'diag' else t['L_corr'])
+    for key in ('ll', 'rfx', 'ffx'):
+        torch.testing.assert_close(got[key], want[f'{key}_{label}'], rtol=1e-5, atol=5e-5)
+    assert torch.equal(got['acc'], want[f'acc_{label}'])
+
+
+@pytest.mark.parametrize('sigma_eps', [1e-8, 2e-19])
+def test_normal_functions_stay_defined_as_sigma_eps_vanishes(sigma_eps):
+    """Near-zero noise draws are finite, and their marginal is finite or -inf (zero weight), never
+    NaN or +inf."""
+    t = torch.load(GOLDEN)['inputs']
+    s_eps = t['sigma_eps'].clone()
+    s_eps[:, ::2] = sigma_eps
+    for L_corr in (None, t['L_corr']):
+        got = _runNormal(t, s_eps, L_corr)
+        assert torch.isfinite(got['rfx']).all() and torch.isfinite(got['ffx']).all()
+        assert not got['ll'].isnan().any() and (got['ll'] < math.inf).all()
+
+
+def test_degenerate_state_has_zero_mass_in_all_three():
+    """A state whose precision is not finite (sigma_eps overflowing) has zero posterior mass in
+    each function: -inf marginal, zero rfx, the current ffx kept as on rejection."""
+    t = torch.load(GOLDEN)['inputs']
+    s_eps = t['sigma_eps'].clone()
+    s_eps[:, 3] = math.inf
+    got = _runNormal(t, s_eps, t['L_corr'])
+    assert (got['ll'][:, 3] == -math.inf).all() and torch.isfinite(got['ll'][:, :3]).all()
+    assert (got['rfx'][:, :, 3] == 0).all() and torch.isfinite(got['rfx']).all()
+    assert not got['acc'][:, 3].any() and torch.equal(got['ffx'][:, 3], t['ffx'][:, 3])

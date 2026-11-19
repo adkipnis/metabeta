@@ -140,23 +140,21 @@ def test_local_move_coordinates_round_trip_with_exact_jacobian():
 
 
 def test_slice_coordinate_leaves_its_target_invariant():
-    """Iterations on coordinate 1 of a 3-D state, target N(0, 0.05²) on that coordinate, from
-    draws of that target: the draws stay distributed like it (moments, Kolmogorov-Smirnov); the
-    other coordinates and the inactive dataset stay untouched."""
+    """Iterations on draws of the target N(0, 0.05²): the draws stay distributed like it (moments,
+    Kolmogorov-Smirnov); the inactive dataset stays untouched."""
     from scipy.stats import kstest
 
     from metabeta.posthoc.metropolis import sliceCoordinate
 
     torch.manual_seed(0)
     b, s = 2, 4000
-    u = torch.randn(b, s, 3, dtype=torch.float64)
-    u[..., 1] *= 0.05
+    u = 0.05 * torch.randn(b, s, dtype=torch.float64)
     active = torch.tensor([True, False])
-    log_target = lambda x: -0.5 * (x[..., 1] / 0.05) ** 2
-    out = sliceCoordinate(log_target, u, 1, active, n_iter=3, width=0.5)
-    assert torch.equal(out[..., [0, 2]], u[..., [0, 2]]) and torch.equal(out[1], u[1])
-    x = out[0, :, 1]
-    assert not torch.equal(x, u[0, :, 1])
+    log_target = lambda x: -0.5 * (x / 0.05) ** 2
+    out = sliceCoordinate(log_target, u, active, n_iter=3, width=0.5)
+    assert torch.equal(out[1], u[1])
+    x = out[0]
+    assert not torch.equal(x, u[0])
     assert abs(x.mean().item()) < 0.003 and abs(x.std().item() / 0.05 - 1) < 0.04
     assert kstest(x.numpy() / 0.05, 'norm').pvalue > 0.01
 
@@ -167,24 +165,75 @@ def test_slice_coordinate_brings_far_starts_into_the_bulk():
     from metabeta.posthoc.metropolis import sliceCoordinate
 
     torch.manual_seed(1)
-    u = torch.full((1, 2000, 2), 2.0, dtype=torch.float64)  # coordinate 0: 40 sds out
-    log_target = lambda x: -0.5 * (x[..., 0] / 0.05) ** 2
-    out = sliceCoordinate(log_target, u, 0, torch.tensor([True]), n_iter=8, width=0.5)
-    x = out[0, :, 0]
+    u = torch.full((1, 2000), 2.0, dtype=torch.float64)  # 40 sds out
+    log_target = lambda x: -0.5 * (x / 0.05) ** 2
+    x = sliceCoordinate(log_target, u, torch.tensor([True]), n_iter=8, width=0.5)[0]
     assert float((x.abs() < 0.15).double().mean()) > 0.95 and float(x.abs().median()) < 0.05
 
 
 def test_mode_coordinate_finds_the_maximum_from_far_out():
-    """The uphill walk and golden-section search put coordinate 0 at the maximum of a narrow
-    target 40 widths away, in the inactive dataset and the other coordinate nothing moves."""
+    """The uphill walk and golden-section search reach the maximum of a narrow target 40 widths
+    away; the inactive dataset does not move."""
     from metabeta.posthoc.metropolis import modeCoordinate
 
-    u = torch.full((2, 50, 2), -20.0, dtype=torch.float64)
-    log_target = lambda x: -0.5 * ((x[..., 0] - 0.3) / 0.05) ** 2 + x[..., 1]
-    out = modeCoordinate(log_target, u, 0, torch.tensor([True, False]), width=0.5)
-    assert torch.equal(out[..., 1], u[..., 1]) and torch.equal(out[1], u[1])
+    u = torch.full((2, 50), -20.0, dtype=torch.float64)
+    log_target = lambda x: -0.5 * ((x - 0.3) / 0.05) ** 2
+    out = modeCoordinate(log_target, u, torch.tensor([True, False]), width=0.5)
+    assert torch.equal(out[1], u[1])
     # ten golden-section steps on a bracket of two widths: 1.0 × 0.618^10 ≈ 0.008
-    assert (out[0, :, 0] - 0.3).abs().max() < 0.01
+    assert (out[0] - 0.3).abs().max() < 0.01
+
+
+def test_mode_coordinate_evaluates_once_per_golden_section_step():
+    """From a start at the maximum the walk stops at once: three target passes pick the bracket
+    and the golden-section search carries one interior point, so its steps cost one pass each
+    after the first two."""
+    from metabeta.posthoc.metropolis import MODE_N_GOLDEN, modeCoordinate
+
+    calls = []
+
+    def log_target(x):
+        calls.append(1)
+        return -0.5 * ((x - 0.3) / 0.05) ** 2
+
+    out = modeCoordinate(log_target, torch.full((1, 5), 0.3), torch.tensor([True]), width=0.5)
+    assert len(calls) == 3 + MODE_N_GOLDEN + 1
+    assert (out - 0.3).abs().max() < 0.01
+
+
+def test_rwm_cholesky_keeps_the_sample_covariance_with_many_states():
+    """250 states in 15 active dims: the proposal covariance is RWM_SCALE² / D × their sample
+    covariance (Roberts & Rosenthal 2001), zero on the padded dim."""
+    from metabeta.posthoc.metropolis import RWM_SCALE, rwmCholesky
+
+    g = torch.Generator().manual_seed(0)
+    u = torch.randn(1, 250, 16, generator=g, dtype=torch.float64)
+    u = u @ torch.randn(16, 16, generator=g, dtype=torch.float64)  # correlated states
+    active = torch.ones(1, 16, dtype=torch.bool)
+    active[0, 7] = False
+    L = rwmCholesky(u, active)[0]
+    keep = active[0]
+    want = RWM_SCALE**2 / 15 * torch.cov(u[0][:, keep].T)
+    torch.testing.assert_close((L @ L.T)[keep][:, keep], want, rtol=1e-6, atol=0.0)
+    assert (L[7] == 0).all() and (L[:, 7] == 0).all()
+
+
+def test_rwm_cholesky_shrinks_toward_the_diagonal_with_few_states():
+    """16 states in 15 dims (n_samples=64, d=8, q=3) make a near-singular sample covariance
+    (condition number of its correlation 9e4 here): the proposal keeps each coordinate's variance
+    and is well conditioned."""
+    from metabeta.posthoc.metropolis import RWM_SCALE, rwmCholesky
+
+    g = torch.Generator().manual_seed(1)
+    u = torch.randn(1, 16, 15, generator=g, dtype=torch.float64)
+    L = rwmCholesky(u, torch.ones(1, 15, dtype=torch.bool))[0]
+    cov = L @ L.T
+    torch.testing.assert_close(
+        cov.diagonal(), RWM_SCALE**2 / 15 * u[0].var(0), rtol=1e-6, atol=0.0
+    )
+    sd = cov.diagonal().sqrt()
+    eig = torch.linalg.eigvalsh(cov / sd[:, None] / sd[None, :])
+    assert eig[-1] / eig[0] < 10
 
 
 def _normalProblem(m=12, n=15, sigma_eps=0.05, seed=11):

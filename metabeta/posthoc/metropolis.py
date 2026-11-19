@@ -187,8 +187,17 @@ IMH_ESS_WARN = 150
 
 # random-walk proposal scale 2.38 / sqrt(D) (Roberts & Rosenthal, 2001)
 RWM_SCALE = 2.38
+# states per active dim below which rwmCholesky shrinks the covariance: from 4 D states the
+# sample correlation's condition number is about 6, and the default 250 chains exceed 4 × the
+# largest D_g (32)
+RWM_SHRINK_STATES = 4
 REFRESH_ITER = 3  # slice iterations of the sigma_eps start refresh (module docstring)
 REFRESH_WIDTH = 0.5  # its initial interval and the mode search's step, inverse-softplus coordinate
+# step limits of the 1-D searches: slice stepping out and shrinkage, the mode's uphill walk
+SLICE_MAX_OUT = 30
+SLICE_MAX_SHRINK = 60
+MODE_MAX_WALK = 40
+MODE_N_GOLDEN = 10  # golden-section steps: a bracket of two widths narrows to 0.618^10 ≈ 0.8%
 
 
 # Newton steps of the pseudo-marginal move chains' Laplace mode search: the IS² estimate is
@@ -223,86 +232,109 @@ class LocalMoves:
 
 
 def sliceCoordinate(
-    log_target,  # (b, s, D) -> (b, s)
-    u: Tensor,  # (b, s, D)
-    j: int,
-    active: Tensor,  # (b,) datasets whose coordinate j is updated
+    log_target,  # (b, s) -> (b, s)
+    x: Tensor,  # (b, s)
+    active: Tensor,  # (b,) datasets whose states are updated
     n_iter: int,
     width: float,
-    max_out: int = 30,
-    max_shrink: int = 60,
 ) -> Tensor:
-    """``n_iter`` slice-sampling iterations (Neal 2003, stepping out then shrinkage) on
-    coordinate ``j`` of every state, vectorized over states; each loop runs until its slowest
-    active state is done. States of inactive datasets are returned unchanged."""
-    act = active[:, None].expand(u.shape[:2])
-    x0 = u[..., j].clone()
-    full = lambda x: log_target(torch.cat([u[..., :j], x[..., None], u[..., j + 1 :]], -1))
-    f0 = full(x0)
+    """``n_iter`` slice-sampling iterations (Neal 2003, stepping out then shrinkage) on a 1-D
+    target, vectorized over states; each loop runs until its slowest active state is done, at
+    most SLICE_MAX_OUT or SLICE_MAX_SHRINK steps. States of inactive datasets are returned
+    unchanged."""
+    act = active[:, None].expand_as(x)
+    f0 = log_target(x)
     for _ in range(n_iter):
         log_y = f0 - torch.empty_like(f0).exponential_()
-        lo = x0 - width * torch.rand_like(x0)
+        lo = x - width * torch.rand_like(x)
         hi = lo + width
         for side, sign in ((lo, -1.0), (hi, 1.0)):
-            for _ in range(max_out):
-                grow = (full(side) > log_y) & act
+            for _ in range(SLICE_MAX_OUT):
+                grow = (log_target(side) > log_y) & act
                 if not grow.any():
                     break
                 side += sign * width * grow
         done = ~act
-        for _ in range(max_shrink):
-            x1 = lo + torch.rand_like(x0) * (hi - lo)
-            f1 = full(x1)
+        for _ in range(SLICE_MAX_SHRINK):
+            x1 = lo + torch.rand_like(x) * (hi - lo)
+            f1 = log_target(x1)
             ok = (f1 > log_y) & ~done
-            x0, f0 = torch.where(ok, x1, x0), torch.where(ok, f1, f0)
+            x, f0 = torch.where(ok, x1, x), torch.where(ok, f1, f0)
             done |= ok
             if done.all():
                 break
-            lo = torch.where(~done & (x1 < x0), x1, lo)
-            hi = torch.where(~done & (x1 >= x0), x1, hi)
-    out = u.clone()
-    out[..., j] = x0
-    return out
+            lo = torch.where(~done & (x1 < x), x1, lo)
+            hi = torch.where(~done & (x1 >= x), x1, hi)
+    return x
 
 
 def modeCoordinate(
-    log_target,  # (b, s, D) -> (b, s)
-    u: Tensor,  # (b, s, D)
-    j: int,
-    active: Tensor,  # (b,) datasets whose coordinate j is updated
+    log_target,  # (b, s) -> (b, s)
+    x0: Tensor,  # (b, s)
+    active: Tensor,  # (b,) datasets whose states are updated
     width: float,
-    max_walk: int = 40,
-    n_golden: int = 10,
 ) -> Tensor:
-    """Coordinate ``j`` of every state moved to the maximum of ``log_target`` along it: an uphill
-    walk in steps of ``width`` brackets the maximum, golden-section search narrows the bracket.
+    """Every state moved to the maximum of a 1-D target: an uphill walk of at most MODE_MAX_WALK
+    steps of ``width`` brackets the maximum, MODE_N_GOLDEN golden-section steps narrow the bracket.
     Vectorized over states; states of inactive datasets are returned unchanged."""
-    act = active[:, None].expand(u.shape[:2])
-    full = lambda x: log_target(torch.cat([u[..., :j], x[..., None], u[..., j + 1 :]], -1))
-    x0 = u[..., j].clone()
-    f0, f_lo, f_hi = full(x0), full(x0 - width), full(x0 + width)
+    act = active[:, None].expand_as(x0)
+    f0, f_lo, f_hi = log_target(x0), log_target(x0 - width), log_target(x0 + width)
     sign = torch.where(f_hi >= f_lo, 1.0, -1.0)
     behind, best, f_best = x0 - sign * width, x0, f0
     ahead = x0 + sign * width
     f_ahead = torch.where(sign > 0, f_hi, f_lo)
     moving = (f_ahead > f_best) & act
-    for _ in range(max_walk):
+    for _ in range(MODE_MAX_WALK):
         if not moving.any():
             break
         behind = torch.where(moving, best, behind)
         best, f_best = torch.where(moving, ahead, best), torch.where(moving, f_ahead, f_best)
-        step, f_step = best + sign * width, full(best + sign * width)
+        step, f_step = best + sign * width, log_target(best + sign * width)
         ahead, f_ahead = torch.where(moving, step, ahead), torch.where(moving, f_step, f_ahead)
         moving = moving & (f_ahead > f_best)
     lo, hi = torch.minimum(behind, ahead), torch.maximum(behind, ahead)
+    # golden section: the surviving interior point is the next step's other one, so each step
+    # after the first evaluates one new point
     g = 0.381966  # 1 - 1/phi
-    for _ in range(n_golden):
-        x1, x2 = lo + g * (hi - lo), hi - g * (hi - lo)
-        left = full(x1) > full(x2)
+    x1, x2 = lo + g * (hi - lo), hi - g * (hi - lo)
+    f1, f2 = log_target(x1), log_target(x2)
+    for _ in range(MODE_N_GOLDEN - 1):
+        left = f1 > f2
         lo, hi = torch.where(left, lo, x1), torch.where(left, x2, hi)
-    out = u.clone()
-    out[..., j] = torch.where(act, 0.5 * (lo + hi), x0)
-    return out
+        new = torch.where(left, lo + g * (hi - lo), hi - g * (hi - lo))
+        f_new = log_target(new)
+        x1, x2, f1, f2 = (
+            torch.where(left, new, x2),
+            torch.where(left, x1, new),
+            torch.where(left, f_new, f2),
+            torch.where(left, f1, f_new),
+        )
+    left = f1 > f2
+    lo, hi = torch.where(left, lo, x1), torch.where(left, x2, hi)
+    return torch.where(act, 0.5 * (lo + hi), x0)
+
+
+def rwmCholesky(u: Tensor, active: Tensor) -> Tensor:
+    """(b, D_g, D_g) Cholesky factor of the random-walk proposal covariance RWM_SCALE² / D ×
+    Cov(u) on each dataset's D active dims, zero elsewhere. From few states u (b, n, D_g) next to D
+    the sample covariance is near-singular, so it is shrunk toward its diagonal by
+    λ = clamp(1 − n / (RWM_SHRINK_STATES D), 0, 1), which keeps each coordinate's variance."""
+    b, n, D_g = u.shape
+    x = u.double() * active[:, None, :]
+    x = x - x.mean(1, keepdim=True)
+    cov = x.mT @ x / max(n - 1, 1)
+    D = active.sum(-1).clamp(min=1).double()  # (b,)
+    lam = (1.0 - n / (RWM_SHRINK_STATES * D)).clamp(0.0, 1.0)[:, None, None]
+    cov = (1.0 - lam) * cov + lam * torch.diag_embed(cov.diagonal(dim1=-2, dim2=-1))
+    cov = cov * (RWM_SCALE**2 / D)[:, None, None]
+    pair = active[:, :, None] & active[:, None, :]
+    # unit diagonal on the inactive dims so the factor exists; jitter for collapsed samples
+    jitter = 1e-8 * cov.diagonal(dim1=-2, dim2=-1).mean(-1, keepdim=True).clamp(min=1e-12)
+    cov = cov * pair + torch.diag_embed(torch.where(active, jitter, 1.0))
+    L, info = torch.linalg.cholesky_ex(cov)
+    diag = torch.diag_embed(cov.diagonal(dim1=-2, dim2=-1).sqrt())
+    L = torch.where((info > 0)[:, None, None], diag, L)  # not PD: diagonal proposal
+    return (L * pair).to(u.dtype)
 
 
 def suggestPoolSize(
@@ -633,50 +665,6 @@ class MetropolisSampler:
     # Local random-walk moves (LocalMoves)
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _rwmCholesky(u: Tensor, active: Tensor) -> Tensor:
-        """(b, D_g, D_g) Cholesky factor of the proposal covariance RWM_SCALE² / D × Cov(u) on
-        each dataset's active dims, zero elsewhere."""
-        b, S, D_g = u.shape
-        x = u.double() * active[:, None, :]
-        x = x - x.mean(1, keepdim=True)
-        cov = x.mT @ x / max(S - 1, 1)
-        cov = cov * (RWM_SCALE**2 / active.sum(-1).clamp(min=1).double())[:, None, None]
-        pair = active[:, :, None] & active[:, None, :]
-        # unit diagonal on the inactive dims so the factor exists; jitter for collapsed samples
-        jitter = 1e-8 * cov.diagonal(dim1=-2, dim2=-1).mean(-1, keepdim=True).clamp(min=1e-12)
-        cov = cov * pair + torch.diag_embed(torch.where(active, jitter, 1.0))
-        L, info = torch.linalg.cholesky_ex(cov)
-        diag = torch.diag_embed(cov.diagonal(dim1=-2, dim2=-1).sqrt())
-        L = torch.where((info > 0)[:, None, None], diag, L)  # not PD: diagonal proposal
-        return (L * pair).to(u.dtype)
-
-    def _refreshStarts(self, u: Tensor, evaluate, evaluator, constrain, proposal, active, d, q):
-        """The chain starts (b, C, D_g) with sigma_eps moved to its conditional mode and sliced,
-        then the fixed effects redrawn from their exact conditional (module docstring, 'Beyond
-        the flow's support')."""
-        j_eps, log_target = d + q, lambda x: evaluate(x)[0]
-        u = modeCoordinate(log_target, u, j_eps, active[:, j_eps], REFRESH_WIDTH)
-        u = sliceCoordinate(log_target, u, j_eps, active[:, j_eps], REFRESH_ITER, REFRESH_WIDTH)
-        p = proposal(constrain(u)[0])
-        d_p = p.ffx.shape[-1]
-        ffx, _ = sampleFfxConditionalNormal(
-            p.ffx,
-            p.sigma_rfx,
-            p.sigma_eps,
-            evaluator.y,
-            evaluator.X[..., :d_p],
-            evaluator.Z,
-            evaluator.mask_n,
-            evaluator.mask_m,
-            evaluator.nu_ffx[..., :d_p],
-            evaluator.tau_ffx[..., :d_p],
-            evaluator.family_ffx,
-            evaluator.mask_d[..., :d_p],
-            L_corr=evaluator._getLCorr(p),
-        )
-        return torch.cat([ffx, u[..., d:]], -1)
-
     @torch.no_grad()
     def _localMoves(
         self,
@@ -742,10 +730,34 @@ class MetropolisSampler:
             return log_t, self._laplaceFactors(evaluator)
 
         if self.mode == 'marginal':
-            u = self._refreshStarts(u, evaluate, evaluator, constrain, proposal, active, d, q)
-            L = self._rwmCholesky(u, active)
+            # start refresh (module docstring, 'Beyond the flow's support'): sigma_eps to its
+            # conditional mode and sliced, then the fixed effects from their exact conditional
+            j = d + q
+            put = lambda x: torch.cat([u[..., :j], x[..., None], u[..., j + 1 :]], -1)
+            along = lambda x: evaluate(put(x))[0]
+            x = modeCoordinate(along, u[..., j], active[:, j], REFRESH_WIDTH)
+            x = sliceCoordinate(along, x, active[:, j], REFRESH_ITER, REFRESH_WIDTH)
+            u = put(x)
+            p = proposal(constrain(u)[0])
+            ffx, _ = sampleFfxConditionalNormal(
+                p.ffx,
+                p.sigma_rfx,
+                p.sigma_eps,
+                evaluator.y,
+                evaluator.X,
+                evaluator.Z,
+                evaluator.mask_n,
+                evaluator.mask_m,
+                evaluator.nu_ffx,
+                evaluator.tau_ffx,
+                evaluator.family_ffx,
+                evaluator.mask_d,
+                L_corr=unconstrainedToCholesky(u[..., -d_corr:], q) if d_corr > 0 else None,
+            )
+            u = torch.cat([ffx, u[..., d:]], -1)
+            L = rwmCholesky(u, active)
         else:
-            L = self._rwmCholesky(u_kept, active)
+            L = rwmCholesky(u_kept, active)
 
         cur, state = evaluate(u)
         out_u = u.new_empty(b, C, n_rec, D_g)  # chain-major records
