@@ -361,12 +361,14 @@ def _runNormal(t: dict, sigma_eps: torch.Tensor, L_corr: torch.Tensor | None) ->
 def test_normal_functions_match_their_recorded_outputs(label):
     """Outputs recorded at ef6e107e, before the three functions shared one precision helper:
     in-range inputs (padded observations, group, ffx and rfx dims, a Student-t prior) give the
-    same marginal and the same draws under one seed, up to float32 noise."""
+    same marginal and the same draws under one seed, up to float32 noise. Against float64, float32
+    errs by up to 6e-6 in the correlated draws and 1.5e-4 in a marginal of 155 on one platform,
+    and the fixture comes from another (Mac vs Linux CI), so the tolerance covers twice that."""
     golden = torch.load(GOLDEN)
     t, want = golden['inputs'], golden['outputs']
     got = _runNormal(t, t['sigma_eps'], None if label == 'diag' else t['L_corr'])
     for key in ('ll', 'rfx', 'ffx'):
-        torch.testing.assert_close(got[key], want[f'{key}_{label}'])
+        torch.testing.assert_close(got[key], want[f'{key}_{label}'], rtol=1e-5, atol=5e-5)
     assert torch.equal(got['acc'], want[f'acc_{label}'])
 
 
