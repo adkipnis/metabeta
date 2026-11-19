@@ -31,13 +31,13 @@ Current status:
   - Maintain a routing table derived from stored training/data config metadata.
   - TODO: add `compile_model` support if needed.
 
-- `[done] Router.sample(data, *, n_samples, diagnostics=False, **prepare_kwargs)`
+- `[done] Router.sample(data, *, n_samples, loo=False, **prepare_kwargs)`
   - Normalize input data.
   - Validate dimensions and batch schema.
   - Route each dataset/prior row to the smallest compatible submodel.
   - Run posterior sampling via `Approximator.estimate`.
   - Return `RouterResult(proposal, routes, validation, diagnostics)`.
-  - `diagnostics=True` attaches `ppc_nll` and `param_summary` (mean/median/95% CI).
+  - `loo=True` attaches `loo_nll`, `ppc_nll` and `param_summary` (mean/median/95% CI).
   - A list, tuple or dict of DataFrames gives one result per dataset; datasets that route to
     different submodels run as one chunk per submodel.
 
@@ -339,7 +339,7 @@ dataset order.
   (integration, requires `_HAS_REAL_DATA`).
 - `[done]` Batches with precomputed `stats` and batches without `stats` both run.
 - `[done]` `sample()` returns valid `Proposal` shapes.
-- `[done]` `sample(diagnostics=True)` returns `ppc_nll` and `param_summary`.
+- `[done]` `sample(loo=True)` returns `loo_nll`, `ppc_nll` and `param_summary`.
 - `[done]` `log_prob()` accepts correctly shaped parameter inputs and rejects malformed ones.
 - `[done]` `sample()` returns the results of a list or dict in input order, mixed submodels included.
 - `[todo]` Broader test run once required local fixture data exists.

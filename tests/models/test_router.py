@@ -1228,17 +1228,6 @@ def test_router_sample_adds_loo_when_requested(tmp_path: Path):
     assert result.diagnostics['ppc_nll'].shape == (1,)
 
 
-def test_router_sample_diagnostics_is_a_deprecated_alias_of_loo(tmp_path: Path):
-    joint_path = tmp_path / 'joint.pt'
-    _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2)
-    router = Api(joint_path, warmup=False)
-
-    with pytest.warns(FutureWarning, match='loo=True'):
-        result = router.sample(_exact_batch(d=4, q=2), n_samples=10, diagnostics=True)
-
-    assert 'loo_nll' in result.diagnostics
-
-
 def test_router_log_prob_accepts_valid_parameters(tmp_path: Path):
     joint_path = tmp_path / 'joint.pt'
     _write_tiny_approximator_checkpoint(joint_path, max_d=4, max_q=2)
