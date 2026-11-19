@@ -1,0 +1,6 @@
+"model","parameter","status","reported","metabeta","z_mean","sd_ratio","match"
+"mAgeBox","b_age","warned","0.69 (NA) [0.45, 0.98]","0.656 (0.116) [0.4645, 0.9018]",-0.293465226416775,NA,FALSE
+"mAgeBox","b_datacollectionremoteMunsupervised","warned","1.10 (NA) [0.66, 1.56]","1.05 (0.208) [0.6557, 1.449]",-0.23765042684065,NA,FALSE
+"mAgeBox","b_trialNr","warned","-0.02 (NA) [-0.05, 0.01]","-0.01797 (0.0145) [-0.05093, 0.00681]",0.140267716269737,NA,TRUE
+"mAgeBox","b_symmetricPosition","warned","-1.58 (NA) [-1.87, -1.31]","-1.53 (0.141) [-1.831, -1.27]",0.354799092108335,NA,FALSE
+"mRetestBox","cor_subjID__relidayreliday1__relidayreliday2","warned","0.91 (NA) [0.69, 1.00]","0.913 (0.08) [0.7133, 0.9946]",0.0369312931127542,NA,TRUE

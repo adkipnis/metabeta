@@ -1,0 +1,36 @@
+"model","parameter","status","reported","metabeta","z_mean","sd_ratio","match"
+"fit.brm_exp1a_train","expr:b_Intercept","not fitted",NA,NA,NA,NA,FALSE
+"fit.brm_exp1a_train","expr:b_Intercept+b_conditionCausalSimile","not fitted",NA,NA,NA,NA,FALSE
+"fit.brm_exp1a_train","expr:b_Intercept+b_conditionControlSimile","not fitted",NA,NA,NA,NA,FALSE
+"fit.brm_exp1a_test_inter","expr:b_Intercept","no warning","0.29 (0.06) [0.19, 0.4]","0.2911 (0.0657) [0.1835, 0.3982]",0.0182721746464572,1.09576942443747,TRUE
+"fit.brm_exp1a_test_met","expr:b_Intercept+b_is_metTRUE","no warning","0.19 (0.08) [0.06, 0.32]","0.1881 (0.0802) [0.04577, 0.3126]",-0.0236251272377558,1.00254625239197,TRUE
+"fit.brm_exp1a_test_met","expr:b_Intercept","no warning","0.4 (0.08) [0.27, 0.53]","0.3923 (0.0778) [0.2642, 0.5219]",-0.0963995667058043,0.972551174030321,TRUE
+"fit.brm_exp1a_test_type","expr:b_Intercept","no warning","0.7 (0.13) [0.5, 0.91]","0.6964 (0.115) [0.5177, 0.8897]",-0.0274041532861207,0.885342336811423,TRUE
+"fit.brm_exp1a_test_typemet","expr:b_Intercept+b_is_metTRUE","warned","0.55 (0.15) [0.3, 0.8]","0.5382 (0.152) [0.3014, 0.7732]",-0.0785896475597599,1.01545403671098,TRUE
+"fit.brm_exp1a_test_typemet","expr:b_Intercept","warned","0.87 (0.16) [0.62, 1.13]","0.8604 (0.151) [0.6221, 1.126]",-0.0601123010434093,0.941144769945342,TRUE
+"fit.brm_exp1a_test_type","expr:b_Intercept+b_TypePer","no warning","0.24 (0.12) [0.04, 0.44]","0.2348 (0.122) [0.02015, 0.4316]",-0.0434839708924604,1.02079219097939,TRUE
+"fit.brm_exp1a_test_typemet","expr:b_Intercept+b_TypePer+b_is_metTRUE+`b_TypePer:is_metTRUE`","warned","-0.11 (0.15) [-0.35, 0.12]","-0.1147 (0.152) [-0.3369, 0.1508]",-0.0313859373563901,1.01157897275857,TRUE
+"fit.brm_exp1a_test_typemet","expr:b_Intercept+b_TypePer","warned","0.61 (0.15) [0.36, 0.87]","0.5818 (0.137) [0.3414, 0.8024]",-0.18789884412506,0.910834892757431,FALSE
+"fit.brm_exp1a_test_type","expr:b_Intercept+b_TypeIrr","no warning","0.1 (0.08) [-0.04, 0.24]","0.1064 (0.0875) [-0.03692, 0.2502]",0.079962308431277,1.0942766637282,TRUE
+"fit.brm_exp1a_test_typemet","expr:b_Intercept+b_TypeIrr+b_is_metTRUE+`b_TypeIrr:is_metTRUE`","warned","0.15 (0.11) [-0.02, 0.33]","0.1433 (0.0965) [-0.02614, 0.3081]",-0.0609971119577741,0.876910051211892,TRUE
+"fit.brm_exp1a_test_typemet","expr:b_Intercept+b_TypeIrr","warned","0.06 (0.11) [-0.12, 0.23]","0.07127 (0.11) [-0.1107, 0.285]",0.102419180873866,1.00402009764204,FALSE
+"fit.brm_exp1b_train","expr:b_Intercept","not fitted",NA,NA,NA,NA,FALSE
+"fit.brm_exp1b_train","expr:b_Intercept+b_conditionCausalSimile","not fitted",NA,NA,NA,NA,FALSE
+"fit.brm_exp1b_test_inter","expr:b_Intercept","no warning","2.57 (0.2) [2.26, 2.93]","2.553 (0.197) [2.241, 2.882]",-0.0847921958565712,0.983718648349598,TRUE
+"fit.brm_exp1b_test","expr:b_Intercept","no warning","2.19 (0.26) [1.78, 2.62]","2.194 (0.248) [1.818, 2.612]",0.0164102897012178,0.954910091041679,TRUE
+"fit.brm_exp1b_test_condmet","expr:b_Intercept+b_is_metTRUE","no warning","1.66 (0.28) [1.21, 2.13]","1.689 (0.269) [1.244, 2.133]",0.103699184952503,0.960498004939899,TRUE
+"fit.brm_exp1b_test_condmet","expr:b_Intercept","no warning","3.11 (0.36) [2.56, 3.73]","2.959 (0.321) [2.459, 3.5]",-0.420545742455093,0.891714833712536,FALSE
+"fit.brm_exp1b_test","expr:b_Intercept+b_conditionCausalSimile","no warning","3 (0.29) [2.55, 3.48]","2.913 (0.266) [2.476, 3.346]",-0.298404017704185,0.915896212851752,FALSE
+"fit.brm_exp1b_test_condmet","expr:b_Intercept+b_conditionCausalSimile+b_is_metTRUE+`b_conditionCausalSimile:is_metTRUE`","no warning","2.88 (0.34) [2.34, 3.45]","2.777 (0.311) [2.268, 3.299]",-0.302383240417796,0.915881418423264,FALSE
+"fit.brm_exp1b_test_condmet","expr:b_Intercept+b_conditionCausalSimile","no warning","3.22 (0.36) [2.63, 3.84]","3.202 (0.338) [2.665, 3.766]",-0.0510811412305986,0.939140659721053,TRUE
+"fit.brm_exp2_train","expr:b_Intercept","not fitted",NA,NA,NA,NA,FALSE
+"fit.brm_exp2_train","expr:b_Intercept+b_ConditionControl","not fitted",NA,NA,NA,NA,FALSE
+"fit.brm_exp2_test_inter","expr:b_Intercept","no warning","0.92 (0.16) [0.68, 1.2]","0.9079 (0.16) [0.6593, 1.17]",-0.0753412755206233,1.00021008644535,TRUE
+"fit.brm_exp3_inter","expr:b_Intercept","no warning","1.37 (0.3) [0.92, 1.87]","1.353 (0.292) [0.9031, 1.849]",-0.0568742328633872,0.974043983080441,TRUE
+"fit.brm_exp3_test","expr:b_Intercept","no warning","1.95 (0.42) [1.3, 2.69]","1.726 (0.353) [1.166, 2.292]",-0.534223055339137,0.841442665682197,FALSE
+"fit.brm_exp3_test","expr:b_Intercept+b_ExplanationPer","no warning","1.42 (0.64) [0.4, 2.51]","1.459 (0.532) [0.5828, 2.407]",0.0604723146820713,0.830540671134741,TRUE
+"fit.brm_exp3_test","expr:b_Intercept+b_ExplanationIrr","no warning","0.6 (0.43) [-0.08, 1.32]","0.7219 (0.377) [0.1167, 1.311]",0.28359643725043,0.877192523213369,FALSE
+"fit.brm_exp1a_test","b_Intercept","warned","0.23636 (NA) [-0.0072452, 0.49224]","0.25 (0.136) [0.06241, 0.5902]",0.100835989647771,NA,FALSE
+"fit.brm_exp1a_test","b_conditionCausalMetaphor","warned","0.096460 (NA) [-0.27307, 0.43995]","0.07005 (0.197) [-0.4003, 0.3732]",-0.134291299194835,NA,FALSE
+"fit.brm_exp1a_test","b_conditionCausalSimile","warned","0.12891 (NA) [-0.21275, 0.50967]","0.08925 (0.221) [-0.3037, 0.4955]",-0.179476870407803,NA,FALSE
+"fit.brm_exp1a_test","b_conditionControlSimile","warned","-0.0067278 (NA) [-0.35017, 0.36559]","-0.01827 (0.211) [-0.3921, 0.4086]",-0.0546950960416117,NA,TRUE

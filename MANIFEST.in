@@ -2,6 +2,7 @@ prune archive
 prune benchmarks
 prune experiments
 prune scripts
+prune R-package
 prune tests
 prune metabeta/outputs
 prune metabeta/datasets/from-r

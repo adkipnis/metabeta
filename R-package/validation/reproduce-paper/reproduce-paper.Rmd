@@ -1,0 +1,1068 @@
+---
+title: "metabeta from R: reproducing the paper's results"
+subtitle: "Prior-Amortized In-Context Bayesian Inference for GLMMs"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: kable
+params:
+  n_datasets: 32
+  n_stress: 16
+  n_ablation: 8
+  seed: 2027
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  fig.width = 10, fig.height = 3.6, dpi = 100, message = FALSE, warning = FALSE,
+  comment = "#>"
+)
+```
+
+This notebook reruns the metabeta results of the paper from R. Every model is fitted
+with `brm()` from the metabeta R package, the drop-in replacement for brms, with the
+default pipeline of the paper (the network's posterior refined by four independence
+Metropolis-Hastings chains, 4,000 draws). The baselines (NUTS, ADVI, Laplace) are not
+rerun, so results that are defined as agreement with NUTS are not reproduced.
+
+The paper's results fall into three groups here:
+
+* **Reproduced with the paper's data, model and priors.** The prior sensitivity analysis
+  on `sleepstudy`, `cbpp` and `Salamanders` (App. B.7, Fig. B15, Tables B10–B11) and the
+  Bayes factors across priors (Sec. 3.4, Fig. B16). The data enter the network exactly
+  as in the paper, so numbers agree up to Monte Carlo error.
+* **Rerun with fresh simulations of the paper's protocol.** The oracle benchmark
+  (Sec. 3.1, Table 1, Tables B1–B3, B7, B8, Fig. 2), the raw flow against the IMH head
+  (App. C.1), the stress tests on likelihood, prior and predictors (App. D.1–D.3) and the
+  data-poor groups (App. D.5). The paper's test sets are produced by its Python
+  simulator, which bootstraps predictors and groups from 40 preprocessed real datasets.
+  Here, datasets are drawn from the same hyper-prior, size classes and outcome
+  calibration (App. F.2, F.3), with dataset sizes matched to the paper's test sets but
+  synthetic predictors. Expect the same picture, not identical numbers. One difference
+  is systematic: on synthetic predictors, the IMH acceptance in the *large* and *huge*
+  regimes is lower than on the paper's test sets (as it is with the paper's own
+  simulator on synthetic designs), so calibration there falls somewhat behind the
+  paper's numbers, and many of those fits warn about it.
+* **Not reproduced.** See the [last section](#not-reproduced).
+
+**Runtime.** With the default `params` the notebook fits about 1,450 models, which
+takes about two hours on a laptop CPU. Results are cached in `cache/` (delete it to
+start over). The paper used 512 oracle datasets per family and regime and 128 datasets
+per stress condition:
+
+```r
+rmarkdown::render("reproduce-paper.Rmd", params = list(n_datasets = 512, n_stress = 128))
+```
+
+# Setup
+
+```{r packages}
+library(metabeta)
+# Load the Python side first: on Windows with conda, R's LAPACK must not load before torch.
+install_metabeta()
+library(ggplot2)
+for (pkg in c("lme4", "glmmTMB", "MASS", "posterior")) {
+  if (!requireNamespace(pkg, quietly = TRUE)) stop("Please install the package '", pkg, "'.")
+}
+
+dir.create("cache", showWarnings = FALSE)
+# Evaluate `expr` once and keep its value in cache/<name>.rds.
+cached <- function(name, expr) {
+  path <- file.path("cache", paste0(name, ".rds"))
+  if (file.exists(path)) return(readRDS(path))
+  value <- expr
+  saveRDS(value, path)
+  value
+}
+
+# brm() with its wall-clock time; warnings are collected instead of printed.
+fit_model <- function(...) {
+  caught <- character()
+  start <- proc.time()[["elapsed"]]
+  fit <- withCallingHandlers(
+    brm(...),
+    warning = function(w) {
+      caught <<- c(caught, conditionMessage(w))
+      invokeRestart("muffleWarning")
+    }
+  )
+  list(fit = fit, time = proc.time()[["elapsed"]] - start, warnings = caught)
+}
+
+pm <- function(x, digits = 2) sprintf("%.*f ± %.*f", digits, mean(x, na.rm = TRUE), digits, sd(x, na.rm = TRUE))
+med_mad <- function(x, digits = 2) {
+  x <- x[is.finite(x)]
+  sprintf("%.*f ± %.*f", digits, median(x), digits, median(abs(x - median(x))))
+}
+```
+
+# 1 Oracle benchmark (Sec. 3.1)
+
+## 1.1 Simulator (App. F.2, F.3)
+
+Each dataset draws its size class, then the number of fixed effects `d`, random effects
+`q`, groups `m` and group sizes; then its prior from the training hyper-prior; then the
+parameters and outcomes. As in the paper's simulator, outcomes are calibrated (an R²
+ceiling for Gaussian outcomes, redraws and a cap on the spread of the linear predictor
+for Bernoulli and Poisson outcomes), and the stored prior is rescaled together with the
+parameters, so the parameters remain a draw from the prior the model is fitted with.
+
+```{r simulator}
+REGIMES <- data.frame(regime = c("small", "medium", "large", "huge"), d_min = c(1, 5, 9, 13), d_max = c(4, 8, 12, 16), q_max = 2:5)
+FAMILIES <- c("gaussian", "bernoulli", "poisson")
+SD_FAMILIES <- c("halfnormal", "halfstudent", "exponential")
+
+# Beta distribution rescaled to [low, high] with the given mode (kappa = 1: uniform)
+rmodebeta <- function(n, low, high, mode, kappa) {
+  t <- (mode - low) / (high - low)
+  low + (high - low) * rbeta(n, 1 + (kappa - 1) * t, 1 + (kappa - 1) * (1 - t))
+}
+rlaplace <- function(n, scale) scale * (rexp(n) - rexp(n))
+rloc <- function(family, n, loc, scale) loc + scale * if (family == "normal") rnorm(n) else rt(n, 5)
+rpos <- function(family, n, scale) {
+  scale * switch(family, halfnormal = abs(rnorm(n)), halfstudent = abs(rt(n, 5)), exponential = rexp(n))
+}
+# LKJ(eta) correlation matrix by the C-vine method (Lewandowski et al., 2009)
+rlkj <- function(q, eta) {
+  S <- diag(q)
+  P <- matrix(0, q, q)
+  beta <- eta + (q - 1) / 2
+  for (k in seq_len(q - 1)) {
+    beta <- beta - 1 / 2
+    for (i in (k + 1):q) {
+      P[k, i] <- 2 * rbeta(1, beta, beta) - 1
+      p <- P[k, i]
+      for (l in rev(seq_len(k - 1))) p <- p * sqrt((1 - P[l, i]^2) * (1 - P[l, k]^2)) + P[l, i] * P[l, k]
+      S[k, i] <- S[i, k] <- p
+    }
+  }
+  S
+}
+
+# Hyper-prior (App. F.3): spike-and-slab scale of the prior means, and (low, high, mode,
+# concentration) of the prior scales of fixed effects, random-effect SDs and residual SD
+HYPERPRIOR <- list(
+  gaussian = list(nu = 0.5, b = c(0.01, 4, 0.5, 8), sd = c(0.01, 5, 1, 5), sigma = c(0.05, 8, 2, 5)),
+  bernoulli = list(nu = 0.7, b = c(0.01, 3, 0.8, 6), sd = c(0.01, 2, 0.7, 5)),
+  poisson = list(nu = 0.5, b = c(0.01, 1.5, 0.5, 6), sd = c(0.01, 1, 0.3, 5))
+)
+
+draw_prior <- function(family, d, q) {
+  h <- HYPERPRIOR[[family]]
+  scales <- function(n, v) rmodebeta(n, v[1], v[2], v[3], v[4])
+  correlated <- q > 1 && runif(1) < if (q == 2) 0.8 else 0.5
+  list(
+    b_family = sample(c("normal", "student_t"), 1, prob = c(0.8, 0.2)),
+    nu = ifelse(runif(d) < 0.9, 0, rlaplace(d, h$nu)),
+    tau = scales(d, h$b),
+    sd_family = sample(SD_FAMILIES, 1, prob = c(0.6, 0.3, 0.1)),
+    tau_sd = scales(q, h$sd),
+    sigma_family = sample(SD_FAMILIES, 1, prob = c(0.5, 0.4, 0.1)),
+    tau_sigma = if (family == "gaussian") scales(1, h$sigma),
+    eta = if (correlated) runif(1, 1, 2) else 0
+  )
+}
+
+# d, q, m and group sizes of a size regime (App. F.2). d and q follow the size classes.
+# The paper's oracle sets take m and the group sizes from real datasets, which yields
+# smaller datasets than the synthetic training designs (median m 21-42, median n
+# 406-512); m follows the training distribution without its many-groups component, and
+# the total n is drawn around the reported median.
+draw_sizes <- function(regime) {
+  r <- REGIMES[REGIMES$regime == regime, ]
+  d <- sample(r$d_min:r$d_max, 1)
+  q_cap <- min(r$q_max, d)
+  q <- min(floor(exp(runif(1, 0, log(q_cap + 1)))), q_cap)
+  m_low <- max(5, max(d, q * (q + 1) / 2) + 4)
+  m <- min(floor(rmodebeta(1, m_low, 201, m_low + min(0.08 * (200 - m_low), 20), 8)), 200)
+  n_min <- max(5, q + 2)
+  total <- min(max(exp(rnorm(1, log(450), 0.7)), m * n_min), 3000, 150 * m)
+  ns <- if (runif(1) < 0.65) {
+    rep(round(total / m), m)
+  } else {
+    w <- rgamma(m, exp(runif(1, log(8), log(40))))
+    round(w / sum(w) * total)
+  }
+  ns <- pmin(pmax(ns, n_min), 150)
+  while (sum(ns) > 3000) ns[which.max(ns)] <- ns[which.max(ns)] - 1
+  list(d = d, q = q, m = m, ns = ns)
+}
+
+standardize <- function(x) (x - mean(x)) / sqrt(mean((x - mean(x))^2))
+is_binary <- function(x) all(x %in% c(0, 1))
+
+# k predictors: correlated Gaussians with a between-group share, turned into continuous,
+# skewed, count and binary columns ("default"), or one of the out-of-distribution designs
+# of App. D.3. Then preprocessed as in the paper: count-like columns log1p, non-binary
+# columns z-scored, Poisson predictors clipped to [-5, 5].
+draw_predictors <- function(k, groups, family, design = "default") {
+  n <- length(groups)
+  if (k == 0) return(matrix(numeric(), n, 0))
+  m <- max(groups)
+  A <- matrix(rnorm(k * k), k)
+  L <- chol(cov2cor(crossprod(A) + diag(k)))
+  between <- runif(k, 0, 0.5)
+  latent <- (matrix(rnorm(n * k), n) %*% L) %*% diag(sqrt(1 - between), k) +
+    (matrix(rnorm(m * k), m) %*% L)[groups, , drop = FALSE] %*% diag(sqrt(between), k)
+  X <- switch(design,
+    default = apply(latent, 2, function(x) {
+      u <- runif(1)
+      if (u < 0.25) as.numeric(x > quantile(x, runif(1, 0.2, 0.8)))
+      else if (u < 0.35) log1p(rpois(n, exp(x)))
+      else if (u < 0.5) exp(x / 2)
+      else x
+    }),
+    t2 = qt(pnorm(latent), df = 2),
+    cauchy = qcauchy(pnorm(latent)),
+    clayton0.5 = , clayton0.9 = {
+      # Clayton copula (Marshall-Olkin) with Kendall's tau 0.5 or 0.9, normal margins
+      tau <- as.numeric(sub("clayton", "", design))
+      theta <- 2 * tau / (1 - tau)
+      v <- rgamma(n, 1 / theta)
+      qnorm(pmin(pmax((1 + matrix(rexp(n * k), n) / v)^(-1 / theta), 1e-12), 1 - 1e-12))
+    },
+    longitudinal = cbind(ave(groups, groups, FUN = seq_along) - 1, latent[, -1])
+  )
+  X <- apply(matrix(X, n), 2, function(x) if (is_binary(x)) x else standardize(x))
+  X <- matrix(X, n, dimnames = list(NULL, paste0("x", seq_len(k))))
+  if (family == "poisson") X[] <- pmin(pmax(X, -5), 5)
+  X
+}
+
+linear_predictor <- function(ds, p = ds$params) {
+  X1 <- cbind(1, ds$X)
+  drop(X1 %*% p$b) + rowSums(X1[, seq_len(ds$q), drop = FALSE] * p$r[ds$groups, , drop = FALSE])
+}
+
+draw_parameters <- function(ds) {
+  pr <- ds$prior
+  q <- ds$q
+  m <- max(ds$groups)
+  draw <- function() {
+    sd <- pmax(rpos(pr$sd_family, q, pr$tau_sd), 1e-3)
+    R <- if (pr$eta > 0) rlkj(q, pr$eta) else diag(q)
+    list(
+      b = rloc(pr$b_family, ds$d, pr$nu, pr$tau), sd = sd, R = R,
+      r = matrix(rnorm(m * q), m) %*% chol(R) %*% diag(sd, q),
+      sigma = if (ds$family == "gaussian") max(rpos(pr$sigma_family, 1, pr$tau_sigma), 1e-3)
+    )
+  }
+  extreme <- function(eta) {
+    switch(ds$family, gaussian = FALSE, bernoulli = mean(abs(eta) > 10) > 0.05, poisson = mean(eta > 10) > 0.01)
+  }
+  p <- draw()
+  for (attempt in 2:20) {
+    if (!extreme(linear_predictor(ds, p))) break
+    p <- draw()
+  }
+  eta <- linear_predictor(ds, p)
+  var_eta <- mean((eta - mean(eta))^2)
+  if (ds$family == "gaussian") {
+    r2_cap <- min(max(rnorm(1, 0.68 + 0.015 * (ds$d - 1) + 0.010 * (q - 1), 0.1), 0.45), 0.95)
+    if (var_eta / (var_eta + p$sigma^2) > r2_cap) {
+      sigma <- sqrt(var_eta * (1 - r2_cap) / r2_cap)
+      pr$tau_sigma <- pr$tau_sigma * sigma / p$sigma
+      p$sigma <- sigma
+    }
+  } else {
+    cap <- if (ds$family == "bernoulli") runif(1, 2, 4) else runif(1, 1, 2)
+    if (sqrt(var_eta) > cap) {
+      k <- cap / sqrt(var_eta)
+      p[c("b", "sd", "r")] <- lapply(p[c("b", "sd", "r")], `*`, k)
+      pr[c("nu", "tau", "tau_sd")] <- lapply(pr[c("nu", "tau", "tau_sd")], `*`, k)
+    }
+  }
+  ds$params <- p
+  ds$prior <- pr
+  ds$eta <- linear_predictor(ds, p)
+  ds
+}
+
+# Outcomes from the model's likelihood, or from the contaminated ones of App. D.1
+draw_outcomes <- function(ds, likelihood = "model", level = NULL) {
+  eta <- ds$eta
+  n <- length(eta)
+  switch(likelihood,
+    model = switch(ds$family,
+      gaussian = eta + ds$params$sigma * rnorm(n),
+      bernoulli = rbinom(n, 1, plogis(eta)),
+      poisson = rpois(n, exp(eta))
+    ),
+    student_t = eta + ds$params$sigma * rt(n, level),
+    logit_noise = rbinom(n, 1, plogis(eta + rnorm(n, 0, level))),
+    negbin = rnbinom(n, size = level, mu = exp(eta))
+  )
+}
+
+simulate_dataset <- function(family, regime) {
+  s <- draw_sizes(regime)
+  groups <- rep(seq_len(s$m), s$ns)
+  ds <- list(
+    family = family, regime = regime, d = s$d, q = s$q, groups = groups,
+    X = draw_predictors(s$d - 1, groups, family), prior = draw_prior(family, s$d, s$q)
+  )
+  ds <- draw_parameters(ds)
+  ds$y <- draw_outcomes(ds)
+  ds
+}
+```
+
+A dataset becomes a brms model. `0 + Intercept` puts the intercept prior on the
+intercept itself (brms' default `Intercept` class refers to centered predictors), and
+the random effects are on the first `q` columns of the design, as in the paper.
+
+```{r models}
+b_names <- function(ds) c("Intercept", colnames(ds$X))
+re_names <- function(ds) b_names(ds)[seq_len(ds$q)]
+
+model_data <- function(ds) data.frame(y = ds$y, ds$X, g = factor(sprintf("g%03d", ds$groups)))
+
+model_formula <- function(ds) {
+  bar <- if (ds$prior$eta > 0 || ds$q == 1) "|" else "||"
+  re <- paste(c("1", re_names(ds)[-1]), collapse = " + ")
+  as.formula(sprintf("y ~ %s + (%s %s g)", paste(c("0 + Intercept", colnames(ds$X)), collapse = " + "), re, bar))
+}
+
+positive_prior <- function(family, tau) {
+  switch(family,
+    halfnormal = sprintf("normal(0, %.6g)", tau),
+    halfstudent = sprintf("student_t(5, 0, %.6g)", tau),
+    exponential = sprintf("exponential(%.6g)", 1 / tau)
+  )
+}
+
+model_prior <- function(ds, pr = ds$prior) {
+  location <- if (pr$b_family == "normal") "normal(%.6g, %.6g)" else "student_t(5, %.6g, %.6g)"
+  priors <- c(
+    Map(function(k, nu, tau) set_prior(sprintf(location, nu, tau), class = "b", coef = k), b_names(ds), pr$nu, pr$tau),
+    Map(function(k, tau) set_prior(positive_prior(pr$sd_family, tau), class = "sd", group = "g", coef = k), re_names(ds), pr$tau_sd),
+    if (ds$family == "gaussian") list(set_prior(positive_prior(pr$sigma_family, pr$tau_sigma), class = "sigma")),
+    if (pr$eta > 0) list(set_prior(sprintf("lkj(%.6g)", pr$eta), class = "cor"))
+  )
+  do.call(c, unname(priors))
+}
+
+# The generating parameters under their brms names
+truth_table <- function(ds) {
+  p <- ds$params
+  re <- re_names(ds)
+  levels <- sprintf("g%03d", seq_len(nrow(p$r)))
+  pairs <- which(upper.tri(p$R), arr.ind = TRUE)
+  rows <- list(
+    data.frame(type = "b", slot = seq_along(p$b) - 1, variable = paste0("b_", b_names(ds)), value = p$b),
+    data.frame(type = "sd", slot = seq_along(re) - 1, variable = paste0("sd_g__", re), value = p$sd),
+    if (ds$family == "gaussian") data.frame(type = "sigma", slot = 0, variable = "sigma", value = p$sigma),
+    if (ds$prior$eta > 0) {
+      data.frame(
+        type = "cor", slot = paste0(pairs[, 1] - 1, pairs[, 2] - 1),
+        variable = sprintf("cor_g__%s__%s", re[pairs[, 1]], re[pairs[, 2]]), value = p$R[pairs]
+      )
+    },
+    data.frame(
+      type = "r", slot = rep(seq_along(re) - 1, each = length(levels)),
+      variable = sprintf("r_g[%s,%s]", levels, rep(re, each = length(levels))), value = as.vector(p$r),
+      n_i = rep(tabulate(ds$groups), length(re))
+    )
+  )
+  rows <- lapply(Filter(Negate(is.null), rows), function(x) {
+    x$slot <- as.character(x$slot)
+    if (is.null(x$n_i)) x$n_i <- NA
+    x
+  })
+  do.call(rbind, rows)
+}
+```
+
+## 1.2 Fits and metrics (App. A.1)
+
+For every parameter we keep the posterior mean, the fractional SBC rank (the share of
+draws below the true value) and whether the central intervals at the levels
+1 − α, α ∈ {0.05, 0.10, …, 0.50}, cover the true value. Per dataset we keep the PSIS
+LOO-NLL (per observation), the wall-clock time of `brm()` and the IMH acceptance.
+
+```{r fitting}
+ALPHA <- seq(0.05, 0.5, by = 0.05)
+COVERAGE <- sprintf("c%02d", round(100 * (1 - ALPHA)))
+
+score_draws <- function(fit, truth) {
+  M <- unclass(as_draws_matrix(fit, variable = truth$variable))
+  M <- M[, truth$variable, drop = FALSE]
+  Q <- apply(M, 2, quantile, probs = c(ALPHA / 2, 1 - ALPHA / 2), names = FALSE)
+  k <- length(ALPHA)
+  value <- rep(truth$value, each = k)
+  covered <- t(Q[seq_len(k), , drop = FALSE] <= value & value <= Q[k + seq_len(k), , drop = FALSE])
+  colnames(covered) <- COVERAGE
+  cbind(truth, mean = colMeans(M), rank = colMeans(sweep(M, 2, truth$value, "<")), covered)
+}
+
+fit_dataset <- function(ds, prior = model_prior(ds), algorithm = "sampling", seed = 1) {
+  res <- tryCatch(
+    fit_model(model_formula(ds), data = model_data(ds), family = ds$family, prior = prior, algorithm = algorithm, seed = seed),
+    error = function(e) e
+  )
+  if (inherits(res, "error")) return(list(error = conditionMessage(res)))
+  fit <- res$fit
+  elpd <- suppressWarnings(loo(fit))$estimates["elpd_loo", "Estimate"]
+  sg <- fit$metabeta$safeguards
+  list(
+    params = score_draws(fit, truth_table(ds)),
+    info = data.frame(
+      time = res$time, loo_nll = -elpd / length(ds$y), accept = if (is.null(sg$accept_rate)) NA else sg$accept_rate,
+      warned = length(res$warnings) > 0, n = length(ds$y), m = max(ds$groups), d = ds$d, q = ds$q
+    )
+  )
+}
+
+# Fit a list of datasets (with the prior that `prior_of` returns for each); returns
+# parameter rows and dataset rows, labelled with the dataset's position and `labels`
+fit_all <- function(datasets, labels = list(), prior_of = model_prior, ...) {
+  results <- lapply(seq_along(datasets), function(i) {
+    ds <- datasets[[i]]
+    r <- fit_dataset(ds, prior = prior_of(ds), ..., seed = i)
+    id <- data.frame(id = i, family = ds$family, regime = ds$regime)
+    id[names(labels)] <- labels
+    if (!is.null(r$error)) return(list(info = cbind(id, error = r$error)))
+    list(params = cbind(id[rep(1, nrow(r$params)), ], r$params, row.names = NULL), info = cbind(id, r$info, error = NA))
+  })
+  bind <- function(key) do.call(rbind, lapply(results, function(r) r[[key]]))
+  infos <- lapply(results, `[[`, "info")
+  columns <- unique(unlist(lapply(infos, names)))
+  list(
+    params = bind("params"),
+    info = do.call(rbind, lapply(infos, function(x) {
+      x[setdiff(columns, names(x))] <- NA
+      x[columns]
+    }))
+  )
+}
+
+# EACE of a perfectly calibrated posterior scored on n parameters: the Monte Carlo
+# floor of EACE (from the uniform SBC ranks of a calibrated posterior)
+eace_floor <- function(n, sims = 200) {
+  mean(replicate(sims, {
+    u <- 2 * abs(runif(n) - 0.5)
+    mean(abs(vapply(1 - ALPHA, function(level) mean(u <= level), 0) - (1 - ALPHA)))
+  }))
+}
+
+# Metrics per parameter slot (e.g. b_1 or the random effects r_0 across groups)
+slot_metrics <- function(rows) {
+  out <- lapply(split(rows, list(rows$type, rows$slot), drop = TRUE), function(x) {
+    err <- colMeans(as.matrix(x[COVERAGE])) - (1 - ALPHA)
+    data.frame(
+      type = x$type[1], slot = x$slot[1], n = nrow(x),
+      r = if (nrow(x) > 2 && sd(x$value) > 0) cor(x$mean, x$value) else NA,
+      nrmse = if (nrow(x) > 1) sqrt(mean((x$mean - x$value)^2)) / sd(x$value) else NA,
+      ece = mean(err), eace = mean(abs(err)), floor = eace_floor(nrow(x)), c90 = mean(x$c90)
+    )
+  })
+  do.call(rbind, out)
+}
+```
+
+```{r oracle-fits}
+oracle_data <- cached(sprintf("oracle-data-%d-%d", params$n_datasets, params$seed), {
+  set.seed(params$seed)
+  cells <- expand.grid(i = seq_len(params$n_datasets), regime = REGIMES$regime, family = FAMILIES, stringsAsFactors = FALSE)
+  Map(simulate_dataset, cells$family, cells$regime)
+})
+oracle <- cached(sprintf("oracle-fits-%d-%d", params$n_datasets, params$seed), fit_all(oracle_data))
+sprintf("%d datasets, %d failed", nrow(oracle$info), sum(!is.na(oracle$info$error)))
+```
+
+## 1.3 Table 1, Tables B1 and B2
+
+Metrics are averaged over parameter slots (mean ± SD; correlations are reported
+separately in Table B3 below); LOO-NLL and time are median ± MAD over datasets. Time is
+the wall clock of `brm()` on this machine's CPU, including R's own work; the paper's
+4-core CPU times of the Python pipeline are in Table B8 below.
+
+With few datasets per regime, EACE is dominated by Monte Carlo error: `EACE floor` is
+the EACE that a perfectly calibrated posterior would show on the same number of
+parameters. The paper's 512 datasets per regime put that floor near 0.01. The last two
+columns give the median IMH acceptance and the share of fits whose acceptance fell
+below the warning threshold of 0.1.
+
+```{r table1}
+regime_order <- function(x) factor(x, levels = REGIMES$regime)
+oracle_table <- function(res) {
+  p <- res$params[res$params$type != "cor", ]
+  rows <- lapply(split(p, list(p$family, p$regime), drop = TRUE), function(x) {
+    s <- slot_metrics(x)
+    info <- res$info[res$info$family == x$family[1] & res$info$regime == x$regime[1] & is.na(res$info$error), ]
+    data.frame(
+      family = x$family[1], regime = x$regime[1], datasets = nrow(info),
+      r = pm(s$r), NRMSE = pm(s$nrmse), ECE = pm(s$ece), EACE = pm(s$eace),
+      `EACE floor` = sprintf("%.2f", mean(s$floor)),
+      `LOO-NLL` = med_mad(info$loo_nll), `time [s]` = med_mad(info$time),
+      acceptance = sprintf("%.2f", median(info$accept)), `acceptance < 0.1` = sprintf("%.0f%%", 100 * mean(info$accept < 0.1)),
+      check.names = FALSE
+    )
+  })
+  out <- do.call(rbind, rows)
+  out[order(match(out$family, FAMILIES), regime_order(out$regime)), ]
+}
+oracle_table(oracle)
+```
+
+The paper's values for metabeta (Table 1, Tables B1 and B2):
+
+```{r table1-paper}
+paper_oracle <- data.frame(
+  family = rep(FAMILIES, each = 4), regime = REGIMES$regime,
+  r = c("0.94 ± 0.04", "0.95 ± 0.03", "0.96 ± 0.03", "0.96 ± 0.03", "0.89 ± 0.09", "0.90 ± 0.09", "0.88 ± 0.11", "0.86 ± 0.12", "0.92 ± 0.08", "0.94 ± 0.06", "0.94 ± 0.07", "0.93 ± 0.09"),
+  NRMSE = c("0.32 ± 0.13", "0.29 ± 0.10", "0.28 ± 0.09", "0.29 ± 0.08", "0.42 ± 0.17", "0.41 ± 0.16", "0.43 ± 0.18", "0.46 ± 0.18", "0.35 ± 0.16", "0.32 ± 0.15", "0.30 ± 0.15", "0.33 ± 0.17"),
+  ECE = c("0.00 ± 0.02", "0.00 ± 0.04", "0.00 ± 0.02", "-0.02 ± 0.03", "0.00 ± 0.02", "0.00 ± 0.02", "0.00 ± 0.02", "-0.01 ± 0.03", "0.00 ± 0.04", "0.00 ± 0.02", "-0.02 ± 0.02", "-0.03 ± 0.03"),
+  EACE = c("0.02 ± 0.01", "0.02 ± 0.03", "0.02 ± 0.02", "0.03 ± 0.02", "0.02 ± 0.01", "0.02 ± 0.01", "0.02 ± 0.01", "0.03 ± 0.02", "0.03 ± 0.03", "0.02 ± 0.01", "0.03 ± 0.02", "0.04 ± 0.03"),
+  `LOO-NLL` = c("2.21 ± 0.53", "2.26 ± 0.50", "2.27 ± 0.43", "2.25 ± 0.46", "0.55 ± 0.09", "0.45 ± 0.06", "0.43 ± 0.05", "0.41 ± 0.05", "1.34 ± 0.22", "1.36 ± 0.17", "1.39 ± 0.16", "1.41 ± 0.14"),
+  check.names = FALSE
+)
+paper_oracle
+```
+
+## 1.4 Figure 2
+
+Recovery and calibration on the *medium* Gaussian datasets: posterior means against the
+generating values, empirical coverage of the central intervals against their nominal
+level (one line per parameter slot), and the difference between the empirical CDF of the
+SBC ranks and the uniform CDF with a simultaneous 95% band (Säilynoja et al., 2022).
+
+```{r figure2, fig.height = 3.2}
+param_label <- function(type, slot) {
+  ifelse(type == "b", paste0("beta[", slot, "]"), ifelse(type == "sd", paste0("sigma[", slot, "]"),
+    ifelse(type == "sigma", "sigma[epsilon]", paste0("alpha[", slot, "]"))))
+}
+panel_of <- c(b = "Fixed effects", sd = "Variance components", sigma = "Variance components", r = "Random effects")
+
+figure2 <- function(res, family, regime) {
+  rows <- res$params[res$params$family == family & res$params$regime == regime & res$params$type != "cor", ]
+  rows$panel <- factor(panel_of[rows$type], levels = unique(panel_of))
+  rows$parameter <- param_label(rows$type, rows$slot)
+  stats <- do.call(rbind, lapply(split(rows, rows$panel), function(x) {
+    data.frame(panel = x$panel[1], label = sprintf("r = %.3f\nNRMSE = %.3f", cor(x$mean, x$value),
+      sqrt(mean((x$mean - x$value)^2)) / sd(x$value)))
+  }))
+  recovery <- ggplot(rows, aes(value, mean, colour = parameter)) +
+    geom_abline(linetype = 2, colour = "grey50") +
+    geom_point(size = 0.6, alpha = 0.4) +
+    geom_text(data = stats, aes(x = Inf, y = -Inf, label = label), inherit.aes = FALSE, hjust = 1.05, vjust = -0.3, size = 3) +
+    facet_wrap(~panel, scales = "free") +
+    labs(x = "Ground truth", y = "Posterior mean", colour = NULL) +
+    theme_bw() + theme(legend.position = "none")
+
+  coverage <- do.call(rbind, lapply(split(rows, rows$parameter), function(x) {
+    data.frame(parameter = x$parameter[1], nominal = 1 - ALPHA, empirical = colMeans(as.matrix(x[COVERAGE])))
+  }))
+  s <- slot_metrics(rows)
+  coverage_plot <- ggplot(coverage, aes(nominal, empirical, colour = parameter)) +
+    geom_abline(linetype = 2, colour = "grey50") +
+    geom_line() +
+    annotate("text", x = 0.95, y = 0.5, hjust = 1, size = 3,
+      label = sprintf("ECE = %.2f%%\nEACE = %.2f%%", 100 * mean(s$ece), 100 * mean(s$eace))) +
+    scale_colour_discrete(labels = function(x) parse(text = x)) +
+    labs(x = "Nominal coverage", y = "Empirical coverage", colour = NULL) +
+    theme_bw()
+  list(recovery = recovery, coverage = coverage_plot, sbc = sbc_plot(rows))
+}
+
+# Simultaneous ECDF band for n uniform ranks (Säilynoja et al., 2022), by simulation
+ecdf_band <- function(n, z, prob = 0.95, n_sim = 1000) {
+  smallest <- replicate(n_sim, {
+    counts <- findInterval(z, sort(runif(n)))
+    min(2 * pmin(pbinom(counts, n, z), 1 - pbinom(counts - 1, n, z)))
+  })
+  gamma <- quantile(smallest, 1 - prob)
+  data.frame(z = z, lower = qbinom(gamma / 2, n, z) / n - z, upper = qbinom(1 - gamma / 2, n, z) / n - z)
+}
+
+sbc_plot <- function(rows) {
+  z <- seq(0.005, 0.995, by = 0.005)
+  curves <- do.call(rbind, lapply(split(rows, rows$parameter), function(x) {
+    data.frame(parameter = x$parameter[1], z = z, diff = ecdf(x$rank)(z) - z)
+  }))
+  bands <- rbind(
+    cbind(ecdf_band(min(table(rows$parameter[rows$type != "r"])), z), kind = "global"),
+    cbind(ecdf_band(min(table(rows$parameter[rows$type == "r"])), z), kind = "local")
+  )
+  ggplot(curves, aes(z, diff)) +
+    geom_ribbon(data = bands, aes(z, ymin = lower, ymax = upper, fill = kind), inherit.aes = FALSE, alpha = 0.25) +
+    geom_hline(yintercept = 0, colour = "grey50") +
+    geom_line(aes(colour = parameter)) +
+    scale_colour_discrete(labels = function(x) parse(text = x)) +
+    scale_fill_manual(values = c(global = "grey50", local = "lightblue"), name = "95% band") +
+    labs(x = "SBC fractional rank", y = expression(Delta ~ "uniform ECDF"), colour = NULL) +
+    theme_bw()
+}
+
+fig2 <- figure2(oracle, "gaussian", "medium")
+fig2$recovery
+```
+
+```{r figure2-calibration, fig.width = 5.5, fig.height = 3.6, fig.show = "hold", out.width = "49%"}
+fig2$coverage
+fig2$sbc
+```
+
+## 1.5 Random-effect correlations (Table B3) and parameter classes (Table B7)
+
+```{r table-b3}
+cors <- oracle$params[oracle$params$type == "cor", ]
+table_b3 <- do.call(rbind, lapply(split(cors, list(cors$family, cors$regime), drop = TRUE), function(x) {
+  s <- slot_metrics(x)
+  data.frame(family = x$family[1], regime = x$regime[1], datasets = length(unique(x$id)),
+    r = pm(s$r), NRMSE = pm(s$nrmse), ECE = pm(s$ece), EACE = pm(s$eace))
+}))
+table_b3[order(match(table_b3$family, FAMILIES), regime_order(table_b3$regime)), ]
+```
+
+The paper reports, for metabeta, r = 0.63–0.69 and NRMSE = 0.73–0.78 for the Gaussian
+correlations and lower values for Bernoulli outcomes (Table B3): correlations are the
+least identified parameters.
+
+```{r table-b7}
+class_of <- c(b = "beta", sd = "sigma", sigma = "sigma", r = "alpha")
+p <- oracle$params[oracle$params$type != "cor", ]
+p$class <- class_of[p$type]
+table_b7 <- do.call(rbind, lapply(FAMILIES, function(f) {
+  by_class <- sapply(c("beta", "sigma", "alpha"), function(k) {
+    s <- slot_metrics(p[p$family == f & p$class == k, ])
+    sprintf("%.2f (%.2f)", mean(s$nrmse, na.rm = TRUE), mean(s$r, na.rm = TRUE))
+  })
+  info <- oracle$info[oracle$info$family == f & is.na(oracle$info$error), ]
+  data.frame(family = f, `beta: NRMSE (r)` = by_class[["beta"]], `sigma: NRMSE (r)` = by_class[["sigma"]],
+    `alpha: NRMSE (r)` = by_class[["alpha"]], `LOO-NLL` = sprintf("%.2f", median(info$loo_nll)),
+    `time [s]` = sprintf("%.2f", median(info$time)), check.names = FALSE)
+}))
+table_b7
+```
+
+Paper (Table B7, metabeta): Gaussian 0.28 (0.96), 0.22 (0.97), 0.44 (0.90), LOO-NLL 2.25;
+Bernoulli 0.31 (0.95), 0.49 (0.88), 0.70 (0.71), 0.46; Poisson 0.21 (0.98), 0.36 (0.93),
+0.58 (0.81), 1.38.
+
+The class values average the slots' NRMSE, and a slot that occurs in only a few datasets
+is unstable: NRMSE divides by the spread of its few generating values. With the default
+sizes, the fifth random-effect SD of the huge Bernoulli datasets occurs in four of them,
+whose generating values hardly differ (SD 0.09), so its NRMSE is about 2.5 and lifts the
+Bernoulli σ average; the other Bernoulli SD slots lie between 0.3 and 0.6.
+
+## 1.6 Runtime (Table B8, Fig. B14)
+
+Median wall-clock time per dataset of `brm()` on this machine (one fit at a time, 4,000
+draws), next to the paper's times of the Python pipeline on four Xeon CPU cores.
+
+```{r table-b8}
+info <- oracle$info[is.na(oracle$info$error), ]
+runtime <- aggregate(time ~ family + regime, info, median)
+runtime <- reshape(runtime, idvar = "family", timevar = "regime", direction = "wide")
+names(runtime) <- sub("time.", "", names(runtime))
+runtime <- runtime[match(FAMILIES, runtime$family), c("family", REGIMES$regime)]
+cbind(runtime, paper = c("0.54 / 0.61 / 0.70 / 0.86", "0.78 / 1.03 / 1.34 / 2.21", "1.15 / 1.55 / 2.01 / 2.26"))
+```
+
+```{r figure-b14, fig.height = 3}
+info$n_params <- info$d + info$q + info$m * info$q
+ggplot(info, aes(n_params, time, colour = family)) +
+  geom_point(alpha = 0.5, size = 1) +
+  geom_smooth(se = FALSE, method = "loess", formula = y ~ x) +
+  scale_y_log10() +
+  labs(x = "# parameters (d + q + mq)", y = "Wall time [s]") +
+  theme_bw()
+```
+
+## 1.7 The IMH head against the raw flow (App. C.1)
+
+`algorithm = "meanfield"` returns the network's posterior (MB⁰) without the
+Metropolis-Hastings correction. On the first `n_ablation` datasets of every family and
+regime: the predictive gap of the raw flow to metabeta, and the calibration of both.
+The paper reports gaps of the raw flow to NUTS of 0.06–1.13 nats, growing with model
+size, which the IMH head closes to ≤ 0.01 (Tables C2–C4). On a CPU, the raw flow is
+the slower of the two for Bernoulli and Poisson outcomes, because it samples the random
+effects with the local network (Table B8).
+
+```{r ablation}
+ablation_ids <- which(ave(seq_along(oracle_data), vapply(oracle_data, function(ds) paste(ds$family, ds$regime), ""), FUN = seq_along) <= params$n_ablation)
+raw_flow <- cached(sprintf("oracle-flow-%d-%d-%d", params$n_datasets, params$n_ablation, params$seed), {
+  res <- fit_all(oracle_data[ablation_ids], algorithm = "meanfield")
+  res$info$id <- ablation_ids[res$info$id]
+  if (!is.null(res$params)) res$params$id <- ablation_ids[res$params$id]
+  res
+})
+
+ablation <- do.call(rbind, lapply(split(raw_flow$info, list(raw_flow$info$family, raw_flow$info$regime), drop = TRUE), function(x) {
+  mb <- oracle$info[match(x$id, oracle$info$id), ]
+  flow_rows <- raw_flow$params[raw_flow$params$family == x$family[1] & raw_flow$params$regime == x$regime[1] & raw_flow$params$type != "cor", ]
+  mb_rows <- oracle$params[oracle$params$id %in% x$id & oracle$params$type != "cor", ]
+  s0 <- slot_metrics(flow_rows)
+  s1 <- slot_metrics(mb_rows)
+  data.frame(
+    family = x$family[1], regime = x$regime[1], datasets = nrow(x),
+    `LOO-NLL MB0 - MB` = med_mad(x$loo_nll - mb$loo_nll, 3),
+    `ECE MB0` = pm(s0$ece), `ECE MB` = pm(s1$ece), `EACE MB0` = pm(s0$eace), `EACE MB` = pm(s1$eace),
+    `time MB0 [s]` = sprintf("%.2f", median(x$time)), check.names = FALSE
+  )
+}))
+ablation[order(match(ablation$family, FAMILIES), regime_order(ablation$regime)), ]
+```
+
+## 1.8 Data-poor groups (App. D.5, Tables D13–D15)
+
+Local parameters by the per-group information ratio ρ = nᵢ / (d + q), and global
+parameters by γ = n / p_all with p_all = d + mq + q(q + 1)/2 + 1, pooled over regimes.
+`c90` is the coverage of the 90% interval.
+
+```{r data-poor}
+pooled <- function(x) {
+  err <- colMeans(as.matrix(x[COVERAGE])) - (1 - ALPHA)
+  c(EACE = mean(abs(err)), NRMSE = sqrt(mean((x$mean - x$value)^2)) / sd(x$value), c90 = mean(x$c90))
+}
+local_rows <- merge(oracle$params[oracle$params$type == "r", ], oracle$info[c("id", "d", "q")], by = "id")
+local_rows$rho <- cut(local_rows$n_i / (local_rows$d + local_rows$q), c(0, 0.5, 1, 2, 5, Inf), right = FALSE)
+do.call(rbind, lapply(split(local_rows, list(local_rows$family, local_rows$rho), drop = TRUE), function(x) {
+  data.frame(family = x$family[1], rho = x$rho[1], groups = nrow(x), t(round(pooled(x), 3)))
+}))
+
+global_rows <- merge(oracle$params[oracle$params$type %in% c("b", "sd", "sigma"), ], oracle$info[c("id", "d", "q", "m", "n", "loo_nll")], by = "id")
+global_rows$gamma <- with(global_rows, cut(n / (d + m * q + q * (q + 1) / 2 + 1), c(0, 2, 4, 8, Inf), right = FALSE))
+do.call(rbind, lapply(split(global_rows, list(global_rows$family, global_rows$gamma), drop = TRUE), function(x) {
+  data.frame(family = x$family[1], gamma = x$gamma[1], datasets = length(unique(x$id)), t(round(pooled(x), 3)),
+    LOO = round(mean(x$loo_nll[!duplicated(x$id)]), 3))
+}))
+```
+
+# 2 Stress tests (App. D.1–D.3)
+
+Each condition takes the first `n_stress` oracle datasets of a family (spread evenly over
+the size regimes) and perturbs one thing: the likelihood the outcomes come from (D.1),
+the prior the model is fitted with (D.2), or the distribution of the predictors (D.3).
+The fitted model is always the GLMM of Section 1. The tables score the posteriors
+against the generating parameters: recovery (NRMSE) and calibration (EACE) of the global
+(g) and local (l) parameters, as in the right half of Tables D1–D9, plus the median IMH
+acceptance and the share of fits with a warning. In the paper, metabeta and NUTS
+degrade in lockstep where the model is wrong (D.1, D.2), and stay together where it is
+right (D.3).
+
+```{r stress-setup}
+stress_ids <- unlist(lapply(FAMILIES, function(f) {
+  per_regime <- ceiling(params$n_stress / nrow(REGIMES))
+  unlist(lapply(REGIMES$regime, function(r) {
+    which(vapply(oracle_data, function(ds) ds$family == f && ds$regime == r, TRUE))[seq_len(per_regime)]
+  }))
+}))
+stress_base <- oracle_data[stress_ids]
+
+quality <- function(res) {
+  do.call(rbind, lapply(split(res$info, list(res$info$family, res$info$condition), drop = TRUE), function(x) {
+    rows <- res$params[res$params$family == x$family[1] & res$params$condition == x$condition[1] & res$params$type != "cor", ]
+    g <- slot_metrics(rows[rows$type != "r", ])
+    l <- slot_metrics(rows[rows$type == "r", ])
+    data.frame(
+      family = x$family[1], condition = x$condition[1], datasets = sum(is.na(x$error)),
+      NRMSE_g = round(mean(g$nrmse, na.rm = TRUE), 3), EACE_g = round(mean(g$eace), 3), floor_g = round(mean(g$floor), 3),
+      NRMSE_l = round(mean(l$nrmse, na.rm = TRUE), 3), EACE_l = round(mean(l$eace), 3),
+      acceptance = round(median(x$accept, na.rm = TRUE), 2), warned = round(mean(x$warned, na.rm = TRUE), 2)
+    )
+  }))
+}
+
+combine <- function(results) {
+  list(
+    params = do.call(rbind, lapply(results, `[[`, "params")),
+    info = do.call(rbind, lapply(results, `[[`, "info"))
+  )
+}
+
+baseline <- local({
+  res <- list(params = oracle$params[oracle$params$id %in% stress_ids, ], info = oracle$info[oracle$info$id %in% stress_ids, ])
+  res$params$condition <- "baseline"
+  res$info$condition <- "baseline"
+  res
+})
+```
+
+## 2.1 Misspecified likelihoods (D.1, Tables D1–D3)
+
+Outcomes are regenerated from a Student-t likelihood (Gaussian family), with latent
+logit noise (Bernoulli) or from a negative binomial (Poisson), keeping predictors and
+parameters; the model stays the GLMM.
+
+```{r stress-likelihood}
+LIKELIHOOD_STRESS <- list(
+  gaussian = list(kind = "student_t", levels = c(10, 5, 3), label = "t(nu=%g)"),
+  bernoulli = list(kind = "logit_noise", levels = c(0.5, 1, 2), label = "sigma_c=%g"),
+  poisson = list(kind = "negbin", levels = c(10, 3, 1), label = "theta=%g")
+)
+likelihood_stress <- cached(sprintf("stress-likelihood-%d-%d-%d", params$n_datasets, params$n_stress, params$seed), {
+  set.seed(params$seed + 1)
+  combine(unlist(lapply(FAMILIES, function(f) {
+    spec <- LIKELIHOOD_STRESS[[f]]
+    lapply(spec$levels, function(level) {
+      data <- lapply(Filter(function(ds) ds$family == f, stress_base), function(ds) {
+        ds$y <- draw_outcomes(ds, spec$kind, level)
+        ds
+      })
+      fit_all(data, labels = list(condition = sprintf(spec$label, level)))
+    })
+  }), recursive = FALSE))
+})
+quality(combine(list(baseline, likelihood_stress)))
+```
+
+## 2.2 Misspecified priors (D.2, Tables D4–D6)
+
+The data are those of the baseline; the prior passed to `brm()` deviates from the one
+that generated them: all scales ×1/3 or ×3, fixed-effect prior means shifted by one or
+two prior SDs, or every prior family rotated (normal → Student-t, half-normal →
+half-Student-t → exponential → half-normal).
+
+```{r stress-prior}
+rotate <- function(x, levels) levels[match(x, levels) %% length(levels) + 1]
+PRIOR_STRESS <- list(
+  `tau x 1/3` = function(p) modifyList(p, list(tau = p$tau / 3, tau_sd = p$tau_sd / 3, tau_sigma = p$tau_sigma / 3)),
+  `tau x 3` = function(p) modifyList(p, list(tau = p$tau * 3, tau_sd = p$tau_sd * 3, tau_sigma = p$tau_sigma * 3)),
+  `nu + 1 tau` = function(p) modifyList(p, list(nu = p$nu + p$tau)),
+  `nu + 2 tau` = function(p) modifyList(p, list(nu = p$nu + 2 * p$tau)),
+  `family + 1` = function(p) {
+    modifyList(p, list(b_family = rotate(p$b_family, c("normal", "student_t")),
+      sd_family = rotate(p$sd_family, SD_FAMILIES), sigma_family = rotate(p$sigma_family, SD_FAMILIES)))
+  }
+)
+prior_stress <- cached(sprintf("stress-prior-%d-%d-%d", params$n_datasets, params$n_stress, params$seed), {
+  combine(lapply(names(PRIOR_STRESS), function(condition) {
+    fit_all(stress_base, labels = list(condition = condition),
+      prior_of = function(ds) model_prior(ds, PRIOR_STRESS[[condition]](ds$prior)))
+  }))
+})
+quality(combine(list(baseline, prior_stress)))
+```
+
+## 2.3 Out-of-distribution predictors (D.3, Tables D7–D9)
+
+Predictors are redrawn with heavy-tailed marginals (t with 2 degrees of freedom,
+Cauchy), with Clayton-copula dependence (Kendall's τ = 0.5, 0.9), or as longitudinal
+designs (time within group as the first predictor, with a random slope when q ≥ 2).
+Parameters stay the same and outcomes are redrawn, so the fitted GLMM is correct.
+
+```{r stress-design}
+DESIGN_STRESS <- c("t2", "cauchy", "clayton0.5", "clayton0.9", "longitudinal")
+design_stress <- cached(sprintf("stress-design-%d-%d-%d", params$n_datasets, params$n_stress, params$seed), {
+  set.seed(params$seed + 2)
+  combine(lapply(DESIGN_STRESS, function(design) {
+    data <- lapply(stress_base, function(ds) {
+      ds$X <- draw_predictors(ds$d - 1, ds$groups, ds$family, design)
+      ds$eta <- linear_predictor(ds)
+      ds$y <- draw_outcomes(ds)
+      ds
+    })
+    fit_all(data, labels = list(condition = design))
+  }))
+})
+quality(combine(list(baseline, design_stress)))
+```
+
+# 3 Prior sensitivity on real data (App. B.7) and Bayes factors (Sec. 3.4)
+
+One held-out dataset per family, each with a correlated random intercept and slope:
+`Reaction ~ Days + (1 + Days | Subject)` (`sleepstudy`, Gaussian),
+`incidence ~ period + (1 + period4 | herd)` (`cbpp`, Bernoulli, expanded from binomial
+counts) and `count ~ mined + wtemp + (1 + wtemp | site)` (`Salamanders`, Poisson). The
+data are preprocessed as in the paper (continuous variables winsorized at ±4 SD and
+z-scored, dummies kept as 0/1), so the network sees the same inputs.
+
+The prior grid: twelve log-spaced Normal slope-prior scales τβ ∈ [0.05, 5], crossed with
+half-Normal, half-Student-t(5) and Exponential priors on the random-effect SDs at scales
+τσ ∈ {0.25, 1, 2.5, 5}. The intercept keeps the Bambi default (Normal(0, 2.5), or
+Normal(0, 1.5) for Bernoulli and Poisson); σ and the correlations keep the defaults.
+Priors beyond a family's training hyper-prior range are dropped, which leaves 132, 60
+and 54 priors.
+
+```{r sensitivity-data}
+winsorize <- function(x) {
+  s <- sqrt(mean((x - mean(x))^2))
+  pmin(pmax(x, mean(x) - 4 * s), mean(x) + 4 * s)
+}
+data("sleepstudy", package = "lme4")
+data("cbpp", package = "lme4")
+data("Salamanders", package = "glmmTMB")
+rows <- rep(seq_len(nrow(cbpp)), cbpp$size)
+cbpp_bernoulli <- data.frame(
+  y = unlist(Map(function(k, n) rep(1:0, c(k, n - k)), cbpp$incidence, cbpp$size)),
+  period2 = as.numeric(cbpp$period[rows] == "2"), period3 = as.numeric(cbpp$period[rows] == "3"),
+  period4 = as.numeric(cbpp$period[rows] == "4"), herd = cbpp$herd[rows]
+)
+
+SENSITIVITY <- list(
+  sleepstudy = list(
+    family = "gaussian", key = "Days", tau_intercept = 2.5, max_tau_b = 4, max_tau_sd = 5,
+    formula = y ~ 0 + Intercept + Days + (1 + Days | Subject),
+    data = with(sleepstudy, data.frame(y = standardize(winsorize(Reaction)), Days = standardize(winsorize(Days)), Subject))
+  ),
+  cbpp = list(
+    family = "bernoulli", key = "period4", tau_intercept = 1.5, max_tau_b = 3, max_tau_sd = 2,
+    formula = y ~ 0 + Intercept + period4 + period2 + period3 + (1 + period4 | herd),
+    data = cbpp_bernoulli
+  ),
+  Salamanders = list(
+    family = "poisson", key = "mined", tau_intercept = 1.5, max_tau_b = 1.5, max_tau_sd = 1,
+    formula = y ~ 0 + Intercept + wtemp + mined + (1 + wtemp | site),
+    data = with(Salamanders, data.frame(y = count, wtemp = standardize(winsorize(Wtemp)), mined = as.numeric(mined == "yes"), site))
+  )
+)
+TAU_BETA <- exp(seq(log(0.05), log(5), length.out = 12))
+TAU_SD <- c(0.25, 1, 2.5, 5)
+
+sensitivity_prior <- function(spec, tau_beta, sd_family, tau_sd) {
+  c(
+    set_prior(sprintf("normal(0, %.6g)", tau_beta), class = "b"),
+    set_prior(sprintf("normal(0, %.6g)", spec$tau_intercept), class = "b", coef = "Intercept"),
+    set_prior(positive_prior(sd_family, tau_sd), class = "sd")
+  )
+}
+```
+
+```{r sensitivity-fits}
+sensitivity <- cached("sensitivity", {
+  do.call(rbind, lapply(names(SENSITIVITY), function(name) {
+    spec <- SENSITIVITY[[name]]
+    grid <- expand.grid(tau_beta = TAU_BETA, tau_sd = TAU_SD, sd_family = SD_FAMILIES, stringsAsFactors = FALSE)
+    grid <- grid[grid$tau_beta <= spec$max_tau_b & grid$tau_sd <= spec$max_tau_sd, ]
+    do.call(rbind, lapply(seq_len(nrow(grid)), function(i) {
+      g <- grid[i, ]
+      res <- fit_model(spec$formula, data = spec$data, family = spec$family, seed = i,
+        prior = sensitivity_prior(spec, g$tau_beta, g$sd_family, g$tau_sd),
+        save_pars = save_pars(all = TRUE))  # the marginal likelihood comes with the fit
+      key <- as.vector(as_draws_matrix(res$fit, variable = paste0("b_", spec$key)))
+      ml <- suppressWarnings(bridge_sampler(res$fit))
+      sg <- res$fit$metabeta$safeguards
+      cbind(dataset = name, g,
+        key_q05 = quantile(key, 0.05), key_q50 = median(key), key_q95 = quantile(key, 0.95),
+        accept = sg$accept_rate, pool_k = sg$psis_k, logml = ml$logml, evidence_k = ml$pareto_k,
+        warned = length(res$warnings) > 0, time = res$time,
+        m = length(res$fit$metabeta$design$levels), n = nrow(spec$data), row.names = NULL)
+    }))
+  }))
+})
+```
+
+## 3.1 Grid sizes and cost (Table B10)
+
+The paper reports 1.6–2.8 s per full grid on a GPU, where metabeta conditions on all
+priors of an SD-prior family in one batched call; NUTS needs 7–17 core-hours. Here,
+every prior is a separate `brm()` call on the CPU.
+
+```{r table-b10}
+do.call(rbind, lapply(split(sensitivity, sensitivity$dataset), function(x) {
+  data.frame(dataset = x$dataset[1], m = x$m[1], n = x$n[1], priors = nrow(x),
+    `total [s]` = round(sum(x$time), 1), `per prior [s]` = round(median(x$time), 2), check.names = FALSE)
+}))[names(SENSITIVITY), ]
+```
+
+## 3.2 The key effect across the grid (Fig. B15, Table B11)
+
+Posterior median and 90% interval of the key effect against τβ, with the random-effect
+SD prior at half-Normal(2.5) (`sleepstudy`) or half-Normal(1) (the largest scale inside
+the training range for `cbpp` and `Salamanders`). Markers are shaded by the IMH
+acceptance.
+
+```{r figure-b15, fig.height = 3.4}
+slice <- do.call(rbind, lapply(names(SENSITIVITY), function(name) {
+  x <- sensitivity[sensitivity$dataset == name & sensitivity$sd_family == "halfnormal", ]
+  x[x$tau_sd == max(x$tau_sd[x$tau_sd <= 2.5]), ]
+}))
+slice$dataset <- factor(slice$dataset, levels = names(SENSITIVITY))
+ggplot(slice, aes(tau_beta, key_q50)) +
+  geom_ribbon(aes(ymin = key_q05, ymax = key_q95), fill = "#7b68b5", alpha = 0.2) +
+  geom_line(colour = "#7b68b5") +
+  geom_point(aes(fill = accept), shape = 21, size = 2.2) +
+  scale_fill_gradient(low = "#efedf5", high = "#3f007d", limits = c(0, 1), name = "IMH acceptance") +
+  scale_x_log10() +
+  facet_wrap(~dataset, scales = "free_y") +
+  labs(x = expression(tau[beta]), y = "Key effect") +
+  theme_bw()
+```
+
+IMH acceptance over the grid (Table B11 reports 0.74 ± 0.07, 0.61 ± 0.05 and
+0.48 ± 0.09 over the priors where NUTS converged), and the number of priors at which a
+built-in diagnostic fires (acceptance below 0.2 or the Pareto k of the network's
+proposal weights above 0.7;
+the paper's flags concentrate on the two tightest slope priors of `sleepstudy`):
+
+```{r table-b11}
+do.call(rbind, lapply(split(sensitivity, sensitivity$dataset), function(x) {
+  data.frame(dataset = x$dataset[1], priors = nrow(x), `IMH acceptance` = med_mad(x$accept),
+    `diagnostic fires` = sum(x$accept < 0.2 | x$pool_k > 0.7), `brm() warned` = sum(x$warned),
+    check.names = FALSE)
+}))[names(SENSITIVITY), ]
+```
+
+## 3.3 Bayes factors across priors (Fig. B16)
+
+The same fits yield the marginal likelihood (`bridge_sampler()`, computed during the fit
+by importance sampling from a Student-t fitted to the posterior; no bridge sampling is
+run). On `sleepstudy`, ln BF of
+each slope prior against the Bambi-like reference (Normal, τβ = 2.16, half-Normal(2.5)
+SD prior). The paper finds that the data prefer τβ ≈ 0.4–0.6 over the reference
+(ln BF ≈ +0.9) and reject τβ = 0.05 (ln BF ≤ −6). Hollow markers have Pareto k > 0.7.
+
+```{r figure-b16, fig.height = 3.4, fig.width = 6}
+sleep <- sensitivity[sensitivity$dataset == "sleepstudy", ]
+reference <- sleep$logml[sleep$sd_family == "halfnormal" & sleep$tau_sd == 2.5 & abs(sleep$tau_beta - TAU_BETA[10]) < 1e-9]
+bf <- sleep[(sleep$sd_family == "halfnormal" & sleep$tau_sd == 2.5) | (sleep$sd_family == "exponential" & sleep$tau_sd == 1), ]
+bf$curve <- ifelse(bf$sd_family == "halfnormal", "half-Normal(2.5)", "Exponential(1)")
+bf$log_bf <- bf$logml - reference
+bf$reliable <- bf$evidence_k <= 0.7
+ggplot(bf, aes(tau_beta, log_bf, colour = curve)) +
+  geom_hline(yintercept = 0, colour = "grey50") +
+  geom_line() +
+  geom_point(aes(shape = reliable), size = 2) +
+  scale_shape_manual(values = c(`TRUE` = 16, `FALSE` = 1), guide = "none") +
+  scale_x_log10() +
+  labs(x = expression(tau[beta]), y = "ln BF vs Normal(2.16), HN(2.5)", colour = "SD prior") +
+  theme_bw()
+```
+
+```{r bf-values}
+bf[order(bf$curve, bf$tau_beta), c("curve", "tau_beta", "log_bf", "evidence_k", "accept")]
+```
+
+# 4 Deployment safeguards (App. D.6)
+
+**Support validation.** Data outside the training ranges are rejected with an
+explanation. `epil` has four observations per patient, the networks need at least five:
+
+```{r safeguard-support, error = TRUE}
+data("epil", package = "MASS")
+brm(y ~ trt + base + age + (1 | subject), data = epil, family = poisson())
+```
+
+**Acceptance gate, MAP check and the Pareto k of the evidence.** The tightest slope
+prior of the `sleepstudy` grid, where the paper's flags concentrate:
+
+```{r safeguard-tight, warning = TRUE}
+spec <- SENSITIVITY$sleepstudy
+tight <- brm(spec$formula, data = spec$data, seed = 1,
+  prior = sensitivity_prior(spec, TAU_BETA[1], "halfnormal", 2.5))
+str(tight$metabeta$safeguards)
+bridge_sampler(tight)
+```
+
+# 5 What is not reproduced here {#not-reproduced}
+
+| Paper result | Why not | Where |
+|---|---|---|
+| NUTS, ADVI and Laplace rows of every table | baselines, not metabeta | `experiments/` (Python) |
+| Agreement with NUTS: r, σ-ratio, rank-MAD, ΔLOO-NLL (Tables B4–B6, B11 left half, C1, D1–D12 left halves, Table 2) | needs the NUTS reference fits | `experiments/evaluation/` |
+| Real-world test sets (Tables B4–B6, D10–D12) | built by a hierarchical bootstrap of 40 preprocessed datasets (Table F3) inside the Python research pipeline | `experiments/evaluation/real_posterior.py`, `condition_number.py` |
+| Marginal likelihood against bridge sampling (Table B9) | the reference is bridge sampling on NUTS draws | `experiments/posthoc/evidence.py` |
+| Warm-started NUTS (App. C.2, Table C5) | NUTS | `experiments/posthoc/warmstart_nuts.py` |
+| Prior-awareness check and emulated fixed prior (App. B.8, B.9) | probe the raw network with overwritten prior inputs, below the brms interface | `experiments/evaluation/prior_families.py`, `fixed_prior.py` |
+| GPU timings (Table B8, left) | `options(metabeta.device = "cuda")` runs on a GPU, but R adds its own overhead per fit | |
+| Survey and dataset tables (App. F.1, Table F3) | not metabeta results | `experiments/survey/` |
+
+# Session info
+
+```{r session}
+sessionInfo()
+reticulate::py_config()
+```

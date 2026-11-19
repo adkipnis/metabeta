@@ -1,0 +1,15 @@
+model,parameter,estimate,error,lower,upper,level
+m3.0,b_Intercept,-1.83,0.22,-2.28,-1.37,0.95
+m3.0,b_experienced_variance_riskyes,3.34,0.14,3.07,3.61,0.95
+m3.0,b_conditionStableenvironment,0.16,0.23,-0.30,0.62,0.95
+m3.0,b_z.trial,0.19,0.11,-0.01,0.41,0.95
+m3.1,b_Intercept,-1.91,0.24,-2.40,-1.45,0.95
+m3.1,b_experienced_variance_riskyes,3.47,0.18,3.13,3.82,0.95
+m3.1,b_conditionStableenvironment,0.35,0.29,-0.24,0.92,0.95
+m3.1,b_z.trial,0.20,0.11,-0.02,0.41,0.95
+m3.1,b_experienced_variance_riskyes:conditionStableenvironment,-0.32,0.27,-0.84,0.22,0.95
+m3.2,b_Intercept,-1.83,0.23,-2.28,-1.39,0.95
+m3.2,b_experienced_variance_riskyes,3.35,0.14,3.08,3.62,0.95
+m3.2,b_z.trial,0.17,0.14,-0.10,0.43,0.95
+m3.2,b_conditionStableenvironment,0.15,0.24,-0.31,0.63,0.95
+m3.2,b_experienced_variance_riskyes:z.trial,0.04,0.13,-0.23,0.30,0.95
