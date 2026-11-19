@@ -509,7 +509,6 @@ class Api:
         random_walk: LocalMoves | bool = False,
         evidence: bool = False,
         seed: int | None = None,
-        diagnostics: bool | None = None,  # deprecated alias of loo, removed in 0.7
         **prepare_kwargs: Any,
     ) -> RouterResult | list[RouterResult | None] | dict[Any, RouterResult | None]:
         """Sample from the posterior, routing each dataset to the smallest compatible submodel.
@@ -596,14 +595,6 @@ class Api:
         differently.
         """
 
-        if diagnostics is not None:
-            warnings.warn(
-                'diagnostics= is deprecated and will be removed in 0.7: every call now computes '
-                'the fit metric, and loo=True adds the LOO-NLL.',
-                FutureWarning,
-                skip_file_prefixes=INTERNAL_PREFIXES,
-            )
-            loo = loo or diagnostics
         method = {True: 'imh', False: None}.get(refine, refine)
         if method not in (None, 'imh', 'is'):
             raise ValueError(f"refine must be True, False, 'imh' or 'is' (got {refine!r})")
@@ -1165,7 +1156,7 @@ class Api:
         if not loo:
             return diags
 
-        # PSIS over every observation, the costly part, and the rest of what diagnostics=True gave
+        # PSIS over every observation, the costly part, then the PPC NLL and parameter summaries
         log_p = pp.log_prob(batch['y'].unsqueeze(-1))  # (B, m, n, S)
         ppc_nll = _predictive.posteriorPredictiveNLL(pp, batch, mode='mixture', log_p=log_p)
         loo_nll_vals, pareto_k_vals = _predictive.psisLooNLL(
@@ -2030,7 +2021,6 @@ class Api:
         plot_dir: Path | None = None,
         *,
         seed: int | None = None,
-        indices: Sequence[int] | None = None,  # deprecated alias of prior_ids, removed in 0.7
     ) -> None:
         """Plot posterior predictive densities for datasets in result.
 
@@ -2041,7 +2031,6 @@ class Api:
 
         pp, batch = _posteriorPredictive(result)
         b = int(batch['y'].shape[0])
-        prior_ids = _renamedArg('indices', indices, 'prior_ids', prior_ids)
         rows = range(b) if prior_ids is None else [_priorRow(result, p) for p in prior_ids]
         with _seeded(seed):
             _plotPPD(pp, batch, indices=list(rows), plot_dir=plot_dir)
@@ -2051,8 +2040,6 @@ class Api:
         result: RouterResult,
         prior_id: int | str = 0,
         with_prior: bool = True,
-        *,
-        index: int | None = None,  # deprecated alias of prior_id, removed in 0.7
         **kwargs: Any,
     ) -> Any:
         """Pair-grid of posterior parameter samples in original-scale units.
@@ -2069,7 +2056,7 @@ class Api:
             raise ValueError('RouterResult has no proposal; call sample() first')
         if result.scale_info is None:
             raise ValueError('RouterResult has no scale_info')
-        index = _priorRow(result, _renamedArg('index', index, 'prior_id', prior_id))
+        index = _priorRow(result, prior_id)
 
         prop = result.proposal
         si = result.scale_info
@@ -2122,7 +2109,6 @@ class Api:
         ci: float = 0.95,
         prior_id: int | str = 0,
         x_scale: str = 'original',
-        batch_index: int | None = None,  # deprecated alias of prior_id, removed in 0.7
     ) -> str:
         """Return a formatted posterior summary table for a sampled RouterResult.
 
@@ -2133,9 +2119,7 @@ class Api:
         """
         if result.proposal is None:
             raise ValueError('RouterResult has no proposal; call sample() first')
-        batch_index = _priorRow(
-            result, _renamedArg('batch_index', batch_index, 'prior_id', prior_id)
-        )
+        batch_index = _priorRow(result, prior_id)
         d = result.diagnostics or {}
         dims = (
             result.validation[batch_index]['dimensions']
@@ -2300,7 +2284,6 @@ class Api:
         ci: float = 0.95,
         prior_id: int | str = 0,
         x_scale: str = 'original',
-        batch_index: int | None = None,  # deprecated alias of prior_id, removed in 0.7
     ) -> str:
         """Return a formatted per-group random effects summary for a sampled RouterResult.
 
@@ -2311,9 +2294,7 @@ class Api:
         """
         if result.proposal is None:
             raise ValueError('RouterResult has no proposal; call sample() first')
-        batch_index = _priorRow(
-            result, _renamedArg('batch_index', batch_index, 'prior_id', prior_id)
-        )
+        batch_index = _priorRow(result, prior_id)
         fmt = 'github'
         alpha = (1 - ci) / 2
         lo_pct = f'{alpha * 100:g}%'
@@ -2402,20 +2383,6 @@ def _resolveXScale(x_scale: str, scale_info: 'ScaleInfo | None') -> str:
         )
         return 'standardized'
     return x_scale
-
-
-def _renamedArg(old: str, old_value: Any, new: str, new_value: Any) -> Any:
-    """The value of an argument renamed to ``new``, warning while callers still pass ``old``
-    (removed in 0.7, #32)."""
-    if old_value is None:
-        return new_value
-    warnings.warn(
-        f'{old}= is deprecated and will be removed in 0.7: use {new}=, which also takes a '
-        'prior name.',
-        FutureWarning,
-        skip_file_prefixes=INTERNAL_PREFIXES,
-    )
-    return old_value
 
 
 def _asContainer(data: Any) -> list[Hashable] | None:

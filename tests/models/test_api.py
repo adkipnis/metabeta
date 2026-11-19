@@ -954,26 +954,6 @@ def test_prior_id_takes_a_prior_name(api: Api):
         api.posteriorSummary(result, prior_id='medium')
 
 
-def test_renamed_row_arguments_warn_and_still_work(api: Api, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(plt, 'show', lambda: None)
-    result = api.sample(
-        _sleepstudy(),
-        formula='Reaction ~ Days + (1 | Subject)',
-        n_samples=64,
-        fit_preprocessor=True,
-    )
-
-    with pytest.warns(FutureWarning, match='use prior_id='):
-        assert api.posteriorSummary(result, batch_index=0) == api.posteriorSummary(result)
-    with pytest.warns(FutureWarning, match='use prior_id='):
-        assert api.rfxSummary(result, batch_index=0) == api.rfxSummary(result)
-    with pytest.warns(FutureWarning, match='use prior_id='):
-        api.plotParameters(result, index=0)
-    with pytest.warns(FutureWarning, match='use prior_ids='):
-        api.plotPPD(result, indices=[0])
-    plt.close('all')
-
-
 def test_sample_seed_reproduces_the_draws_and_keeps_the_callers_stream(api: Api):
     df, formula = _sleepstudy(), 'Reaction ~ Days + (1 | Subject)'
     torch.manual_seed(0)
