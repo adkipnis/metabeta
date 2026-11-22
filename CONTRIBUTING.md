@@ -17,7 +17,7 @@ approach first.
 
 ## Set up
 
-You need [uv](https://docs.astral.sh/uv/), and R for `rpy2` in the research stack.
+You need [uv](https://docs.astral.sh/uv/).
 
 ```
 git clone https://github.com/adkipnis/metabeta
@@ -28,7 +28,8 @@ uv run pytest                        # the fast tests
 uv run blue --check metabeta tests   # the formatting that CI checks
 ```
 
-- **Without R**: install what CI installs, `uv sync --no-default-groups --group dev`, then run
+- **Without the research stack**: install what CI installs,
+  `uv sync --no-default-groups --group dev`, then run
   `uv run --no-sync pytest tests/models tests/evaluation tests/utils`.
 - **Slow tests**: `uv run pytest -m slow` needs local checkpoints and data under
   `metabeta/outputs/`.

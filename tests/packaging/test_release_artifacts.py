@@ -56,11 +56,9 @@ SDIST_EXCLUDED_PREFIXES = (
 )
 
 RESEARCH_ONLY_DEPS = {
-    'bambi',
-    'datasets',
     'pmlb',
     'pymc',
-    'rpy2',
+    'pytensor',
     'schedulefree',
     'statsmodels',
     'ucimlrepo',
@@ -74,6 +72,16 @@ DEV_ONLY_DEPS = {
 REPO_ONLY_DEPS = {
     'scamd',
 }
+
+# pytensor 3.3.4 is the first with the macOS linker fix (pymc-devs/pytensor#2268)
+NUTS_FLOORS = {
+    'arviz': '>=1.3.0',
+    'pymc': '>=6.3.2',
+    'pytensor': '>=3.3.4',
+}
+
+# rpy2 needs R, and the two bambi scripts run with `uv run --with bambi`
+DROPPED_RESEARCH_DEPS = {'bambi', 'datasets', 'rpy2'}
 
 # Colab's preinstalled versions (Python 3.13); a higher floor makes pip replace them, and
 # arviz 1.x breaks Colab's pymc, which needs arviz<1
@@ -136,7 +144,6 @@ def test_release_metadata_dependencies() -> None:
     metadata = _metadata()
     requirements = metadata.get_all('Requires-Dist') or []
     base_requirements = [req for req in requirements if 'extra ==' not in req]
-    research_requirements = [req for req in requirements if 'extra == "research"' in req]
 
     for dep in RESEARCH_ONLY_DEPS:
         assert not any(req.lower().startswith(dep) for req in base_requirements), dep
@@ -148,7 +155,20 @@ def test_release_metadata_dependencies() -> None:
     assert not metadata.get_all('Provides-Extra') or 'simulation' not in metadata.get_all(
         'Provides-Extra'
     )
-    assert any(req.startswith('pymc') for req in research_requirements)
+
+
+def test_release_metadata_extras() -> None:
+    _require_artifacts()
+
+    requirements = [Requirement(req) for req in _metadata().get_all('Requires-Dist')]
+    nuts = {
+        req.name: str(req.specifier) for req in requirements if str(req.marker) == 'extra == "nuts"'
+    }
+    research = {req.name: req for req in requirements if str(req.marker) == 'extra == "research"'}
+
+    assert nuts == NUTS_FLOORS
+    assert research['metabeta'].extras == {'nuts'}
+    assert not DROPPED_RESEARCH_DEPS & research.keys()
 
 
 def test_release_metadata_installs_next_to_colab() -> None:
@@ -157,13 +177,11 @@ def test_release_metadata_installs_next_to_colab() -> None:
     metadata = _metadata()
     requirements = [Requirement(req) for req in metadata.get_all('Requires-Dist')]
     core = {req.name: str(req.specifier) for req in requirements if req.marker is None}
-    research = {req.name for req in requirements if str(req.marker) == 'extra == "research"'}
 
     assert metadata['Requires-Python'] == '>=3.12'
     for name, floor in COLAB_FLOORS.items():
         assert core.get(name) == floor, name
     assert 'arviz' not in core
-    assert 'arviz' in research
 
 
 def test_release_metadata_license() -> None:

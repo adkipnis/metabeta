@@ -22,8 +22,8 @@ jobs:
     name: Python ${{ matrix.python }}
     runs-on: ubuntu-latest
 
-    # the project's default-groups pull in the research extra (rpy2 needs R in PATH,
-    # pymc/scamd are heavy); CI only needs the core package + dev tooling,
+    # the project's default-groups pull in the research extra and scamd (both heavy);
+    # CI only needs the core package + dev tooling,
     # so both installs leave the defaults out and no later uv call syncs
     env:
       UV_PYTHON: ${{ matrix.python }}

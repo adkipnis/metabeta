@@ -54,7 +54,8 @@ Output
 WarmNuts.__call__ returns a Proposal with b=1 and n_chains * draws samples.
 runWarmNuts refines the flow proposal with IMH first (mode='marginal' for
 Normal, 'laplace' for GLMMs), then stacks per-dataset proposals along the
-batch dimension.
+batch dimension.  nutsRows (behind Api.nuts) runs every row of a collated batch
+once, without the cold rerun, and returns the draws at the batch's padding.
 """
 
 from __future__ import annotations
@@ -69,6 +70,7 @@ from torch import Tensor
 from metabeta.models.approximator import Approximator
 from metabeta.utils.constants import hasSigmaEps
 from metabeta.utils.pymc import buildPymc, extractAll
+from metabeta.utils.regularization import corrToLower
 from metabeta.utils.results import Proposal
 
 if TYPE_CHECKING:
@@ -108,6 +110,7 @@ class WarmNuts:
         escalate_rhat: float = ESCALATE_RHAT,
         escalate_ess: float = ESCALATE_ESS,
         escalate_tune: int = 2000,
+        progressbar: bool = False,
     ) -> None:
         """
         Parameters
@@ -150,6 +153,8 @@ class WarmNuts:
         escalate_tune : int
             Tuning steps for the escalated run (default 2000; draws stay at
             ``draws`` so the sample count is unchanged for cache compatibility).
+        progressbar : bool
+            Show PyMC's progress bar (default False).
         """
         self.ds = ds
         self.n_chains = n_chains
@@ -164,6 +169,7 @@ class WarmNuts:
         self.escalate_rhat = escalate_rhat
         self.escalate_ess = escalate_ess
         self.escalate_tune = escalate_tune
+        self.progressbar = progressbar
 
         self.d = int(ds['d'])
         self.q = int(ds['q'])
@@ -440,10 +446,10 @@ class WarmNuts:
     ) -> az.InferenceData:
         try:
             return self._pmSample(tune, seed, initvals, potential)
-        except Exception as e:
-            # rare model-specific worker crashes (pipe EOFError) in PyMC's
-            # multiprocess path; the same model samples fine in-process
-            print(f'  parallel sampling failed ({type(e).__name__}); retrying with cores=1')
+        except EOFError:
+            # rare model-specific worker crashes in PyMC's multiprocess path (the pipe closes,
+            # logged in the Poisson ablation); the same model samples fine in-process
+            print('  parallel sampling failed (EOFError); retrying with cores=1')
             return self._pmSample(tune, seed, initvals, potential, cores=1)
 
     def _pmSample(
@@ -481,32 +487,24 @@ class WarmNuts:
                 initvals=initvals,
                 random_seed=seed,
                 return_inferencedata=True,
-                progressbar=False,
+                progressbar=self.progressbar,
                 **kwargs,
             )
 
     def _diagFromTrace(self, trace: az.InferenceData) -> dict:
         import arviz as az
 
-        n_divs = int(trace.sample_stats['diverging'].values.sum())
         n_draws_total = self.n_chains * self.draws
-        try:
+        # the correlation matrix's diagonal is constant 1, so its R-hat is 0/0: NaN, which the
+        # max and min below skip, without numpy's warning
+        with np.errstate(invalid='ignore', divide='ignore'):
             df = az.summary(trace, kind='diagnostics')
-            max_rhat = float(df['r_hat'].max())
-            min_ess = float(df['ess_bulk'].min())
-            min_ess_t = float(df['ess_tail'].min())
-            reff = float(df['ess_bulk'].mean() / n_draws_total)
-        except Exception:
-            max_rhat = float('nan')
-            min_ess = float('nan')
-            min_ess_t = float('nan')
-            reff = 1.0
         return {
-            'n_divergences': n_divs,
-            'max_rhat': max_rhat,
-            'min_ess': min_ess,
-            'min_ess_t': min_ess_t,
-            'reff': reff,
+            'n_divergences': int(trace.sample_stats['diverging'].values.sum()),
+            'max_rhat': float(df['r_hat'].max()),
+            'min_ess': float(df['ess_bulk'].min()),
+            'min_ess_t': float(df['ess_tail'].min()),
+            'reff': float(df['ess_bulk'].mean() / n_draws_total),
         }
 
     def _needsEscalation(self, diag: dict) -> bool:
@@ -623,6 +621,94 @@ def _stackProposals(
         merged._corr_rfx = torch.cat(stacked, dim=0)   # (B, n_s, max_q, max_q)
 
     return merged
+
+
+# ---------------------------------------------------------------------------
+# Every row of a collated batch (Api.nuts)
+# ---------------------------------------------------------------------------
+
+
+def _rowDataset(batch: dict[str, torch.Tensor], row: int) -> dict[str, np.ndarray]:
+    """One row of a collated batch, unpadded, as the dict buildPymc reads."""
+    d, q = int(batch['mask_d'][row].sum()), int(batch['mask_q'][row].sum())
+    mask = batch['mask_n'][row].bool()   # (m, n)
+    groups = torch.arange(mask.shape[0]).unsqueeze(-1).expand_as(mask)[mask]   # (n_obs,)
+    ds = {
+        'y': batch['y'][row][mask].numpy(),  # (n_obs,)
+        'X': batch['X'][row][mask][:, :d].numpy(),  # (n_obs, d)
+        'groups': groups.numpy(),
+        'd': d,
+        'q': q,
+        'm': int(batch['m'][row]),
+        'nu_ffx': batch['nu_ffx'][row, :d].numpy(),
+        'tau_ffx': batch['tau_ffx'][row, :d].numpy(),
+        'tau_rfx': batch['tau_rfx'][row, :q].numpy(),
+        'eta_rfx': float(batch['eta_rfx'][row]),
+        'likelihood_family': int(batch['likelihood_family'][row]),
+    }
+    for key in ('family_ffx', 'family_sigma_rfx', 'family_sigma_eps'):   # eps: Gaussian only
+        if key in batch:
+            ds[key] = int(batch[key][row])
+    if 'tau_eps' in batch:
+        ds['tau_eps'] = float(batch['tau_eps'][row])
+    return ds
+
+
+def nutsRows(
+    batch: dict[str, torch.Tensor],
+    model_draws: Proposal,
+    *,
+    warmup: int,
+    draws: int,
+    chains: int,
+    target_accept: float,
+    seed: int | None,
+) -> tuple[Proposal, dict[str, np.ndarray]]:
+    """Warm-started NUTS on every row of a collated CPU batch, in row order, without the cold
+    rerun.
+
+    ``model_draws`` holds the rows' draws on the model's standardized scale and in its layout
+    (``[ffx, sigma_rfx, sigma_eps, corr]`` at the batch's padding), which seed the chains and the
+    mass matrix.  An integer ``seed`` derives one stream per row.  Returns the NUTS draws in the
+    same layout and padding, and per row the max R-hat, the min bulk and tail ESS and the
+    divergences.
+    """
+    rows = int(batch['X'].shape[0])
+    seeds = [int(s.generate_state(1)[0]) for s in np.random.SeedSequence(seed).spawn(rows)]
+    fits, diags = [], []
+    for row in range(rows):
+        fit, diag = WarmNuts(
+            _rowDataset(batch, row),
+            n_chains=chains,
+            tune=warmup,
+            draws=draws,
+            seed=seeds[row],
+            target_accept=target_accept,
+            escalate=False,
+            progressbar=True,
+        )(model_draws, b_idx=row)
+        fits.append(fit)
+        diags.append(diag)
+
+    stacked = _stackProposals(fits, target_d=model_draws.d, target_q=model_draws.q)
+    samples_g = stacked.samples_g   # (B, S, d + q (+ 1))
+    if model_draws.d_corr:
+        samples_g = torch.cat([samples_g, corrToLower(stacked.corr_rfx)], dim=-1)
+    out = Proposal(
+        {
+            'global': {'samples': samples_g, 'log_prob': stacked.log_prob_g},
+            'local': {'samples': stacked.samples_l, 'log_prob': stacked.log_prob_l},
+        },
+        has_sigma_eps=stacked.has_sigma_eps,
+        d_corr=model_draws.d_corr,
+    ).resizeGroups(int(batch['mask_n'].shape[1]))
+    out.reff = stacked.reff
+    return out, {
+        'rhat_max': np.array([diag['max_rhat'] for diag in diags]),
+        'ess_bulk_min': np.array([diag['min_ess'] for diag in diags]),
+        'ess_tail_min': np.array([diag['min_ess_t'] for diag in diags]),
+        'divergences': np.array([diag['n_divergences'] for diag in diags]),
+    }
 
 
 # ---------------------------------------------------------------------------

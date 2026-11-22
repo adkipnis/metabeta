@@ -13,7 +13,7 @@ Only uncorrelated datasets are tested because bambi v0.17.2 does not support
 correlated random effects.
 
 Usage (from repo root):
-    uv run python experiments/simulation/bambi_equivalence.py [--data_id tiny-n-toy] [--n_datasets 10] [--n_points 50]
+    uv run --with bambi python experiments/simulation/bambi_equivalence.py [--data_id tiny-n-toy] [--n_datasets 10] [--n_points 50]
 """
 
 import argparse

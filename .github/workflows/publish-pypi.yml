@@ -13,7 +13,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
-    # skip the project's default-groups (research needs R on PATH for rpy2)
+    # skip the project's default-groups (the build needs neither the research stack nor scamd)
     env:
       UV_SYNC_FLAGS: --no-default-groups --group dev
 

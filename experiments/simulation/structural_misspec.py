@@ -14,12 +14,12 @@ NUTS fits are cached per (config, seed, scale, dataset_index, draws, tune, chain
 in ``results/structural_fits/``.  Re-run with ``--refit`` to recompute.
 
 Usage (from repo root):
-    uv run python experiments/posthoc/structural_misspec.py
-    uv run python experiments/posthoc/structural_misspec.py --configs small-n-sampled
-    uv run python experiments/posthoc/structural_misspec.py --scales 0.0 0.25 0.5 1.0 2.0
-    uv run python experiments/posthoc/structural_misspec.py --max_datasets 8 --nuts_draws 500
-    uv run python experiments/posthoc/structural_misspec.py --refit
-    uv run python experiments/posthoc/structural_misspec.py --seed 123
+    uv run --with bambi python experiments/simulation/structural_misspec.py
+    uv run --with bambi python experiments/simulation/structural_misspec.py --configs small-n-sampled
+    uv run --with bambi python experiments/simulation/structural_misspec.py --scales 0.0 0.25 0.5 1.0 2.0
+    uv run --with bambi python experiments/simulation/structural_misspec.py --max_datasets 8 --nuts_draws 500
+    uv run --with bambi python experiments/simulation/structural_misspec.py --refit
+    uv run --with bambi python experiments/simulation/structural_misspec.py --seed 123
 
 TODO (IS correction under structural misspecification, moderate effort):
     Currently only the raw amortized metabeta posterior is compared to NUTS.
