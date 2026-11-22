@@ -165,6 +165,14 @@ When `sample` still warns after more draws (`n_samples`), or warns about the pri
   stays, so check the fit against NUTS.
 - **A prior outside the trained range**: fit with NUTS, or choose a prior inside the range.
 
+`nuts` refits a result with NUTS, warm-started from its draws:
+
+```python
+# pip install "metabeta[nuts]"
+refit = mb.nuts(result)
+print(mb.posteriorSummary(refit))
+```
+
 `02-families` compares a Poisson fit with NUTS.
 
 </details>
