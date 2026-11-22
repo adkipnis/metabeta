@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Hashable, Iterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, TypeVar, overload
 import contextlib
@@ -33,6 +33,7 @@ from metabeta.posthoc.metropolis import (
     MetropolisSampler,
     suggestPoolSize,
 )
+from metabeta.posthoc.warmnuts import nutsRows
 from metabeta.utils.config import ApproximatorConfig
 from metabeta.utils.constants import LIKELIHOOD_FAMILIES, hasSigmaEps
 from metabeta.utils.dataloader import (
@@ -190,6 +191,9 @@ class RouterResult:
     # scale and in its layout, from which plotPPD and posteriorPredictive build the posterior
     # predictive on demand
     _model_draws: Proposal | None = field(default=None, repr=False)
+    # the permutation from the model's fixed-effect layout to the formula's order, which
+    # nuts applies to its draws as sample does
+    _ffx_order: list[int] | None = field(default=None, repr=False)
 
 
 @dataclass
@@ -542,15 +546,15 @@ class Api:
         expected to reach the
         calibration-validated effective-draw target at the measured acceptance) are
         reported in ``RouterResult.safeguards``; datasets with mean acceptance below
-        ``IMH_ACCEPT_WARN`` trigger a warning recommending the suggested size or exact
-        MCMC.  The IMH can only revisit pool members, so where the flow lacks tail mass its
+        ``IMH_ACCEPT_WARN`` trigger a warning recommending the suggested size or NUTS
+        (``nuts``, warm-started from the result).  The IMH can only revisit pool members, so where the flow lacks tail mass its
         chains repeat few states and the refined sample can be too narrow until n_samples is large;
         datasets whose minimum bulk ESS over the global parameters falls below
         ``IMH_ESS_WARN`` are flagged with a warning.  ``random_walk=True`` continues the IMH
         on the flagged datasets with pseudo-marginal random-walk moves on the same target
         (posthoc/metropolis.py, ``LocalMoves``; ``RANDOM_WALK_DEFAULT``, by device).  The
         moves may not close the gap, so the datasets they ran on still warn, recommending a
-        check against exact MCMC: both modes flag the same datasets (``imhFlagged``).  A
+        check against NUTS (``nuts``): both modes flag the same datasets (``imhFlagged``).  A
         ``LocalMoves`` instance sets them, and its own gate, explicitly.  Per dataset, the safeguards record
         the flag ('ess_flag'), whether the moves ran ('random_walk_ran') and their acceptance
         ('random_walk_accept', NaN where they did not run).
@@ -775,6 +779,7 @@ class Api:
             safeguards=safeguards,
             evidence=out['evidence'],
             _model_draws=model_draws,
+            _ffx_order=meta.ffx_order,
         )
 
     def _sampleChunk(
@@ -836,6 +841,9 @@ class Api:
         def named(rows: np.ndarray) -> str:
             return _listed([labels[i] for i in rows])
 
+        nuts = 'NUTS: Api.nuts(result)'
+        check = 'Remedy: check against NUTS, Api.nuts(result)'
+
         def warn(rows: np.ndarray, header: str, values: str, remedy: str) -> None:
             if rows.size:
                 warnings.warn(
@@ -868,7 +876,7 @@ class Api:
                 'Remedies, in order:\n'
                 '  1. more draws: n_samples of at least '
                 f'{listed(accept, sg["suggested_n_samples"], ".0f")}{respectively}\n'
-                '  2. exact MCMC, e.g. NUTS',
+                f'  2. {nuts}',
             )
             warn(
                 ess,
@@ -879,7 +887,7 @@ class Api:
                 '  1. more draws (n_samples)\n'
                 f'  2. {walk}'
                 + (f' (may not suffice for {named(low)})' if low.size else '')
-                + '\n  3. exact MCMC, e.g. NUTS',
+                + f'\n  3. {nuts}',
             )
             warn(
                 moved,
@@ -888,8 +896,7 @@ class Api:
                 f'{listed(moved, ess_min, ".0f")} (warns below {e_max}).',
                 'The moves may not close the gap'
                 + (f', least of all for {named(low_moved)}' if low_moved.size else '')
-                + ', so the intervals can still be too narrow.\n'
-                'Remedy: check against exact MCMC, e.g. NUTS.',
+                + f', so the intervals can still be too narrow.\n{check}.',
             )
         for key, header, remedy in (
             (
@@ -907,8 +914,7 @@ class Api:
                 rows,
                 header,
                 f':{found}',
-                'The network extrapolates there, so the posterior can be off.\n'
-                f'Remedy: check against exact MCMC, e.g. NUTS{remedy}.',
+                f'The network extrapolates there, so the posterior can be off.\n{check}{remedy}.',
             )
         if 'psis_fallback' in sg:
             rows = np.flatnonzero(sg['psis_fallback'])
@@ -918,7 +924,7 @@ class Api:
                 f' (k̂ = {listed(rows, sg["psis_k"], ".2f")} > {sg["psis_k_threshold"]:g}): '
                 'the posterior approximation may be inaccurate and the importance correction '
                 'is not applicable, so the raw posterior was returned there.',
-                'Treat those results with caution and consider exact MCMC (e.g. NUTS) instead.',
+                f'{check}.',
             )
         if evidence is not None:
             rows = np.flatnonzero(evidence['psis_flag'])
@@ -940,8 +946,7 @@ class Api:
                 ': max |posterior mean − MAP| / posterior SD = '
                 f'{listed(rows, sg["map_z"], ".1f")} > {sg["map_z_threshold"]:g}.',
                 'The posterior disagrees with the analytical point estimates, so the data may '
-                'lie outside what the network was trained on.\n'
-                'Remedy: exact MCMC, e.g. NUTS.',
+                f'lie outside what the network was trained on.\n{check}.',
             )
 
     @staticmethod
@@ -1137,6 +1142,85 @@ class Api:
             validation=validation,
             log_probs=log_probs,
             safeguards=flags,
+        )
+
+    def nuts(
+        self,
+        result: RouterResult,
+        *,
+        warmup: int = 1000,
+        draws: int = 1000,
+        chains: int = 4,
+        target_accept: float = 0.8,
+        seed: int | None = None,
+    ) -> RouterResult:
+        """Refit a ``sample`` result with the No-U-Turn Sampler (NUTS) and return a new
+        ``RouterResult``, which every report reads; the input stays as it was.
+
+        Needs PyMC: ``pip install "metabeta[nuts]"``.
+
+        ``result`` comes from ``sample`` under any ``refine``; pass a container's results one by
+        one.  NUTS fits each row (dataset × prior) in row order, on the data, formula and priors
+        the model saw: ``warmup`` tuning steps, then ``draws`` draws in each of ``chains``
+        chains, with a maximum tree depth of 12 and PyMC's default number of cores.
+        The warm start sets each chain's start point to one of the result's draws and the
+        diagonal mass matrix to their variance, and the tuning adapts both further.
+
+        The new result holds ``chains * draws`` draws per row, on the data's scale and in the
+        formula's order, as ``sample`` returns them.  Its ``safeguards`` replace ``sample``'s
+        checks with ``refine_method='nuts'`` and, per row and over every sampled parameter, the
+        max R-hat ('rhat_max'), the min bulk and tail ESS ('ess_bulk_min', 'ess_tail_min') and
+        the number of divergent transitions ('divergences'); the summary footer prints them.
+        The fit metric, and the LOO metrics of a ``loo=True`` result, are recomputed on the NUTS
+        draws.  ``evidence`` is None.
+
+        NUTS runs on the CPU whatever the device.  The first fit in a process spends about half
+        a minute compiling the model; later fits take seconds.  PyMC prints its progress bar and
+        its warnings, and the call adds none.  Remedies for a poor run:
+
+        - **R-hat above 1.01 or a low ESS** (Vehtari et al., 2021): more ``warmup`` and ``draws``.
+        - **Divergences:** a higher ``target_accept``, e.g. 0.95.
+
+        An integer ``seed`` reproduces the call, with one random stream per row.
+        """
+        try:
+            import pymc  # noqa: F401
+        except ImportError as exc:
+            raise ImportError('Api.nuts needs PyMC: pip install "metabeta[nuts]"') from exc
+        if not isinstance(result, RouterResult):
+            raise TypeError(f'nuts takes a RouterResult, got {type(result).__name__}')
+        if result._model_draws is None or result.batch is None:
+            raise ValueError('nuts needs a result with draws: pass the result of sample()')
+
+        batch = result.batch
+        proposal, safeguards = nutsRows(
+            batch,
+            result._model_draws,
+            warmup=warmup,
+            draws=draws,
+            chains=chains,
+            target_accept=target_accept,
+            seed=seed,
+        )
+        # the rescaling and the reordering below replace these tensors and leave them intact
+        model_draws = Proposal(
+            {'global': {'samples': proposal.samples_g}, 'local': {'samples': proposal.samples_l}},
+            has_sigma_eps=proposal.has_sigma_eps,
+            d_corr=proposal.d_corr,
+        )
+        loo = 'loo_nll_vals' in (result.diagnostics or {})
+        diags = self._finishDiagnostics(batch, self._computeDiagnostics(proposal, batch, loo=loo))
+        self._rescaleProposal(proposal, batch)
+        safeguards = {'refine_method': 'nuts'} | safeguards
+        # the input's prior parameters are in the formula's order already
+        self._restoreFixedOrder(proposal, {}, diags, safeguards, result._ffx_order)
+        return replace(
+            result,
+            proposal=proposal,
+            diagnostics=diags,
+            safeguards=safeguards,
+            evidence=None,
+            _model_draws=model_draws,
         )
 
     def _computeDiagnostics(
@@ -2144,6 +2228,16 @@ class Api:
         accept = at(sg.get('accept_rate'))
         ess_min = at(sg.get('ess_min'))
         random_walk = at(sg.get('random_walk_ran'), False)
+        nuts = (
+            (
+                at(sg['rhat_max']),
+                at(sg['ess_bulk_min']),
+                at(sg['ess_tail_min']),
+                at(sg['divergences']),
+            )
+            if sg.get('refine_method') == 'nuts'
+            else None
+        )
         return posteriorTable(
             result.proposal,
             result.param_names,
@@ -2157,6 +2251,7 @@ class Api:
             accept_rate=accept,
             ess_min=ess_min,
             random_walk=random_walk,
+            nuts=nuts,
             psis_k=psis_k,
             psis_k_threshold=sg.get('psis_k_threshold', PSIS_K_THRESHOLD),
             map_z=map_z,
@@ -2753,6 +2848,7 @@ def posteriorTable(
     accept_rate: float | None = None,
     ess_min: float | None = None,
     random_walk: bool = False,
+    nuts: tuple[float, float, float, int] | None = None,
     psis_k: float | None = None,
     psis_k_threshold: float = PSIS_K_THRESHOLD,
     map_z: float | None = None,
@@ -2770,7 +2866,8 @@ def posteriorTable(
     Deviations (sigma_rfx + residual), and Correlations (posterior mean, when
     q > 1).  For per-group random effects use ``Api.rfxSummary()``.
     Contraction requires ``prior_params`` (populated automatically by
-    ``Api.sample()``).  LOO-NLL and LOO k̂ require ``loo=True``.
+    ``Api.sample()``).  LOO-NLL and LOO k̂ require ``loo=True``.  ``nuts`` holds the max R-hat,
+    the min bulk and tail ESS and the divergences of an ``Api.nuts`` result.
     """
     fmt = 'github'
     alpha = (1 - ci) / 2
@@ -2930,6 +3027,13 @@ def posteriorTable(
     # ── footer ────────────────────────────────────────────────────────────────
     # safeguards first, then the fit metrics
     footer_parts = [f'draws = {S}']
+    if nuts is not None:
+        rhat, ess_bulk, ess_tail, divergences = nuts
+        footer_parts += [
+            f'max R-hat = {rhat:.3f}',
+            f'min ESS = {ess_bulk:.0f} bulk, {ess_tail:.0f} tail',
+            f'divergences = {divergences}',
+        ]
     if accept_rate is not None:
         footer_parts.append(f'acceptance = {accept_rate:.2f}')
     if ess_min is not None:
