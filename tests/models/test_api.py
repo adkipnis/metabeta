@@ -3,6 +3,7 @@
 Every test goes through `Api` on the tiny-Approximator joint checkpoint, never a private helper.
 """
 
+import copy
 import dataclasses
 import functools
 import inspect
@@ -10,6 +11,7 @@ import logging
 import os
 from pathlib import Path
 import re
+import sys
 import warnings
 
 import matplotlib
@@ -529,6 +531,34 @@ def _warningsOf(call) -> tuple[object, list[warnings.WarningMessage]]:
     return result, caught
 
 
+_NUTS_REMEDY = 'Remedy: check against NUTS, Api.nuts(result).'
+
+
+@pytest.mark.parametrize(
+    ('kwargs', 'lead', 'remedy'),
+    [
+        ({}, 'Low IMH acceptance', '\n  2. NUTS: Api.nuts(result)'),
+        ({}, 'Low effective sample size', '\n  3. NUTS: Api.nuts(result)'),
+        (dict(refine='is'), 'PSIS reliability', _NUTS_REMEDY),
+        (dict(map_z_threshold=0.0), 'MAP check failed', _NUTS_REMEDY),
+        (
+            dict(evidence=True),
+            'Evidence reliability',
+            'Treat those values with caution and consider bridge sampling on exact MCMC '
+            '(e.g. NUTS) draws instead.',
+        ),
+    ],
+    ids=['acceptance', 'ess', 'psis', 'map', 'evidence'],
+)
+def test_safeguard_warnings_end_with_the_nuts_call(api: Api, kwargs, lead: str, remedy: str):
+    _, caught = _warningsOf(
+        lambda: api.sample(_sleepstudy(), formula=_FORMULA, n_samples=64, seed=0, **kwargs)
+    )
+
+    (warning,) = [w for w in caught if str(w.message).startswith(lead)]
+    assert str(warning.message).endswith(remedy)
+
+
 def test_low_ess_warning_suggests_more_draws_and_points_at_the_call(api: Api):
     _, caught = _warningsOf(
         lambda: api.sample(
@@ -544,7 +574,6 @@ def test_low_ess_warning_suggests_more_draws_and_points_at_the_call(api: Api):
     assert '\n  1. ' in str(ess.message)  # the remedies, one per numbered line
     assert 'random_walk=True' in str(ess.message)
     assert 'do not fix' not in str(ess.message)
-    assert 'warm-started' not in str(ess.message)  # no public route to a warm-started NUTS yet
     assert ess.filename == __file__
 
 
@@ -583,7 +612,7 @@ def test_random_walk_rows_still_warn_with_a_nuts_check(api: Api):
     chain = [w for w in caught if 'ESS' in str(w.message) or 'acceptance' in str(w.message)]
     (line,) = chain
     assert 'Random-walk moves ran' in str(line.message)
-    assert 'NUTS' in str(line.message)
+    assert str(line.message).endswith(_NUTS_REMEDY)
     assert 'random_walk=True' not in str(line.message)
     assert line.filename == __file__
     assert _footer(api.posteriorSummary(result))['min ESS'].endswith('(random-walk moves ran)')
@@ -632,7 +661,7 @@ def test_random_walk_mode_flags_the_rows_the_default_mode_flags():
     message = moves['Random-walk moves ran after a weak IMH']
     assert "['ess', 'very low ess', 'low acceptance']" in message
     assert "least of all for ['very low ess']" in message
-    assert 'NUTS' in message and 'random_walk=True' not in message
+    assert message.endswith(_NUTS_REMEDY) and 'random_walk=True' not in message
     assert "['unmoved']" in moves['Low IMH acceptance']
 
 
@@ -651,7 +680,7 @@ def test_default_priors_stay_quiet_and_out_of_range_priors_warn(api: Api):
     assert wide.validation[0]['prior_outside'] == 'tau_ffx 100 outside [0.0015, 44.35]'
     (prior,) = [w for w in caught if 'trained on' in str(w.message)]
     assert 'tau_ffx 100 outside [0.0015, 44.35]' in str(prior.message)
-    assert 'NUTS' in str(prior.message)
+    assert str(prior.message).endswith(_NUTS_REMEDY[:-1] + ', or a prior inside it.')
     assert prior.filename == __file__
 
 
@@ -740,7 +769,7 @@ def test_data_larger_than_the_training_data_is_fitted_and_warns(api: Api):
     assert large.validation[0]['size_outside'] == 'm=210 > max_m=200'
     (size,) = [w for w in caught if 'larger than the network' in str(w.message)]
     assert 'm=210 > max_m=200' in str(size.message)
-    assert 'NUTS' in str(size.message)
+    assert str(size.message).endswith(_NUTS_REMEDY)
     assert size.filename == __file__
 
     small, caught = _warningsOf(lambda: api.sample(_sleepstudy(), **kwargs))
@@ -1747,3 +1776,146 @@ def test_sample_documents_containers_the_skip_rule_and_seed():
     assert 'list' in doc and 'dict' in doc
     assert '``None``' in doc and 'skipped' in doc
     assert 'seed' in doc and 'batched and a separate call' in doc
+
+
+# ----------------------------------------------------------------------------------------
+# Api.nuts
+# ----------------------------------------------------------------------------------------
+
+
+def test_nuts_without_pymc_names_the_extra(api: Api, monkeypatch: pytest.MonkeyPatch):
+    result = api.sample(_sleepstudy(), formula=_FORMULA, n_samples=8, fit_preprocessor=True)
+    monkeypatch.setitem(sys.modules, 'pymc', None)  # `import pymc` raises ImportError
+
+    with pytest.raises(ImportError, match=re.escape('pip install "metabeta[nuts]"')):
+        api.nuts(result)
+
+
+def test_nuts_rejects_a_non_result_and_a_result_without_draws(api: Api):
+    pytest.importorskip('pymc')
+    df = _sleepstudy()
+
+    with pytest.raises(TypeError, match='RouterResult'):
+        api.nuts(df)
+    with pytest.raises(ValueError, match='sample'):
+        api.nuts(api.forward(df, formula=_FORMULA))
+
+
+_NUTS_FORMULA = 'Reaction ~ Noise + Days + (1 + Days | Subject)'  # the slope after Noise
+_NUTS_SMALL = dict(warmup=50, draws=50, chains=2, seed=0)
+
+
+_NUTS_PRIORS = {'default': None, 'noise': {'fixed': {'Noise': {'tau': 0.5}}}}
+
+
+@pytest.fixture(scope='module')
+def nuts_fit(api: Api) -> tuple[object, object, dict]:
+    """A sample result under two priors, its NUTS refit with small settings, and the result's
+    draws and safeguards before the refit."""
+    pytest.importorskip('pymc')
+    df = _sleepstudy(Noise=np.random.default_rng(1).normal(size=120))
+    result = api.sample(
+        df, formula=_NUTS_FORMULA, priors=_NUTS_PRIORS, n_samples=64, fit_preprocessor=True, seed=0
+    )
+    before = {
+        'draws': {prior: api.posteriorDraws(result, prior_id=prior) for prior in _NUTS_PRIORS},
+        'safeguards': copy.deepcopy(result.safeguards),
+    }
+    return result, api.nuts(result, **_NUTS_SMALL), before
+
+
+def test_nuts_returns_chains_times_draws_per_prior_in_the_formula_order(api: Api, nuts_fit):
+    result, nuts, _ = nuts_fit
+
+    assert nuts.proposal.samples_g.shape[0] == 2
+    for prior in _NUTS_PRIORS:
+        draws = api.posteriorDraws(nuts, prior_id=prior)
+        assert len(draws) == 2 * 50
+        assert list(draws.columns) == list(api.posteriorDraws(result, prior_id=prior).columns)
+    means = api.posteriorDraws(nuts).mean()
+    assert means['Days'] == pytest.approx(10, abs=5)  # _sleepstudy's slope
+    assert means['Noise'] == pytest.approx(0, abs=5)
+
+
+def test_nuts_safeguards_hold_the_nuts_diagnostics_in_place_of_the_checks(nuts_fit):
+    _, nuts, _ = nuts_fit
+
+    per_row = {'rhat_max', 'ess_bulk_min', 'ess_tail_min', 'divergences'}
+    assert set(nuts.safeguards) == {'refine_method'} | per_row
+    assert nuts.safeguards['refine_method'] == 'nuts'
+    assert all(nuts.safeguards[key].shape == (2,) for key in per_row)
+    assert 'loo_nll' not in nuts.diagnostics
+
+
+def test_nuts_recomputes_loo_and_drops_the_evidence(api: Api):
+    pytest.importorskip('pymc')
+    result = api.sample(
+        _sleepstudy(),
+        formula=_FORMULA,
+        n_samples=64,
+        fit_preprocessor=True,
+        loo=True,
+        evidence=True,
+        seed=0,
+    )
+
+    nuts = api.nuts(result, **_NUTS_SMALL)
+
+    assert result.evidence is not None and nuts.evidence is None
+    assert {'loo_nll', 'pareto_k'} <= set(nuts.diagnostics)
+    assert nuts.diagnostics['loo_nll'] != result.diagnostics['loo_nll']
+
+
+def test_nuts_leaves_the_input_unchanged(api: Api, nuts_fit):
+    result, _, before = nuts_fit
+
+    for prior, draws in before['draws'].items():
+        assert api.posteriorDraws(result, prior_id=prior).equals(draws), prior
+    assert set(result.safeguards) == set(before['safeguards'])
+    for key, value in before['safeguards'].items():
+        np.testing.assert_array_equal(result.safeguards[key], value, err_msg=key)
+
+
+def test_nuts_footer_prints_the_nuts_diagnostics_and_every_report_runs(
+    api: Api, nuts_fit, monkeypatch: pytest.MonkeyPatch
+):
+    _, nuts, _ = nuts_fit
+    monkeypatch.setattr(plt, 'show', lambda: None)
+
+    footer = _footer(api.posteriorSummary(nuts, prior_id='noise'))
+    assert list(footer) == ['draws', 'max R-hat', 'min ESS', 'divergences', 'R²']
+    sg = nuts.safeguards
+    assert footer['draws'] == '100'
+    assert footer['max R-hat'] == f"{sg['rhat_max'][1]:.3f}"
+    assert (
+        footer['min ESS'] == f"{sg['ess_bulk_min'][1]:.0f} bulk, {sg['ess_tail_min'][1]:.0f} tail"
+    )
+    assert footer['divergences'] == str(sg['divergences'][1])
+    assert api.groupDraws(nuts).shape == (100, 12 * 2)
+    assert 'Days' in api.rfxSummary(nuts)
+    plt.close(api.plotParameters(nuts).figure)
+    api.plotPPD(nuts)
+    plt.close('all')
+    y, y_rep = api.posteriorPredictive(nuts, prior_id='noise')
+    assert y_rep.shape == (len(y), 100)
+
+
+def test_nuts_with_one_seed_gives_the_same_draws(api: Api, nuts_fit):
+    result, nuts, _ = nuts_fit
+
+    again = api.nuts(result, **_NUTS_SMALL)
+    other = api.nuts(result, **(_NUTS_SMALL | {'seed': 1}))
+
+    for prior in _NUTS_PRIORS:
+        draws = api.posteriorDraws(nuts, prior_id=prior)
+        assert api.posteriorDraws(again, prior_id=prior).equals(draws), prior
+        assert not api.posteriorDraws(other, prior_id=prior).equals(draws), prior
+
+
+def test_nuts_documents_the_extra_the_warm_start_and_the_remedies():
+    doc = inspect.getdoc(Api.nuts)
+
+    assert 'pip install "metabeta[nuts]"' in doc and 'warm start' in doc
+    assert 'CPU' in doc and 'compiling' in doc
+    assert 'R-hat above 1.01' in doc and 'target_accept' in doc
+    assert '(``nuts``' in inspect.getdoc(Api.sample)
