@@ -1901,13 +1901,16 @@ def test_nuts_footer_prints_the_nuts_diagnostics_and_every_report_runs(
 
 
 def test_nuts_with_one_seed_gives_the_same_draws(api: Api, nuts_fit):
-    result, nuts, _ = nuts_fit
+    result, _, _ = nuts_fit
 
+    # the fixture's call compiled the model, and on a cold PyTensor cache the compiling call
+    # draws differently from every later one
+    once = api.nuts(result, **_NUTS_SMALL)
     again = api.nuts(result, **_NUTS_SMALL)
     other = api.nuts(result, **(_NUTS_SMALL | {'seed': 1}))
 
     for prior in _NUTS_PRIORS:
-        draws = api.posteriorDraws(nuts, prior_id=prior)
+        draws = api.posteriorDraws(once, prior_id=prior)
         assert api.posteriorDraws(again, prior_id=prior).equals(draws), prior
         assert not api.posteriorDraws(other, prior_id=prior).equals(draws), prior
 
