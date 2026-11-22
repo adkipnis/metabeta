@@ -8,8 +8,9 @@
 REPO="${METABETA_REPO:-${METABETA_ROOT:-$HOME/metabeta}}"
 SIF="$HOME/containers/python312.sif"
 VENV="$HOME/metabeta/.venv-apptainer"
-# outputs/data is symlinked to workspace storage; bind it so the link resolves in-container
-DATA_ROOT="/lustre/groups/hcai/workspace/alexander.kipnis/metabeta-cache/datasets"
+# outputs/{data,checkpoints} are symlinked to workspace storage; bind it so the links resolve
+# in-container
+CACHE_ROOT="/lustre/groups/hcai/workspace/alexander.kipnis/metabeta-cache"
 
 PYTENSOR_DIR=$(mktemp -d /tmp/pytensor_XXXXXX)
 trap 'rm -rf "$PYTENSOR_DIR"' EXIT
@@ -19,7 +20,7 @@ runPymc() {
     apptainer exec \
       --bind "$HOME:$HOME" \
       --bind "$REPO:$REPO" \
-      --bind "$DATA_ROOT:$DATA_ROOT" \
+      --bind "$CACHE_ROOT:$CACHE_ROOT" \
       --bind /tmp:/tmp \
       "$SIF" \
       bash -lc "
