@@ -1181,7 +1181,8 @@ class Api:
         - **R-hat above 1.01 or a low ESS** (Vehtari et al., 2021): more ``warmup`` and ``draws``.
         - **Divergences:** a higher ``target_accept``, e.g. 0.95.
 
-        An integer ``seed`` reproduces the call, with one random stream per row.
+        An integer ``seed`` reproduces the call, with one random stream per row, once PyTensor
+        has compiled the model: the call that compiles it can draw differently.
         """
         try:
             import pymc  # noqa: F401
