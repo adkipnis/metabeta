@@ -24,6 +24,7 @@ import pytest
 from scipy import stats
 import torch
 
+from metabeta.datasets.preprocessor import DataPreprocessor
 from metabeta.models.api import Api
 from metabeta.posthoc.metropolis import LocalMoves
 from metabeta.utils.dataloader import chunkRows
@@ -36,6 +37,18 @@ def api(tmp_path_factory: pytest.TempPathFactory) -> Api:
     torch.manual_seed(0)
     _write_tiny_approximator_checkpoint(
         path, max_d=4, max_q=2, likelihood_family=0, analytical_refinement='light'
+    )
+    return Api(path, warmup=False)
+
+
+@pytest.fixture(scope='module')
+def wide_api(tmp_path_factory: pytest.TempPathFactory) -> Api:
+    """The tiny checkpoint with room for products beside three main effects and for random
+    interaction slopes, (a*b | g)."""
+    path: Path = tmp_path_factory.mktemp('wide') / 'joint.pt'
+    torch.manual_seed(0)
+    _write_tiny_approximator_checkpoint(
+        path, max_d=8, max_q=4, likelihood_family=0, analytical_refinement='light'
     )
     return Api(path, warmup=False)
 
@@ -793,10 +806,10 @@ def test_routed_calls_flag_data_larger_than_the_training_data(api: Api, call: st
 @pytest.mark.parametrize(
     ('formula', 'syntax'),
     [
-        ('Reaction ~ Days + (1 || Subject)', '(1 || Subject)'),
         ('Reaction ~ Days + (1 | Subject/Site)', '(1 | Subject/Site)'),
-        ('Reaction ~ Days:Noise + (1 | Subject)', 'Days:Noise'),
-        ('Reaction ~ Days*Noise + (1 | Subject)', 'Days*Noise'),
+        ('Reaction ~ Days:Noise:Dose + (1 | Subject)', 'Days:Noise:Dose'),
+        ('Reaction ~ Days*Noise*Dose + (1 | Subject)', 'Days*Noise*Dose'),
+        ('Reaction ~ Days + Days:Days + (1 | Subject)', 'Days:Days'),
         ('Reaction ~ log(Days) + (1 | Subject)', 'log(Days)'),
         ('Reaction ~ factor(Days) + (1 | Subject)', 'factor(Days)'),
         ('Reaction ~ C(Days) + (1 | Subject)', 'C(Days)'),
@@ -809,24 +822,31 @@ def test_unsupported_formula_syntax_is_named(api: Api, formula: str, syntax: str
         api.sample(df, formula=formula, n_samples=8, fit_preprocessor=True)
 
 
-@pytest.mark.parametrize('interaction', ['a:b', 'a*b'])
-def test_interaction_error_gives_the_centered_product_column(api: Api, interaction: str):
-    df = _sleepstudy(b=np.random.default_rng(1).normal(size=120)).rename(columns={'Days': 'a'})
+def test_double_bar_fits_random_effects_uncorrelated_at_the_predictors_means(api: Api):
+    df = _sleepstudy()
+    kwargs = dict(n_samples=64, fit_preprocessor=True, seed=0)
 
-    with pytest.raises(NotImplementedError) as error:
+    double = api.sample(df, formula='Reaction ~ Days + (1 + Days || Subject)', **kwargs)
+    single = api.sample(
+        df,
+        formula='Reaction ~ Days + (1 + Days | Subject)',
+        priors={'corr_rfx': {'eta': 0}},
+        **kwargs,
+    )
+
+    assert double.prior_params['eta_rfx'][0] == 0
+    for key in ('ffx', 'sigma_rfx', 'rfx'):
+        assert torch.equal(getattr(double.proposal, key), getattr(single.proposal, key))
+    corr = api.posteriorDraws(double, x_scale='standardized')['Corr(Intercept, Days)']
+    assert (corr == 0).all()
+    with pytest.raises(ValueError, match=r'\|\|'):
         api.sample(
             df,
-            formula=f'Reaction ~ {interaction} + (1 | Subject)',
+            formula='Reaction ~ Days + (1 + Days || Subject)',
+            priors={'corr_rfx': {'eta': 1.0}},
             n_samples=8,
             fit_preprocessor=True,
         )
-
-    assert "df['a_b'] = (df['a'] - df['a'].mean()) * (df['b'] - df['b'].mean())" in str(error.value)
-    df['a_b'] = (df['a'] - df['a'].mean()) * (df['b'] - df['b'].mean())
-    result = api.sample(
-        df, formula='Reaction ~ a + b + a_b + (1 | Subject)', n_samples=8, fit_preprocessor=True
-    )
-    assert result.param_names['ffx'] == ['Intercept', 'a', 'b', 'a_b']
 
 
 @pytest.mark.parametrize('partner', ['a_b', 'c'])
@@ -1493,8 +1513,8 @@ def test_every_dataset_failing_raises_the_first_error_naming_its_dataset(api: Ap
 
 
 def test_unsupported_syntax_raises_at_once_for_a_container(api: Api):
-    with pytest.raises(NotImplementedError, match=r'\(1 \|\| Subject\)'):
-        api.sample(_twoStudies(), formula='Reaction ~ Days + (1 || Subject)', n_samples=8)
+    with pytest.raises(NotImplementedError, match=r'\(1 \| Subject/Site\)'):
+        api.sample(_twoStudies(), formula='Reaction ~ Days + (1 | Subject/Site)', n_samples=8)
 
 
 @pytest.mark.parametrize(
@@ -1778,6 +1798,14 @@ def test_sample_documents_containers_the_skip_rule_and_seed():
     assert 'seed' in doc and 'batched and a separate call' in doc
 
 
+def test_sample_documents_interactions_and_their_reading():
+    doc = ' '.join(inspect.getdoc(Api.sample).split())  # independent of the line breaks
+
+    assert '``a:b``' in doc and '``a*b``' in doc and '``(a*b | g)``' in doc
+    assert '``a`` is the slope at ``b = 0``' in doc and '``f_B:b``' in doc
+    assert '``(x || g)``' in doc and 'at the mean of ``x``, not at ``x = 0``' in doc
+
+
 # ----------------------------------------------------------------------------------------
 # Api.nuts
 # ----------------------------------------------------------------------------------------
@@ -1922,3 +1950,396 @@ def test_nuts_documents_the_extra_the_warm_start_and_the_remedies():
     assert 'CPU' in doc and 'compiling' in doc
     assert 'R-hat above 1.01' in doc and 'target_accept' in doc
     assert '(``nuts``' in inspect.getdoc(Api.sample)
+
+
+# ----------------------------------------------------------------------------------------
+# Interactions
+# ----------------------------------------------------------------------------------------
+
+
+def _interactionStudy(seed: int = 1) -> pd.DataFrame:
+    """sleepstudy plus a continuous Dose away from 0, a 0/1 Drug, a three-level Diet whose most
+    frequent level is 'none', and a Noise column."""
+    rng = np.random.default_rng(seed)
+    diet = rng.choice(['none', 'low', 'high'], size=120, p=[0.5, 0.25, 0.25])
+    return _sleepstudy(
+        Dose=rng.normal(2.0, 0.5, 120),
+        Drug=(rng.random(120) < 0.4).astype(float),
+        Diet=diet,
+        Noise=rng.normal(size=120),
+    )
+
+
+@pytest.mark.parametrize(
+    'spelling', ['Days*Dose', 'Days + Dose + Days:Dose', 'Days + Days*Dose + Days:Dose']
+)
+def test_a_product_and_its_expansion_fit_the_same_model(api: Api, spelling: str):
+    df = _interactionStudy()
+    kwargs = dict(n_samples=8, fit_preprocessor=True, seed=0)
+
+    star = api.sample(df, formula='Reaction ~ Days*Dose + (1 | Subject)', **kwargs)
+    other = api.sample(df, formula=f'Reaction ~ {spelling} + (1 | Subject)', **kwargs)
+
+    assert other.param_names['ffx'] == ['Intercept', 'Days', 'Dose', 'Days:Dose']
+    assert torch.equal(other.proposal.ffx, star.proposal.ffx)
+
+
+def test_main_effects_come_before_products(wide_api: Api):
+    result = wide_api.sample(
+        _interactionStudy(),
+        formula='Reaction ~ Days*Dose + Noise + (1 | Subject)',
+        n_samples=8,
+        fit_preprocessor=True,
+    )
+
+    assert result.param_names['ffx'] == ['Intercept', 'Days', 'Dose', 'Noise', 'Days:Dose']
+
+
+def _rawColumn(df: pd.DataFrame, name: str) -> np.ndarray:
+    """The column a fixed-effect name stands for, built from the DataFrame's raw columns."""
+    if name == 'Intercept':
+        return np.ones(len(df))
+    if ':' in name:
+        a, b = name.split(':')
+        return _rawColumn(df, a) * _rawColumn(df, b)
+    if name in df:
+        return df[name].to_numpy(dtype=float)
+    column, level = name.rsplit('_', 1)
+    return (df[column] == level).to_numpy(dtype=float)
+
+
+def _sortedPredictors(X: np.ndarray, draws: np.ndarray) -> np.ndarray:
+    """Each draw's linear predictors over the rows, sorted, as the preprocessor reorders the
+    rows by group: (n, S) from X (n, d) and draws (S, d)."""
+    return np.sort(X @ draws.T, axis=0)
+
+
+@pytest.mark.parametrize(
+    ('formula', 'names'),
+    [
+        ('Dose*Days', ['Dose', 'Days', 'Dose:Days']),
+        ('Diet*Dose', ['Diet_high', 'Diet_low', 'Dose', 'Diet_high:Dose', 'Diet_low:Dose']),
+        ('Dose*Diet', ['Dose', 'Diet_high', 'Diet_low', 'Dose:Diet_high', 'Dose:Diet_low']),
+    ],
+)
+def test_products_are_named_by_their_columns_in_the_written_order(
+    wide_api: Api, formula: str, names: list[str]
+):
+    result = wide_api.sample(
+        _interactionStudy(),
+        formula=f'Reaction ~ {formula} + (1 | Subject)',
+        n_samples=8,
+        fit_preprocessor=True,
+    )
+
+    assert result.param_names['ffx'] == ['Intercept', *names]
+
+
+@pytest.mark.parametrize('formula', ['Days*Dose', 'Drug*Dose', 'Dose*Diet'])
+def test_original_scale_draws_give_the_linear_predictor_of_the_model_draws(
+    wide_api: Api, formula: str
+):
+    df = _interactionStudy()
+    result = wide_api.sample(
+        df, formula=f'Reaction ~ {formula} + (1 | Subject)', n_samples=64, fit_preprocessor=True
+    )
+
+    # the formula's order is the model's here (no random slopes come first)
+    names = result.param_names['ffx']
+    X_raw = np.column_stack([_rawColumn(df, name) for name in names])  # (n, d)
+    mask = result.batch['mask_n'][0].numpy()  # (m, n_i)
+    X_model = result.batch['X'][0].numpy()[mask][:, : len(names)]  # (n, d)
+    original = wide_api.posteriorDraws(result)[names].to_numpy(dtype=float)  # (S, d)
+    standardized = wide_api.posteriorDraws(result, x_scale='standardized')[names]
+    standardized = standardized.to_numpy(dtype=float)
+
+    np.testing.assert_allclose(
+        _sortedPredictors(X_raw, original),
+        df['Reaction'].mean() + _sortedPredictors(X_model, standardized),
+        rtol=1e-4,
+    )
+
+
+@pytest.mark.parametrize(
+    ('formula', 'message'),
+    [
+        (
+            'Days + Days:Dose + (1 | Subject)',
+            'the interaction Days:Dose needs the main effect Dose: write Days*Dose',
+        ),
+        (
+            'Days + Dose:Drug + (1 | Subject)',
+            'the interaction Dose:Drug needs the main effects Dose and Drug',
+        ),
+        (
+            'Days*Dose + (1 + Days:Dose | Subject)',
+            'the random interaction Days:Dose needs the random effects Days and Dose',
+        ),
+        (
+            'Days*Dose + (0 + Days*Dose | Subject)',
+            'the random interaction Days:Dose needs the random effect 1',
+        ),
+        (
+            'Days*Dose + Noise + (1 + Days*Noise | Subject)',
+            'random slope Days:Noise is not a fixed term',
+        ),
+        (
+            'Days*Dose + Drug + Noise + (1 + Days*Dose + Drug + Noise | Subject)',
+            '6 effects: 1, Days, Dose, Drug, Noise, Days:Dose',
+        ),
+    ],
+)
+def test_an_interaction_without_its_main_effects_or_beyond_the_limit_raises(
+    api: Api, formula: str, message: str
+):
+    formula = f'Reaction ~ {formula}'
+
+    with pytest.raises(ValueError, match=re.escape(message)):
+        api.sample(_interactionStudy(), formula=formula, n_samples=8, fit_preprocessor=True)
+
+
+_PRODUCTS = 'Reaction ~ Diet*Dose + Days*Dose + (1 + Days*Dose | Subject)'
+
+
+def test_priors_address_a_product_by_the_name_the_summary_prints(wide_api: Api):
+    priors = {
+        'fixed': {
+            'Days:Dose': {'tau': 0.11},
+            'Diet:Dose': {'tau': 0.22},
+            'Diet_low:Dose': {'nu': 0.33},
+            'Diet': {'tau': 0.44},
+        },
+        'random_sd': {'Days:Dose': {'tau': 0.55}},
+    }
+
+    default, result = (
+        wide_api.sample(_interactionStudy(), formula=_PRODUCTS, priors=p, n_samples=8, seed=0)
+        for p in (None, priors)
+    )
+
+    pp, names = result.prior_params, result.param_names
+    tau, nu = (dict(zip(names['ffx'], pp[key][0])) for key in ('tau_ffx', 'nu_ffx'))
+    default_tau = dict(zip(names['ffx'], default.prior_params['tau_ffx'][0]))
+    assert default_tau['Days:Dose'] == default_tau['Days']
+    assert tau == pytest.approx(
+        default_tau
+        | {'Days:Dose': 0.11, 'Diet_high:Dose': 0.22, 'Diet_low:Dose': 0.22}
+        | {'Diet_high': 0.44, 'Diet_low': 0.44}
+    )
+    assert nu == pytest.approx({name: 0.33 if name == 'Diet_low:Dose' else 0 for name in nu})
+    assert names['sigma_rfx'] == ['Intercept', 'Days', 'Dose', 'Days:Dose']
+    assert pp['tau_rfx'][0, 3] == pytest.approx(0.55)
+    with pytest.raises(KeyError, match='Dose:Days'):
+        wide_api.sample(
+            _interactionStudy(),
+            formula=_PRODUCTS,
+            priors={'fixed': {'Dose:Days': {'tau': 0.1}}},
+            n_samples=8,
+        )
+
+
+def _degenerate(df: pd.DataFrame, kind: str) -> pd.DataFrame:
+    """df with a product Fast_yes:Dose that is 0 in 97% of the rows (a rare cell), or with Dose
+    constant where Drug is 1, so Drug:Dose is collinear with Drug (an empty cell)."""
+    if kind == 'rare':
+        return df.assign(Fast=np.where(np.arange(len(df)) % 30 == 0, 'yes', 'no'))
+    return df.assign(Dose=df['Dose'].where(df['Drug'] == 0, 2.0))
+
+
+@pytest.mark.parametrize(
+    ('formula', 'kind', 'reason'),
+    [
+        ('Fast*Dose', 'rare', 'the product Fast_yes:Dose is near-constant: its most frequent '),
+        (
+            'Drug*Dose',
+            'collinear',
+            'the product Drug:Dose is nearly collinear with Drug (|r| = 1.00',
+        ),
+    ],
+)
+def test_a_degenerate_product_raises_naming_it_and_the_reason(
+    api: Api, formula: str, kind: str, reason: str
+):
+    df = _degenerate(_interactionStudy(), kind)
+
+    with pytest.raises(ValueError, match=re.escape(reason)):
+        api.sample(
+            df, formula=f'Reaction ~ {formula} + (1 | Subject)', n_samples=8, fit_preprocessor=True
+        )
+
+
+def test_a_dataset_with_a_degenerate_product_is_skipped_and_the_others_fitted(api: Api):
+    dfs = [_interactionStudy(1), _degenerate(_interactionStudy(2), 'collinear')]
+    formula = 'Reaction ~ Drug*Dose + (1 | Subject)'
+
+    results, caught = _warningsOf(lambda: api.sample(dfs, formula=formula, n_samples=8))
+
+    assert results[0].proposal is not None and results[1] is None
+    (skipped,) = [w for w in caught if 'Skipped' in str(w.message)]
+    assert '\n  1: the product Drug:Dose is nearly collinear with Drug' in str(skipped.message)
+
+
+@pytest.mark.parametrize('formula', ['Days*Dose', 'Drug*Dose'])
+def test_group_draws_give_each_groups_linear_predictor_of_the_model_draws(
+    wide_api: Api, formula: str
+):
+    df = _interactionStudy()
+    result = wide_api.sample(
+        df,
+        formula=f'Reaction ~ {formula} + (1 + {formula} | Subject)',
+        n_samples=64,
+        fit_preprocessor=True,
+    )
+
+    # every fixed effect has a random one, so the formula's order is the model's
+    terms = result.param_names['sigma_rfx']
+    assert terms == result.param_names['ffx']
+    original = wide_api.groupDraws(result)
+    standardized = wide_api.groupDraws(result, x_scale='standardized')
+    X = result.batch['X'][0].numpy()  # (m, n_i, d)
+    mask = result.batch['mask_n'][0].numpy()  # (m, n_i)
+    for g, group in enumerate(result.group_names):
+        rows = df[df['Subject'] == group]
+        X_raw = np.column_stack([_rawColumn(rows, term) for term in terms])  # (n_g, q)
+        X_model = X[g][mask[g]][:, : len(terms)]  # (n_g, q)
+        np.testing.assert_allclose(
+            _sortedPredictors(X_raw, original[group][terms].to_numpy(dtype=float)),
+            df['Reaction'].mean()
+            + _sortedPredictors(X_model, standardized[group][terms].to_numpy(dtype=float)),
+            rtol=1e-4,
+        )
+
+
+def test_normal_prior_lines_are_the_pushforward_of_a_product(api: Api):
+    df = _interactionStudy()
+    result = api.sample(
+        df,
+        formula='Reaction ~ Days*Dose + (1 | Subject)',
+        priors={'fixed': {'Days': {'nu': -0.2}, 'Days:Dose': {'nu': 0.3}}},
+        n_samples=8,
+        fit_preprocessor=True,
+    )
+
+    # with z = (x - μ) / s and the product p = (z_Days z_Dose - m) / s_p, the coefficient of
+    # Days Dose is γ = β_p / (s_p s_Days s_Dose), and Days takes -γ μ_Dose besides β_Days / s_Days
+    sd_y = df['Reaction'].std(ddof=0)
+    (mu_a, s_a), (mu_b, s_b) = ((df[c].mean(), df[c].std(ddof=0)) for c in ('Days', 'Dose'))
+    p = (df['Days'] - mu_a) / s_a * (df['Dose'] - mu_b) / s_b
+    g = 1 / (p.std(ddof=0) * s_a * s_b)
+    nu, tau = result.prior_params['nu_ffx'][0], result.prior_params['tau_ffx'][0]
+    days = (
+        sd_y * (nu[1] / s_a - g * mu_b * nu[3]),
+        sd_y * np.hypot(tau[1] / s_a, g * mu_b * tau[3]),
+    )
+    product = (sd_y * g * nu[3], sd_y * g * tau[3])
+
+    lines = api.posteriorSummary(result).splitlines()
+    assert f'  Days ~ N({days[0]:.4g}, {days[1]:.4g})' in lines
+    assert f'  Days:Dose ~ N({product[0]:.4g}, {product[1]:.4g})' in lines
+
+
+def test_prior_lines_without_closed_form_hold_at_mean_of_the_partner(wide_api: Api):
+    df = _interactionStudy()
+    result = wide_api.sample(
+        df,
+        formula='Reaction ~ Drug*Dose + (1 + Drug*Dose | Subject)',
+        priors={'fixed': {'family': 'student'}},
+        n_samples=8,
+        fit_preprocessor=True,
+    )
+
+    # Drug is 0/1, so Drug moves with the product at mean Dose, and Dose and the product do not
+    sd_y, s_b = df['Reaction'].std(ddof=0), df['Dose'].std(ddof=0)
+    tau, tau_r = result.prior_params['tau_ffx'][0], result.prior_params['tau_rfx'][0] * sd_y
+
+    lines = wide_api.posteriorSummary(result).splitlines()
+    assert f'  Drug ~ t₅(0, {sd_y * tau[1]:.4g}) at mean Dose' in lines
+    assert f'  Dose ~ t₅(0, {sd_y * tau[2] / s_b:.4g})' in lines
+    assert f'  σ_Intercept ~ HN({tau_r[0]:.4g}) at mean Dose' in lines
+    assert f'  σ_Drug ~ HN({tau_r[1]:.4g}) at mean Dose' in lines
+    assert f'  σ_Dose ~ HN({tau_r[2] / s_b:.4g})' in lines
+    assert f'  σ_Drug:Dose ~ HN({tau_r[3] / s_b:.4g})' in lines
+    assert any(
+        line.startswith('  Corr ~ LKJ(') and line.endswith(') at mean Dose') for line in lines
+    )
+
+
+_RANDOM_PRODUCT = 'Reaction ~ Days*Dose + (1 + Days*Dose | Subject)'
+
+
+def test_every_report_runs_on_an_interaction_fit(wide_api: Api, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(plt, 'show', lambda: None)
+    df = _interactionStudy()
+    priors = {'wide': None, 'narrow': {'fixed': {'Days:Dose': {'tau': 0.5}}}}
+    kwargs = dict(n_samples=64, fit_preprocessor=True, evidence=True)
+    result = wide_api.sample(df, formula=_RANDOM_PRODUCT, priors=priors, **kwargs)
+    without = wide_api.sample(df, formula='Reaction ~ Days + Dose + (1 | Subject)', **kwargs)
+
+    assert list(wide_api.bayesFactor(without, result).index) == ['wide', 'narrow']
+    y, y_rep = wide_api.posteriorPredictive(result, prior_id='narrow')
+    assert y_rep.shape == (len(df), 64)
+    assert '\nDays:Dose:\n' in wide_api.rfxSummary(result)
+    grid = wide_api.plotParameters(result)
+    grid.figure.canvas.draw()  # mathtext parses the labels on drawing
+    labels = [ax.get_ylabel() for ax in grid.axes[:, 0]]
+    plt.close(grid.figure)
+    assert 'Days:Dose' in labels and r'$\sigma_{\mathrm{Days:Dose}}$' in labels
+    wide_api.plotPPD(result)
+    plt.close('all')
+
+
+def test_nuts_refits_an_interaction_fit(wide_api: Api):
+    pytest.importorskip('pymc')
+    result = wide_api.sample(
+        _interactionStudy(), formula=_RANDOM_PRODUCT, n_samples=64, fit_preprocessor=True, seed=0
+    )
+
+    nuts = wide_api.nuts(result, **_NUTS_SMALL)
+
+    draws = wide_api.posteriorDraws(nuts)
+    assert list(draws.columns[:4]) == ['Intercept', 'Days', 'Dose', 'Days:Dose']
+    assert len(draws) == 100
+
+
+def test_warmup_from_an_interaction_formula_alone_runs(wide_api: Api):
+    _, caught = _warningsOf(lambda: wide_api.warmup(formula='y ~ a*b + (a*b | g)'))
+
+    assert [str(w.message) for w in caught] == []
+
+
+def test_a_saved_preprocessor_gives_the_fit_a_fresh_one_gives(api: Api, tmp_path: Path):
+    df = _interactionStudy()[['Reaction', 'Days', 'Dose', 'Subject']]
+    path = tmp_path / 'preprocessor.joblib'
+    DataPreprocessor(group_name='subject').fit(df.rename(columns={'Reaction': 'y'})).save(path)
+    kwargs = dict(formula='Reaction ~ Days*Dose + (1 | Subject)', n_samples=8, seed=0)
+
+    fresh = api.sample(df, fit_preprocessor=True, **kwargs)
+    saved = api.sample(df, preprocessor=path, **kwargs)
+
+    assert saved.param_names == fresh.param_names
+    _assertSameScaleInfo(saved.scale_info, fresh.scale_info)
+    assert torch.equal(saved.proposal.ffx, fresh.proposal.ffx)
+
+
+@pytest.mark.parametrize('interaction', ['a:b', 'a*b'])
+def test_product_of_two_dummies_raises_with_the_product_column_workaround(
+    api: Api, interaction: str
+):
+    rng = np.random.default_rng(1)
+    df = _sleepstudy(a=(rng.random(120) < 0.5) * 1.0, b=(rng.random(120) < 0.5) * 1.0)
+
+    with pytest.raises(NotImplementedError) as error:
+        api.sample(
+            df,
+            formula=f'Reaction ~ a + b + {interaction} + (1 | Subject)',
+            n_samples=8,
+            fit_preprocessor=True,
+        )
+
+    assert 'a:b' in str(error.value)
+    assert "df['a_b'] = (df['a'] - df['a'].mean()) * (df['b'] - df['b'].mean())" in str(error.value)
+    df['a_b'] = (df['a'] - df['a'].mean()) * (df['b'] - df['b'].mean())
+    result = api.sample(
+        df, formula='Reaction ~ a + b + a_b + (1 | Subject)', n_samples=8, fit_preprocessor=True
+    )
+    assert result.param_names['ffx'] == ['Intercept', 'a', 'b', 'a_b']
