@@ -26,24 +26,24 @@ from metabeta.utils.priors import apiDefaultPriors
 JOINT_CHECKPOINT_VERSION = 1
 DEFAULT_CHECKPOINT_PREFIXES = ('best', 'latest')
 MAX_ROUTER_Q = 5
+# a product is degenerate if its most frequent value covers more of the rows (the preprocessor's
+# near-constant rule), or if its |r| with another fixed column exceeds the bound
+PRODUCT_SHARE_MAX = 0.95
+PRODUCT_CORR_MAX = 0.95
 # lme4 syntax outside the networks' design: the error names it instead of misparsing it
 UNSUPPORTED_SYNTAX = (
-    (
-        r'\([^()|]*\|\|[^()]*\)',
-        'uncorrelated random effects are not supported; write (1 + x | g), which estimates '
-        'their correlation',
-    ),
     (
         r'\([^()|]*\|[^()]*[/:][^()]*\)',
         'nested or crossed grouping factors are not supported; metabeta fits one grouping factor',
     ),
     (
-        r'[\w.]+\s*[:*]\s*[\w.]+',
-        'interactions are not supported. For a numeric interaction, center both columns and add '
-        "their product as its own column, e.g. df['a_b'] = (df['a'] - df['a'].mean()) * "
-        "(df['b'] - df['b'].mean()), then name a_b as a fixed term. Centering keeps the product "
-        'from being nearly collinear with a or b, which would drop one of them; its coefficient '
-        "is the interaction, and each main effect is the slope at the other column's mean",
+        r'(?:[\w.]+\s*[:*]\s*){2,}[\w.]+',
+        'interactions of more than two terms are not supported',
+    ),
+    (
+        r'(?i)(?<![\w.])([\w.]+)\s*[:*]\s*\1(?![\w.])',
+        'a term cannot interact with itself; for a quadratic term add the squared column to '
+        'the DataFrame and name it',
     ),
     (
         r'[A-Za-z_][\w.]*\([^()]*\)',
@@ -101,6 +101,7 @@ class FormulaSpec:
     random_terms: tuple[str, ...]
     group_name: str | None
     intercept: bool = True
+    correlated: bool = True  # False for (... || g)
 
 
 @dataclass
@@ -118,18 +119,52 @@ class ScaleInfo:
       ffx[0]: expected y at X=0  (comparable to lme4/statsmodels intercept)
       ffx[j]: Δy per one unit of predictor j
 
-    The random effects get the same map: a random slope on predictor j is divided by its SD
-    s_j, and the random intercept moves to x = 0 by subtracting Σ_j μ_j b_j / s_j, so per draw
-    b ↦ A b and Σ ↦ A Σ Aᵀ.
+    The random effects get the same map restricted to their columns, so per draw b ↦ A b and
+    Σ ↦ A Σ Aᵀ.
     """
 
     y_mean: float
     y_std: float
-    x_means: np.ndarray  # shape (d,) - 0.0 for intercept column
-    x_stds: np.ndarray  # shape (d,) - 1.0 for intercept and dummy columns
+    x_means: np.ndarray  # shape (d,) - 0.0 for intercept, dummy and product columns
+    x_stds: np.ndarray  # shape (d,) - 1.0 for intercept, dummy and product columns
     param_names: list[str]
     random_names: list[str]  # 'Intercept' or a name in param_names, in the random-effect order
     has_intercept: bool = True
+    # one (a, b, m, s) per product column 'a:b' = (z_a z_b - m) / s (buildProducts); a class
+    # attribute, so a result saved without it loads
+    products: tuple[tuple[str, str, float, float], ...] = ()
+
+    def ffxMap(self) -> np.ndarray:
+        """M (d, d), mapping the fixed effects in y units on the centered, standardized basis to
+        the original one; the intercept also gains y_mean.
+
+        A slope on predictor j is divided by its SD s_j, and the intercept moves to x = 0 by
+        subtracting Σ_j μ_j β_j / s_j. A product p = (z_a z_b - m) / s with coefficient β_p is
+        γ (a - μ_a)(b - μ_b) - β_p m / s with γ = β_p / (s s_a s_b): γ is the coefficient of
+        a b, and expanding moves -γ μ_b to a, -γ μ_a to b and γ μ_a μ_b - β_p m / s to the
+        intercept.
+        """
+        x_means = np.asarray(self.x_means, dtype=float)
+        x_stds = np.asarray(self.x_stds, dtype=float)
+        M = np.diag(1.0 / x_stds)
+        if self.has_intercept:
+            M[0] -= x_means / x_stds  # x_means[0] = 0 for the intercept column
+        for a, b, m, s in self.products:
+            i, j, k = (self.param_names.index(name) for name in (a, b, f'{a}:{b}'))
+            gamma = 1.0 / (s * x_stds[i] * x_stds[j])
+            M[k, k] = gamma
+            M[i, k] = -gamma * x_means[j]
+            M[j, k] = -gamma * x_means[i]
+            if self.has_intercept:
+                M[0, k] = gamma * x_means[i] * x_means[j] - m / s
+        return M
+
+    def _offset(self, d: int) -> np.ndarray:
+        """(d,) added after M: y_mean on the intercept."""
+        offset = np.zeros(d)
+        if self.has_intercept:
+            offset[0] = self.y_mean
+        return offset
 
     def to_original_scale(self, ffx: torch.Tensor) -> torch.Tensor:
         """Back-transform ffx (..., d_padded) to original y/X units.
@@ -140,19 +175,10 @@ class ScaleInfo:
         d = len(self.x_stds)
         if d == 0:
             return ffx
-        x_stds_t = torch.tensor(self.x_stds, dtype=ffx.dtype, device=ffx.device)
-        x_means_t = torch.tensor(self.x_means, dtype=ffx.dtype, device=ffx.device)
-        active = ffx[..., :d]
-        slopes_orig = active / x_stds_t
-        if self.has_intercept:
-            correction = (slopes_orig * x_means_t).sum(dim=-1, keepdim=True)
-            intercept_orig = slopes_orig[..., :1] + self.y_mean - correction
-            active_orig = torch.cat([intercept_orig, slopes_orig[..., 1:]], dim=-1)
-        else:
-            active_orig = slopes_orig
-        if ffx.shape[-1] > d:
-            return torch.cat([active_orig, ffx[..., d:]], dim=-1)
-        return active_orig
+        M = torch.tensor(self.ffxMap(), dtype=torch.float64, device=ffx.device)
+        offset = torch.tensor(self._offset(d), dtype=torch.float64, device=ffx.device)
+        active_orig = (ffx[..., :d].double() @ M.T + offset).to(ffx.dtype)
+        return torch.cat([active_orig, ffx[..., d:]], dim=-1)
 
     def ffxPriorToOriginal(
         self, loc: np.ndarray, scale: np.ndarray
@@ -165,27 +191,16 @@ class ScaleInfo:
         X = 0 collects every slope on a predictor with a nonzero mean, so it is wider than the
         intercept prior at the predictors' means.
         """
-        loc_out = np.asarray(loc, dtype=float) * self.y_std / self.x_stds  # (d,)
-        scale_out = np.asarray(scale, dtype=float) * self.y_std / self.x_stds  # (d,)
-        if self.has_intercept:
-            coef = -np.asarray(self.x_means, dtype=float)  # intercept = coef · slopes + y_mean
-            coef[0] += 1.0
-            loc_out[0] = coef @ loc_out + self.y_mean
-            scale_out[0] = np.sqrt((coef**2) @ (scale_out**2))
+        M = self.ffxMap()
+        loc_out = self.y_std * M @ np.asarray(loc, dtype=float) + self._offset(len(M))  # (d,)
+        scale_out = self.y_std * np.sqrt(M**2 @ np.asarray(scale, dtype=float) ** 2)  # (d,)
         return loc_out, scale_out
 
     def rfxMap(self) -> np.ndarray:
-        """A (q, q), mapping the centered, standardized random-effect basis to the original."""
-        q = len(self.random_names)
-        A = np.eye(q)
-        for k, name in enumerate(self.random_names):
-            if name == 'Intercept':
-                continue
-            j = self.param_names.index(name)
-            A[k, k] = 1.0 / self.x_stds[j]
-            if 'Intercept' in self.random_names:
-                A[self.random_names.index('Intercept'), k] = -self.x_means[j] / self.x_stds[j]
-        return A
+        """A (q, q), mapping the centered, standardized random-effect basis to the original: M
+        restricted to the random columns."""
+        idx = [self.param_names.index(name) for name in self.random_names]
+        return self.ffxMap()[np.ix_(idx, idx)]
 
     def rfxToOriginal(self, rfx: torch.Tensor) -> torch.Tensor:
         """Per-group effects (..., q_padded) ↦ A b; padding columns are returned unchanged."""
@@ -253,30 +268,35 @@ def parseFormula(formula: str | None) -> FormulaSpec:
         if found := re.search(pattern, rhs):
             raise NotImplementedError(f'unsupported formula syntax {found.group(0)}: {hint}')
 
-    random_matches = re.findall(r'\(([^|]+)\|([^)]+)\)', rhs)
+    random_matches = re.findall(r'\(([^|]+)(\|\|?)([^)]+)\)', rhs)
     if len(random_matches) > 1:
         raise NotImplementedError('router formula support currently accepts one random term')
 
     random_terms: tuple[str, ...] = ()
     group_name = None
+    correlated = True
     if random_matches:
-        random_rhs, group_name = random_matches[0]
-        raw_rfx = [t.strip().lower() for t in random_rhs.split('+') if t.strip()]
-        suppress_rfx_intercept = any(t in {'0', '-1'} for t in raw_rfx)
-        explicit_rfx = [t for t in raw_rfx if t not in {'0', '-1', '1'}]
-        if suppress_rfx_intercept:
-            random_terms = tuple(explicit_rfx)
-        else:
-            random_terms = tuple(['1'] + explicit_rfx)
-        if len(random_terms) > MAX_ROUTER_Q:
-            raise ValueError(f'random-effect dimension q must be <= {MAX_ROUTER_Q}')
-        group_name = group_name.strip().lower()
+        random_rhs, bar, group_name = random_matches[0]
+        correlated = bar == '|'
+        group_name = group_name.strip()
+        raw_rfx = [t.strip() for t in random_rhs.split('+') if t.strip()]
+        written = _expandProducts([t for t in raw_rfx if t not in {'0', '-1', '1'}])
+        if not any(t in {'0', '-1'} for t in raw_rfx):
+            written = ['1', *written]
+        _requireMainEffects(written, group_name=group_name)
+        if len(written) > MAX_ROUTER_Q:
+            raise ValueError(
+                f'random-effect dimension q must be <= {MAX_ROUTER_Q}, but the random term has '
+                f'{len(written)} effects: {", ".join(written)}'
+            )
+        random_terms = tuple(term.lower() for term in written)
+        group_name = group_name.lower()
 
     fixed_rhs = re.sub(r'\([^|]+\|[^)]+\)', '', rhs)
     fixed_terms = []
     intercept = True
     for term in fixed_rhs.split('+'):
-        term = term.strip().lower()
+        term = term.strip()
         if not term:
             continue
         if term in {'1'}:
@@ -286,14 +306,61 @@ def parseFormula(formula: str | None) -> FormulaSpec:
             intercept = False
             continue
         fixed_terms.append(term)
+    fixed_terms = _expandProducts(fixed_terms)
+    _requireMainEffects(fixed_terms)
 
     return FormulaSpec(
         target=target,
-        fixed_terms=tuple(fixed_terms),
+        fixed_terms=tuple(term.lower() for term in fixed_terms),
         random_terms=random_terms,
         group_name=group_name,
         intercept=intercept,
+        correlated=correlated,
     )
+
+
+def _expandProducts(terms: Sequence[str]) -> list[str]:
+    """`terms` with a*b written as a + b + a:b and repeats dropped, the main effects first and
+    the products after them, each in the written order (lmer's order) and spelling."""
+    mains: dict[str, str] = {}  # lowercase -> as first written
+    products: dict[str, str] = {}
+    for term in terms:
+        factors = [factor.strip() for factor in re.split(r'[:*]', term)]
+        if len(factors) == 1 or '*' in term:
+            for factor in factors:
+                mains.setdefault(factor.lower(), factor)
+        if len(factors) == 2:
+            product = ':'.join(factors)
+            products.setdefault(product.lower(), product)
+    return [*mains.values(), *products.values()]
+
+
+def _requireMainEffects(terms: Sequence[str], group_name: str | None = None) -> None:
+    """Every product a:b among the fixed `terms` needs a and b among them, and among the random
+    terms of `group_name` the random intercept too: without both main effects the centered
+    product is a different model from lme4's a:b, and the random-effect map is exact only for a
+    random a:b with a random 1, a and b (ScaleInfo.rfxMap)."""
+    present = {term.lower() for term in terms}
+    for term in terms:
+        if ':' not in term:
+            continue
+        factors = term.split(':')
+        needed = factors if group_name is None else ['1', *factors]
+        missing = [factor for factor in needed if factor.lower() not in present]
+        if not missing:
+            continue
+        listed = ' and '.join(missing)
+        plural = 's' if len(missing) > 1 else ''
+        if group_name is not None:
+            raise ValueError(
+                f'the random interaction {term} needs the random effect{plural} {listed}: '
+                f'write ({"*".join(factors)} | {group_name})'
+            )
+        raise ValueError(
+            f'the interaction {term} needs the main effect{plural} {listed}: write '
+            f'{"*".join(factors)}, since without both main effects the centered product is a '
+            f"different model from lme4's {term}"
+        )
 
 
 def defaultRandomTerms(q: int, columns: Sequence[str]) -> tuple[str, ...]:
@@ -318,18 +385,90 @@ def resolveFixedIndices(terms: Sequence[str], columns: Sequence[str]) -> list[in
 
 
 def resolveColumnTerm(term: str, columns: Sequence[str]) -> list[int]:
+    """The columns a term names: the column itself, a categorical's dummies '{term}_{level}',
+    or for 'a:b' the product column '{A}:{B}' of every column A of a with every column B of b."""
     term = term.strip().lower()
     lower_columns = [column.lower() for column in columns]
+    if ':' in term:
+        a, b = term.split(':')
+        products = [
+            f'{lower_columns[i]}:{lower_columns[j]}'
+            for i in resolveColumnTerm(a, columns)
+            for j in resolveColumnTerm(b, columns)
+        ]
+        if all(product in lower_columns for product in products):
+            return [lower_columns.index(product) for product in products]
+        raise KeyError(f'formula term not found in preprocessed columns: {term}')
+
     exact = [i for i, column in enumerate(lower_columns) if column == term]
     if exact:
         return exact
 
     prefix = f'{term}_'
-    prefixed = [i for i, column in enumerate(lower_columns) if column.startswith(prefix)]
+    prefixed = [
+        i
+        for i, column in enumerate(lower_columns)
+        if column.startswith(prefix) and ':' not in column
+    ]
     if prefixed:
         return prefixed
 
     raise KeyError(f'formula term not found in preprocessed columns: {term}')
+
+
+def buildProducts(
+    X_pre: np.ndarray, columns: Sequence[str], spec: FormulaSpec
+) -> tuple[np.ndarray, tuple[str, ...], tuple[tuple[str, str, float, float], ...]]:
+    """The preprocessed design (n, d) and its columns, with one column '{A}:{B}' appended per
+    product the formula names, and one record (A, B, m, s) per product (ScaleInfo.products).
+
+    A column of only 0 and 1 is a dummy and enters as 0/1. The product of two continuous
+    columns, z_A z_B, is re-standardized on this dataset, (z_A z_B - m) / s; a product with a
+    dummy stays as built (m = 0, s = 1); a product of two dummies raises.
+    """
+    parts: list[np.ndarray] = []
+    names: list[str] = []
+    records: list[tuple[str, str, float, float]] = []
+    for term in dict.fromkeys(t for t in (*spec.fixed_terms, *spec.random_terms) if ':' in t):
+        a, b = term.split(':')
+        for i in resolveColumnTerm(a, columns):
+            for j in resolveColumnTerm(b, columns):
+                name = f'{columns[i]}:{columns[j]}'
+                if name in names:  # named twice, e.g. by 'f:b' and 'f_B:b'
+                    continue
+                dummy = [bool(np.isin(X_pre[:, k], (0.0, 1.0)).all()) for k in (i, j)]
+                if all(dummy):
+                    raise NotImplementedError(
+                        f'the product {name} of two dummies is not supported, since the '
+                        'networks fit it poorly. To fit it anyway, center both columns and add '
+                        "their product as its own column, e.g. df['a_b'] = (df['a'] - "
+                        "df['a'].mean()) * (df['b'] - df['b'].mean()), then name a_b as a fixed "
+                        'term (code a categorical column as 0/1 first)'
+                    )
+                p = X_pre[:, i] * X_pre[:, j]  # (n,)
+                share = np.unique(p, return_counts=True)[1].max() / len(p)
+                if share > PRODUCT_SHARE_MAX:
+                    raise ValueError(
+                        f'the product {name} is near-constant: its most frequent value covers '
+                        f'{share:.0%} of the rows (an empty or rare cell)'
+                    )
+                m, s = (0.0, 1.0) if any(dummy) else (float(p.mean()), float(p.std()))
+                parts.append((p - m) / s)
+                names.append(name)
+                records.append((columns[i], columns[j], m, s))
+    if not parts:
+        return X_pre, tuple(columns), ()
+    X, columns = np.column_stack([X_pre, *parts]), (*columns, *names)
+    fixed = resolveFixedIndices(spec.fixed_terms, columns)
+    for k in range(X_pre.shape[1], X.shape[1]):
+        for j in (j for j in fixed if j != k and X[:, j].std() > 0):
+            r = abs(np.corrcoef(X[:, k], X[:, j])[0, 1])
+            if r > PRODUCT_CORR_MAX:
+                raise ValueError(
+                    f'the product {columns[k]} is nearly collinear with {columns[j]} '
+                    f'(|r| = {r:.2f} > {PRODUCT_CORR_MAX:g})'
+                )
+    return X, columns, tuple(records)
 
 
 def restoreColumnCase(columns: Sequence[str], raw_columns: Sequence[str]) -> list[str]:
@@ -435,29 +574,35 @@ def resolvePriors(
     random_names: Sequence[str],
     likelihood_family: int,
     y: np.ndarray | None = None,
+    correlated: bool = True,
 ) -> list[tuple[str | None, dict[str, np.ndarray]]]:
     """Resolve one or more prior specifications to canonical model prior arrays.  ``y`` is the
     response of a model whose first fixed effect is the intercept, which the defaults may
-    depend on (apiDefaultPriors)."""
+    depend on (apiDefaultPriors).  Uncorrelated random effects, (... || g), take eta_rfx = 0,
+    which the networks were trained on, and refuse a correlation prior."""
 
     d = len(fixed_names)
     q = len(random_names)
-    variants = _priorVariants(priors)
-    return [
-        (
-            name,
-            _resolveSinglePrior(
-                prior,
-                fixed_names=fixed_names,
-                random_names=random_names,
-                d=d,
-                q=q,
-                likelihood_family=likelihood_family,
-                y=y,
-            ),
+    out = []
+    for name, prior in _priorVariants(priors):
+        values = _resolveSinglePrior(
+            prior,
+            fixed_names=fixed_names,
+            random_names=random_names,
+            d=d,
+            q=q,
+            likelihood_family=likelihood_family,
+            y=y,
         )
-        for name, prior in variants
-    ]
+        if not correlated:
+            if prior is not None and {'corr_rfx', 'eta_rfx'} & set(prior):
+                raise ValueError(
+                    "the formula's || makes the random effects uncorrelated, so the priors "
+                    'cannot set their correlation: drop corr_rfx, or write | to estimate it'
+                )
+            values['eta_rfx'] = np.asarray(0.0)
+        out.append((name, values))
+    return out
 
 
 def _priorVariants(priors: Any) -> list[tuple[str | None, Mapping[str, Any] | None]]:

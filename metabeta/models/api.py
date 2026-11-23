@@ -52,12 +52,14 @@ from metabeta.utils.api import (
     JOINT_CHECKPOINT_VERSION,
     ScaleInfo,
     attachPreprocessorMetadata,
+    buildProducts,
     buildRandomDesign,
     defaultRandomTerms,
     isCollatedBatch,
     isModelDataset,
     isPreprocessedDict,
     padModelDataset,
+    padVector,
     parseFormula,
     preprocessedSdY,
     resolveFixedIndices,
@@ -524,13 +526,26 @@ class Api:
         parameter names, scale information and group labels; datasets that need different
         submodels run in one call.  A dataset that cannot be prepared (a family, a number of
         effects or a minimum size outside the checkpoint's limits, a collinear named column, a
-        term or prior name that does not resolve) is skipped:
+        near-constant or collinear product, a term or prior name that does not resolve) is
+        skipped:
         ``None`` takes its place and one warning lists the skipped datasets with their reasons,
         and if every dataset fails the first error is raised with the dataset named.  Unsupported
         formula syntax and a wrong argument type raise at once.  Warnings name datasets by their
         key or index, and by the pair of dataset and prior under several priors; a warning about a
         dataset's data (e.g. a near-constant column) names them on its last line, so a
         ``message=`` filter still matches it.
+
+        ``formula`` takes lme4's syntax with one grouping factor and two-way interactions:
+        ``a:b``, and ``a*b`` for ``a + b + a:b``, also as random slopes, ``(a*b | g)``.  A
+        product needs both main effects, a random one also the random intercept, and a product
+        of two dummies raises.  The summary reads as lme4's: ``a`` is the slope at ``b = 0`` (at
+        the reference level of a categorical ``b``), and ``a:b`` the change in that slope per
+        unit of ``b``; a categorical ``f`` gives one ``f_B:b`` per level ``B`` besides the
+        reference.  ``x_scale='standardized'`` reads ``a`` at the mean of ``b`` instead.  Priors
+        address a product by that name (``'f:b'`` for all levels of ``f``) and sit on the
+        model's coefficients: a prior on ``a`` is one on its slope at the mean of ``b``.
+        ``(x || g)`` makes the random effects uncorrelated at the mean of ``x``, not at
+        ``x = 0`` as in lme4, so the default summary shows their correlation at ``x = 0``.
 
         By default (``refine=True``, i.e. ``refine='imh'``) the flow posterior is refined
         by Independence Metropolis-Hastings: the flow serves as the proposal of a Markov
@@ -1055,7 +1070,8 @@ class Api:
             if spec.target:
                 dummy[spec.target] = self._dummyResponse(fam, n, rng)
             for term in spec.fixed_terms:
-                dummy[term] = rng.standard_normal(n)
+                if ':' not in term:  # sample builds each product from its main effects
+                    dummy[term] = rng.standard_normal(n)
             if spec.group_name:
                 dummy[spec.group_name] = np.repeat(np.arange(min_m), min_n)
             data = pd.DataFrame(dummy)
@@ -1607,6 +1623,7 @@ class Api:
             raise ValueError('preprocessed X must have shape (n, d) aligned with y')
 
         spec = parseFormula(formula)
+        X_pre, columns, products = buildProducts(X_pre, columns, spec)
         # no formula: every column is a fixed effect; a formula without fixed terms
         # (y ~ 1 + (1 | g)) fits the intercept only, as in lme4
         fixed_indices = (
@@ -1657,10 +1674,10 @@ class Api:
         levels = preprocessed.get('group_levels')  # the preprocessor's label of each group code
 
         # Build scale info for optional back-transformation to original X units
-        x_means_meta = np.asarray(
-            preprocessed.get('x_means', np.zeros(X_pre.shape[1])), dtype=float
-        )
-        x_stds_meta = np.asarray(preprocessed.get('x_stds', np.ones(X_pre.shape[1])), dtype=float)
+        # a product column has neither: ScaleInfo maps it from its record
+        d_pre = X_pre.shape[1]
+        x_means_meta = padVector(np.asarray(preprocessed.get('x_means', []), dtype=float), d_pre)
+        x_stds_meta = padVector(np.asarray(preprocessed.get('x_stds', []), dtype=float), d_pre, 1.0)
         y_mean_meta = float(np.asarray(preprocessed.get('y_mean', 0.0)).item())
         y_std_meta = float(np.asarray(preprocessed.get('sd_y', 1.0)).item())
 
@@ -1676,6 +1693,7 @@ class Api:
                 param_names=list(fixed_names),
                 random_names=list(random_names),
                 has_intercept=spec.intercept,
+                products=products,
             ),
             group_names=None if levels is None else [str(v) for v in levels],
             ffx_order=ffx_order,
@@ -1701,6 +1719,7 @@ class Api:
                 random_names=random_names,
                 likelihood_family=likelihood,
                 y=y if spec.intercept else None,
+                correlated=spec.correlated,
             )
         ]
 
@@ -2753,11 +2772,12 @@ def _buildPriorLines(
       Intercept location remains 0 (model is centred at mean y).
 
     - Original (x_scale='original', the default): each line describes the displayed parameter
-      (ScaleInfo.ffxPriorToOriginal): a slope's prior is scaled by σ_y/σ_{x_k}, and the
-      intercept at X = 0 collects the slopes' priors.  A random slope's SD prior is scaled the
-      same way.  Where the pushforward has no closed form (a Student-t intercept; the random
-      intercept's SD and the correlations once a random slope sits on a centered predictor),
-      the line states the specified prior and the predictors at whose means it applies.
+      (ScaleInfo.ffxPriorToOriginal): a slope's prior is scaled by σ_y/σ_{x_k}, the intercept
+      at X = 0 collects the slopes' priors, and a main effect collects its products'.  A random
+      slope's SD prior is scaled the same way.  Where the pushforward has no closed form (a
+      Student-t coefficient whose row of the map mixes in others; a random-effect SD whose row
+      does, and then the correlations), the line states the specified prior and the predictors
+      at whose means it applies.
     """
     from metabeta.utils.constants import FFX_FAMILIES, SIGMA_FAMILIES, STUDENT_DF
 
@@ -2777,11 +2797,15 @@ def _buildPriorLines(
         locs, scales, notes = nu * y_std, tau * y_std, [''] * n_ffx
         if rescale:
             locs, scales = scale_info.ffxPriorToOriginal(nu, tau)
-            centered = [n for n, mu in zip(ffx_names[1:], scale_info.x_means[1:]) if mu != 0]
-            if scale_info.has_intercept and fam != 'normal' and centered:
-                # a sum of Student-t terms is no Student-t: state the specified intercept prior
-                locs[0], scales[0] = nu[0] * y_std + scale_info.y_mean, tau[0] * y_std
-                notes[0] = _atMean(centered)
+            M = scale_info.ffxMap()
+            for i, name in enumerate(ffx_names):
+                held = _heldAt(M[i], i, ffx_names)
+                if fam != 'normal' and held:
+                    # a sum of Student-t terms is no Student-t: state the specified prior
+                    y_mean = scale_info.y_mean if name == 'Intercept' else 0.0
+                    locs[i] = nu[i] * M[i, i] * y_std + y_mean
+                    scales[i] = tau[i] * abs(M[i, i]) * y_std
+                    notes[i] = _atMean(held)
         symbol = 'N' if fam == 'normal' else 't₅'
         for name, loc_j, scale_j, note in zip(ffx_names, locs, scales, notes):
             loc = f'{loc_j:.4g}' if abs(loc_j) > 1e-9 else '0'
@@ -2795,27 +2819,22 @@ def _buildPriorLines(
             else 0
         )
         fam = SIGMA_FAMILIES[fam_id] if fam_id < len(SIGMA_FAMILIES) else 'halfnormal'
-        # only the random intercept's row of ScaleInfo.rfxMap mixes effects: its SD and the
-        # correlations keep the specified prior, at the means of the random slopes' predictors
-        at_mean = ''
-        if rescale and 'Intercept' in scale_info.random_names:
-            i = scale_info.random_names.index('Intercept')
-            row = scale_info.rfxMap()[i]
-            at_mean = _atMean(
-                [n for k, n in enumerate(scale_info.random_names) if k != i and row[k] != 0]
-            )
+        # σ_rfx is always displayed in y units; in original mode an effect whose row of
+        # ScaleInfo.rfxMap has one entry A_jj has its SD scaled by |A_jj| (1/s_j for a slope),
+        # and a row that mixes effects keeps the specified prior, as do the correlations, at the
+        # means it holds at
+        A = scale_info.rfxMap() if rescale else np.eye(n_rfx)
+        held = [_heldAt(A[j], j, srfx_names) for j in range(n_rfx)]
         for j, name in enumerate(srfx_names):
-            # σ_rfx is always displayed in y units; rescale τ_rfx in original mode, where a
-            # slope SD is divided by its predictor's SD (the intercept's x_std is 1)
-            tau_j = float(tau_r[j]) * y_std
-            if rescale:
-                tau_j /= float(scale_info.x_stds[scale_info.param_names.index(name)])
-            note = at_mean if name == 'Intercept' else ''
+            tau_j = float(tau_r[j]) * y_std * abs(A[j, j])
+            note = _atMean(held[j])
             lines.append(f'  σ_{name} ~ {SIGMA_PRIOR_SYMBOL[fam]}({tau_j:.4g}){note}')
         if 'eta_rfx' in prior_params and n_rfx > 1:
             eta = float(prior_params['eta_rfx'][batch_index])
             if eta > 0:
-                lines.append(f'  Corr ~ LKJ({eta:.2g}){at_mean}')
+                corr_held = {name for names in held for name in names}
+                note = _atMean([name for name in srfx_names if name in corr_held])
+                lines.append(f'  Corr ~ LKJ({eta:.2g}){note}')
 
     if 'tau_eps' in prior_params:
         tau_e = float(np.asarray(prior_params['tau_eps']).ravel()[batch_index]) * y_std
@@ -2833,6 +2852,14 @@ def _buildPriorLines(
 def _atMean(predictors: list[str]) -> str:
     """Where a prior line without closed form applies: at the means of `predictors`."""
     return f' at mean {", ".join(predictors)}' if predictors else ''
+
+
+def _heldAt(row: np.ndarray, i: int, names: list[str]) -> list[str]:
+    """The predictors at whose means coefficient i is read, if `row`, its row of a map to the
+    original scale (ScaleInfo.ffxMap or rfxMap), mixes in other coefficients: those the mixing
+    columns stand for, a product 'a:b' for a and b, other than i's own."""
+    held = {f for k in np.flatnonzero(row) if k != i for f in names[k].split(':')} - {names[i]}
+    return [name for name in names if name in held]
 
 
 def posteriorTable(
