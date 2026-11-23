@@ -114,17 +114,16 @@ A GLMM fit is then a forward pass through the trained networks. Metropolis-Hasti
 - **Models**: Gaussian, Bernoulli (0/1) and Poisson GLMMs with one grouping factor.
 - **Data**: at least 5 groups and 5 rows per group. The networks were trained on up to 200 groups,
   150 rows per group and 3,000 rows; larger datasets are fitted with a warning.
-- **Effects**: at most 16 fixed and 5 random effects, intercepts included.
+- **Effects**: at most 16 fixed and 5 random effects, intercepts and interactions included.
 - **Random slopes**: each must also be a fixed effect.
 - **Enough groups**: at least 4 more groups than fixed effects, and than random-effect variances
   and covariances.
 - **Enough rows**: at least 2 more rows per group than random effects.
-- **Formulas**: additive lme4 syntax, such as `y ~ x1 + x2 + (1 + x1 | g)`.
+- **Formulas**: lme4 syntax such as `y ~ a*b + (a | g)`.
 - **Categories**: string and categorical columns are dummy-coded, with the most frequent level as
   the reference (R uses the first).
-- **Currently not supported**: `||`, `/`, interactions (`:`, `*`), functions (`log()`, `factor()`, `C()`),
-  offsets and binomial trials. Transform the columns in the DataFrame instead; the error message
-  says how.
+- **Uncorrelated random effects**: `(a || g)`, uncorrelated at the mean of `a` (not at `a = 0` as in lme4).
+- **Not supported**: `/`, functions like `a^2`, three-way and dummy-by-dummy interactions.
 
 </details>
 
